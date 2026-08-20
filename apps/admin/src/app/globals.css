@@ -1,0 +1,166 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* O Tailwind v4 varre TODO arquivo de texto do projeto atrás de classes — uma
+   citação de classe num .md vira regra CSS inválida e quebra o build do
+   Turbopack. Documentar uma classe não pode derrubar a aplicação. */
+@source not "../../**/*.md";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --font-sans: var(--font-geist-sans);
+  --font-display: var(--font-outfit);
+  --font-heading: var(--font-outfit);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+}
+
+:root {
+  color-scheme: light;
+
+  /* Geometria em token: cinco telas de altura cheia (mapa, funil, chat, agenda
+     e seus skeletons) descontam exatamente estes valores. Nunca escreva a
+     altura à mão — mudar a barra viraria caça a calc() espalhado. */
+  --app-bar-height: 3.5rem;
+  --app-chrome-top: calc(var(--app-bar-height) + 1rem);
+  --mobile-nav-height: 3.5rem;
+
+  /* Marca White House: verde-oliva do monograma (hue ~110) com apoio em
+     sálvia (hue ~100) sobre areia. */
+  --background: oklch(0.98 0.006 95);
+  --foreground: oklch(0.24 0.018 130);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.24 0.018 130);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.24 0.018 130);
+  --primary: oklch(0.44 0.055 110);
+  --primary-foreground: oklch(0.99 0.004 95);
+  --secondary: oklch(0.94 0.014 100);
+  --secondary-foreground: oklch(0.32 0.04 115);
+  --muted: oklch(0.96 0.008 100);
+  --muted-foreground: oklch(0.48 0.018 120);
+  --accent: oklch(0.90 0.030 120);
+  --accent-foreground: oklch(0.34 0.045 120);
+  --destructive: oklch(0.55 0.19 27);
+  --border: oklch(0.90 0.010 100);
+  --input: oklch(0.90 0.010 100);
+  --ring: oklch(0.44 0.055 110);
+  --chart-1: oklch(0.44 0.055 110);
+  --chart-2: oklch(0.62 0.055 135);
+  --chart-3: oklch(0.55 0.050 95);
+  --chart-4: oklch(0.70 0.040 120);
+  --chart-5: oklch(0.36 0.045 140);
+
+  --radius: 1.1rem;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.17 0.012 130);
+  --foreground: oklch(0.94 0.008 100);
+  --card: oklch(0.22 0.014 130);
+  --card-foreground: oklch(0.94 0.008 100);
+  --popover: oklch(0.22 0.014 130);
+  --popover-foreground: oklch(0.94 0.008 100);
+  --primary: oklch(0.66 0.055 110);
+  --primary-foreground: oklch(0.18 0.012 130);
+  --secondary: oklch(0.27 0.016 125);
+  --secondary-foreground: oklch(0.92 0.008 100);
+  --muted: oklch(0.26 0.014 128);
+  --muted-foreground: oklch(0.70 0.016 110);
+  --accent: oklch(0.34 0.035 120);
+  --accent-foreground: oklch(0.92 0.010 105);
+  --destructive: oklch(0.62 0.19 27);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.66 0.055 110);
+}
+
+/* ── Casca 3.0 ──────────────────────────────────────────────────────────────
+   Não existe sidebar. O fundo é um wash de manchas radiais fixas e, sobre ele,
+   FLUTUAM a barra da marca, os painéis brancos e as barras de vidro. */
+
+@utility bg-brand-gradient {
+  background-image: linear-gradient(135deg, oklch(0.36 0.05 140), oklch(0.42 0.055 120) 55%, oklch(0.47 0.06 100));
+}
+
+/* A barra superior é o elemento de assinatura: do verde profundo ao oliva
+   claro, os tons do monograma, na mesma ordem. Todos os stops com L ≤ 0.48
+   para o texto branco manter contraste AA. */
+@utility bg-brand-bar {
+  background-image: linear-gradient(100deg,
+    oklch(0.30 0.040 145), oklch(0.38 0.050 125) 34%,
+    oklch(0.44 0.055 110) 66%, oklch(0.48 0.060 98));
+}
+
+@utility shadow-soft {
+  box-shadow: 0 16px 40px -20px oklch(0.42 0.05 120 / 32%),
+              0 4px 12px -6px oklch(0.42 0.05 120 / 12%);
+}
+
+/* O painel branco que carrega cada tela — paira sobre o wash. */
+@utility panel-float {
+  background-color: var(--card);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 1px 0 0 oklch(1 0 0 / 60%) inset,
+              0 20px 60px -28px oklch(0.40 0.05 120 / 40%),
+              0 4px 16px -8px oklch(0.40 0.05 120 / 14%);
+  border: 1px solid oklch(0.45 0.04 115 / 10%);
+}
+.dark .panel-float {
+  box-shadow: 0 20px 60px -28px oklch(0 0 0 / 60%), 0 4px 16px -8px oklch(0 0 0 / 40%);
+  border-color: oklch(1 0 0 / 10%);
+}
+
+@utility glass {
+  background-color: oklch(1 0 0 / 72%);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+.dark .glass { background-color: oklch(0.22 0.014 130 / 72%); }
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  background-image:
+    radial-gradient(60rem 44rem at -6% -10%, oklch(0.62 0.07 120 / 22%), transparent 60%),
+    radial-gradient(52rem 40rem at 104% 4%,  oklch(0.72 0.06 100 / 20%), transparent 58%),
+    radial-gradient(56rem 46rem at 88% 96%,  oklch(0.66 0.06 140 / 18%), transparent 60%),
+    radial-gradient(44rem 38rem at 18% 104%, oklch(0.80 0.04 95 / 16%),  transparent 58%);
+  background-attachment: fixed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

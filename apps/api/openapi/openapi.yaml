@@ -1,0 +1,362 @@
+openapi: 3.1.0
+info:
+  title: White House Village Manager API
+  version: 0.1.0
+  description: |
+    Contrato da API de gestão da White House Village.
+
+    Este arquivo é a **fonte da verdade**: é mergeado antes da implementação, e é
+    contra ele que o painel e os testes são escritos. Pertence ao agente
+    `tech-lead`; os demais propõem alterações, não editam.
+servers:
+  - url: http://localhost:8080/api/v1
+    description: Desenvolvimento
+
+tags:
+  - name: Saúde
+  - name: Autenticação
+  - name: Disponibilidade
+  - name: Reservas
+
+paths:
+  /healthz:
+    get:
+      tags: [Saúde]
+      summary: Processo vivo
+      security: []
+      responses:
+        "200": { description: OK }
+
+  /readyz:
+    get:
+      tags: [Saúde]
+      summary: Pronto para servir (banco acessível e schema na versão esperada)
+      security: []
+      responses:
+        "200": { description: Pronto }
+        "503": { description: Banco inacessível ou migration pendente }
+
+  /auth/login:
+    post:
+      tags: [Autenticação]
+      summary: Autentica e devolve o par de tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Autenticado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      access_token: { type: string }
+                      expires_in: { type: integer, example: 900 }
+                      user: { $ref: "#/components/schemas/Usuario" }
+        "401": { $ref: "#/components/responses/Erro" }
+
+  /auth/me:
+    get:
+      tags: [Autenticação]
+      summary: Usuário autenticado e suas permissões
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: "#/components/schemas/Usuario" }
+                      permissions:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            resource: { type: string, example: reservations }
+                            action: { type: string, enum: [ver, criar, editar, excluir] }
+                            scope: { type: string, enum: [all, own] }
+
+  /availability/units:
+    get:
+      tags: [Disponibilidade]
+      summary: Matriz unidade × dia — a fonte do mapa de ocupação
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to,   in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        unit_id: { type: string, format: uuid }
+                        unit_code: { type: string, example: COB-01 }
+                        days:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              date: { type: string, format: date }
+                              status: { type: string, enum: [livre, hold, confirmed, maintenance, ota] }
+                              date_type: { $ref: "#/components/schemas/TipoDeData" }
+                              price_cents: { type: integer, format: int64 }
+
+  /quotes:
+    post:
+      tags: [Disponibilidade]
+      summary: Calcula o orçamento — não bloqueia data
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeOrcamento" }
+      responses:
+        "200":
+          description: Orçamento calculado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Orcamento" }
+        "422":
+          $ref: "#/components/responses/Erro"
+
+  /reservations:
+    get:
+      tags: [Reservas]
+      summary: Lista reservas
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: status,   in: query, schema: { type: string } }
+        - { name: from,     in: query, schema: { type: string, format: date } }
+        - { name: to,       in: query, schema: { type: string, format: date } }
+        - { name: q,        in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Reserva" }
+                  - $ref: "#/components/schemas/Paginacao"
+    post:
+      tags: [Reservas]
+      summary: Cria a reserva como pré-reserva (hold) e aloca a(s) unidade(s)
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+          description: Obrigatório em toda criação de reserva ou movimento financeiro.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PedidoDeOrcamento"
+                - type: object
+                  required: [contact_id]
+                  properties:
+                    contact_id: { type: string, format: uuid }
+                    broker_id:  { type: string, format: uuid }
+                    notes:      { type: string }
+      responses:
+        "201":
+          description: Pré-reserva criada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "409":
+          description: |
+            `DATE_CONFLICT` — alguma unidade do produto ficou ocupada entre a
+            consulta e a gravação. Vem da constraint de exclusão do banco, que é
+            o que torna overbooking impossível mesmo sob concorrência.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /reservations/{id}/confirm:
+    post:
+      tags: [Reservas]
+      summary: Registra o sinal e confirma a reserva
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: Confirmada }
+        "409": { $ref: "#/components/responses/Erro" }
+
+  /reservations/{id}/cancel:
+    post:
+      tags: [Reservas]
+      summary: Cancela aplicando a política congelada na reserva
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: dry_run
+          in: query
+          schema: { type: boolean }
+          description: Simula e devolve o valor de devolução sem executar.
+      responses:
+        "200":
+          description: Resultado do cancelamento
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      label:           { type: string, example: Retenção de 50% do sinal }
+                      refund_cents:    { type: integer, format: int64 }
+                      retained_cents:  { type: integer, format: int64 }
+
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+
+  responses:
+    Erro:
+      description: Erro com código estável
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  code:
+                    type: string
+                    enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, DATE_CONFLICT,
+                           MIN_STAY_NOT_MET, CAPACITY_EXCEEDED, DISCOUNT_ABOVE_LIMIT, HOLD_EXPIRED,
+                           IDEMPOTENCY_MISMATCH, RATE_LIMITED, INTERNAL]
+                  message: { type: string }
+                  details: { type: object, additionalProperties: true }
+
+  schemas:
+    Paginacao:
+      type: object
+      properties:
+        meta:
+          type: object
+          properties:
+            page:        { type: integer }
+            per_page:    { type: integer }
+            total:       { type: integer, format: int64 }
+            total_pages: { type: integer }
+
+    TipoDeData:
+      type: string
+      enum: [normal, fds, feriado, alta, reveillon, carnaval]
+      description: Resolvido por precedência — réveillon/carnaval > feriado > alta > fds > normal.
+
+    Usuario:
+      type: object
+      properties:
+        id:    { type: string, format: uuid }
+        name:  { type: string }
+        email: { type: string, format: email }
+        role:  { type: string, enum: [admin, usuario, corretor] }
+
+    PedidoDeOrcamento:
+      type: object
+      required: [unit_type_id, check_in, check_out, guests]
+      properties:
+        unit_type_id: { type: string, format: uuid }
+        check_in:     { type: string, format: date }
+        check_out:    { type: string, format: date, description: "Exclusivo: a noite do check-out não é cobrada." }
+        guests:       { type: integer, minimum: 1 }
+        discount_pct: { type: number, default: 0 }
+        is_event:     { type: boolean, default: false }
+
+    Orcamento:
+      type: object
+      properties:
+        night_count:  { type: integer }
+        subtotal_cents: { type: integer, format: int64 }
+        discount_pct: { type: number }
+        discount_cents: { type: integer, format: int64, description: "Incide só sobre as diárias." }
+        cleaning_cents: { type: integer, format: int64 }
+        event_deposit_cents: { type: integer, format: int64 }
+        total_cents:  { type: integer, format: int64 }
+        deposit_cents: { type: integer, format: int64, description: "Sinal para confirmar." }
+        balance_cents: { type: integer, format: int64 }
+        min_nights:   { type: integer }
+        discount_authority: { type: string, enum: [gestao, proprietario, negado] }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              date_type:  { $ref: "#/components/schemas/TipoDeData" }
+              label:      { type: string }
+              nights:     { type: integer }
+              unit_price_cents: { type: integer, format: int64 }
+              subtotal_cents:   { type: integer, format: int64 }
+        nights:
+          type: array
+          items:
+            type: object
+            properties:
+              date:        { type: string, format: date }
+              date_type:   { $ref: "#/components/schemas/TipoDeData" }
+              price_cents: { type: integer, format: int64 }
+
+    Reserva:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        code:          { type: string, example: WH-2026-0001 }
+        status:        { type: string, enum: [quote, hold, confirmed, checked_in, checked_out, closed, cancelled, expired, no_show] }
+        unit_type_id:  { type: string, format: uuid }
+        contact_id:    { type: string, format: uuid }
+        check_in:      { type: string, format: date }
+        check_out:     { type: string, format: date }
+        guests_count:  { type: integer }
+        total_cents:   { type: integer, format: int64 }
+        deposit_cents: { type: integer, format: int64 }
+        hold_expires_at: { type: string, format: date-time, nullable: true }
+        units:
+          type: array
+          description: Unidades físicas alocadas. A White House Completa aloca todas.
+          items:
+            type: object
+            properties:
+              unit_id:   { type: string, format: uuid }
+              unit_code: { type: string }
+
+security:
+  - bearerAuth: []

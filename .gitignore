@@ -1,0 +1,32 @@
+# Go
+/apps/api/bin/
+*.test
+coverage.out
+
+# Node / Next
+node_modules/
+.next/
+out/
+.pnpm-store/
+*.tsbuildinfo
+
+# Ambiente
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Infra
+infra/traefik/acme.json
+infra/backups/
+*.dump
+
+# Editores / SO
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Artefatos locais
+/tmp/
+/scratch/
