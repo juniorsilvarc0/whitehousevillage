@@ -59,14 +59,13 @@ jobs:
   admin:
     name: Painel (Next.js)
     runs-on: ubuntu-latest
-    if: hashFiles('apps/admin/package.json') != ''
     defaults:
       run:
         working-directory: apps/admin
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: { version: 9 }
+        with: { version: 10 }
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
