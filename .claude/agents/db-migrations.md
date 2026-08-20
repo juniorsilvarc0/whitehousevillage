@@ -14,7 +14,7 @@ Leia `docs/db.md` — ele é a especificação do modelo. Se a migration pedida 
 
 ## Regras inegociáveis
 
-1. **Nome por timestamp**: `AAAAMMDDTHHMMSS_descricao.up.sql` + `.down.sql`. Nunca sequencial — dois agentes em paralelo colidiriam.
+1. **Nome por timestamp**: `AAAAMMDDHHMMSS_descricao.up.sql` + `.down.sql`. Nunca sequencial — dois agentes em paralelo colidiriam.
 2. **Toda `up` tem `down` que reverte de verdade.** O CI roda `up` e depois `down` até zero.
 3. **Migration nunca roda no boot da aplicação.** É `cmd/migrate`, passo explícito.
 4. `uuid` v7 como PK · `timestamptz` para instante · `date`/`daterange` para estadia · `bigint` em centavos para dinheiro · enum como `text` + `CHECK`.

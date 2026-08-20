@@ -6,7 +6,7 @@ ERP + CRM de gestão de temporada e eventos. Backend Go, painel Next.js, Postgre
 
 1. **`internal/domain` é puro.** Tarifa, disponibilidade, orçamento e política vivem lá, sem SQL, sem HTTP, sem `pgx`. Regra de negócio em handler ou repositório é falha de revisão.
 2. **Overbooking é impedido pelo banco**, não por `SELECT` seguido de `INSERT`. A constraint `EXCLUDE USING gist` em `stay_blocks` é a única defesa válida. Erro `23P01` vira `409 DATE_CONFLICT` — nunca 500, nunca retry.
-3. **Migrations só pelo agente `db-migrations`**, nomeadas por timestamp (`20260820T143000_nome.up.sql`). Aplicadas por `cmd/migrate` num passo separado. Nunca no boot da aplicação.
+3. **Migrations só pelo agente `db-migrations`**, nomeadas por timestamp (`20260820143000_nome.up.sql`). Aplicadas por `cmd/migrate` num passo separado. Nunca no boot da aplicação.
 4. **Dinheiro é `bigint` em centavos** (`*_cents`). Float em dinheiro é bug.
 5. **Datas de estadia são `date` e `daterange` half-open `[in, out)`** — permite back-to-back e espelha a contagem de noites. Instantes são `timestamptz`. Fuso `America/Fortaleza` num helper único.
 6. **DTO tipado sempre.** `map[string]any` em handler é proibido; `PATCH` usa `Opt[T]` para distinguir "campo ausente" de "campo nulo".

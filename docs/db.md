@@ -306,7 +306,7 @@ pii_access_log(id, actor_id, contact_id, reason, at)
 
 ## 15. Migrations
 
-- Ferramenta: **golang-migrate**. Arquivos em `apps/api/migrations/`, nomeados `AAAAMMDDTHHMMSS_descricao.{up,down}.sql`.
+- Ferramenta: **golang-migrate**. Arquivos em `apps/api/migrations/`, nomeados `AAAAMMDDHHMMSS_descricao.{up,down}.sql`.
 - Aplicadas por `cmd/migrate` como **passo separado** (`make migrate`), nunca no boot da API. A API consulta a versão em `/readyz` e **se recusa a servir** se a migration esperada não estiver aplicada.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.

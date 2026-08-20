@@ -57,7 +57,7 @@ devops           deploy, métricas, alerta
 Quatro mecanismos, em ordem de importância:
 
 1. **Ownership de pasta** — regra primária, resolve a maior parte.
-2. **Migrations nomeadas por timestamp** (`20260820T143000_add_stay_blocks.up.sql`), não sequenciais. Elimina a colisão de dois agentes criando `000007_*`. Só o `db-migrations` cria migration.
+2. **Migrations nomeadas por timestamp** (`20260820143000_add_stay_blocks.up.sql`), não sequenciais. Elimina a colisão de dois agentes criando `000007_*`. Só o `db-migrations` cria migration.
 3. **Worktree para tarefa longa e paralela** — `git worktree add ../wt-<agente>-<tarefa> -b feat/<agente>/<tarefa>`. O merge é serializado pelo `tech-lead` na ordem `db → backend/integrações → frontend → qa`. Tarefa curta e isolada roda direto na branch, sem worktree (worktree tem custo).
 4. **Arquivos-ímã de conflito têm dono único**: `internal/router/routes.go`, `apps/admin/src/config/navigation.ts` e `openapi.yaml` pertencem ao `tech-lead`. Os agentes **propõem a linha no relatório**; o tech-lead aplica. Isso mata os conflitos que sobram.
 
