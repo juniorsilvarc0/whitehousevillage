@@ -6,7 +6,7 @@
 
 | | |
 |---|---|
-| Fase corrente | **0 — Fundação** |
+| Fase corrente | **0 — Fundação** (em andamento: auth/RBAC, seed e login) |
 | Última atualização | 20/08/2026 |
 | Repositório | `github.com/juniorsilvarc0/whitehousevillage` |
 
@@ -15,13 +15,15 @@
 - [x] Repositório, monorepo, `.gitignore`, `Makefile`, `.env.example`
 - [x] Documentação de produto e arquitetura (`docs/`)
 - [x] Definições do time de agentes (`.claude/agents/`)
-- [ ] `docker-compose` dev (postgres + api + admin + worker) e Dockerfiles
-- [ ] `cmd/migrate` + migration inicial (extensões, `properties`, `users`, `roles`, `audit_log`)
-- [ ] Esqueleto chi com `/healthz`, `/readyz`, `/metrics` e envelope de erro
+- [x] `docker-compose` dev (postgres + api + admin + worker + migrate + seed) e Dockerfiles
+- [x] Migrations iniciais — núcleo de identidade/RBAC e inventário/reservas com a constraint `EXCLUDE`, aplicadas e revertidas em Postgres real
+- [x] Domínio puro: motor de tarifa, orçamento e cancelamento, com testes de mesa e de invariantes
+- [x] CI verde (formatação, vet, testes com `-race`, ciclo de migrations, build do painel)
+- [x] Casca do painel com os tokens da marca
+- [ ] Esqueleto chi completo (hoje `/healthz` e `/readyz` respondem, mas `/readyz` ainda não checa banco nem versão do schema)
 - [ ] Auth (login, refresh rotativo, `/auth/me`) e RBAC por dados
 - [ ] `cmd/seed` idempotente com os 3 perfis
-- [ ] Casca do painel Next com o design system portado + login
-- [ ] CI verde (lint, testes, ciclo de migrations)
+- [ ] Tela de login e casca de navegação por perfil
 
 **Pronto quando**: `make up && make migrate && make seed` sobe tudo numa máquina limpa, os três perfis logam e o CI está verde.
 
