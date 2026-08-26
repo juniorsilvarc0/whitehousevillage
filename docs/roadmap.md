@@ -32,13 +32,21 @@
   - catálogo de RBAC só no banco; a lista paralela em Go morreu (regra 8)
   - critério de aceite do corretor no financeiro registrado na spec §1, §10 e §11
 - [x] **Ferramenta de teste** — `make test-integration` e o job `integration` do CI aplicavam as migrations e **pulavam o seed**. Consequência medida: sem seed a tabela `resources` fica vazia, 12 testes de `internal/modules/users` batem na FK `role_permissions_resource_code_fkey` (23503) e `TestPerfilCorretorSemeadoSalvaSemAlteracao` se **pula** — e teste pulado conta como verde. Makefile e CI passaram a semear entre as migrations e a suíte, e o job ganhou uma etapa de **concorrência repetida** (`-count=10`), porque o defeito das datas passa verde numa execução isolada
-- [ ] **Rodada 3 (em curso)** — o que a segunda revisão e o QA acharam, tudo reproduzido ao vivo:
-  - **conflito de datas ainda não é determinístico sob contenção**: com o pool saturado (50 pedidos, 20 conexões) o Postgres devolve `40P01 deadlock detected` no lugar de `23P01` e o perdedor recebe **500**. Medido nesta máquina: `-count=1` passou VERDE, `-count=10` reprovou. É por isso que atravessou duas revisões
-  - **teto de matriz**: `PUT /roles/{id}/permissions` está recusando com 403 a matriz do **Corretor semeado** salva sem alteração por um administrador — o ator tem `all` e a matriz pedida tem `own`, e `all` precisa conter `own`. E `TestAcoesValidasVemDoBancoPorRecurso` recebe 403 onde espera 422: o teto está sendo avaliado **antes** da validação da ação contra o catálogo do recurso
-  - troca de e-mail de terceiro com revogação de sessões, teto de papel e trava do próprio perfil: regressões do QA em `internal/modules/users` — **verdes** com o banco semeado
-  - navegação do painel sem `allowedRoles`: só matriz de permissões
+- [x] **Rodada 3** — fechada e conferida em Postgres real:
+  - **conflito de datas determinístico**: a causa medida era `40P01 deadlock detected` (não `23P01`) sem ramo de tradução → 500. Corrigido com `lock_timeout` abaixo do `deadlock_timeout`, repetição com espera exponencial e tradução de `40001`/`40P01`/`55P03`
+  - **tomada de conta por e-mail**: `PATCH /users` deixava quem tem `users:editar` trocar o e-mail do administrador e assumir a conta pela recuperação de senha. Fechado com a mesma autoridade exigida para trocar papel, mais revogação de sessões
+  - **autoescalada pela matriz do próprio perfil** e **corrida na rotação de refresh** (`RowsAffected` ignorado deixava vários sucessores vivos): ambos fechados com teste de corrida
+  - **último administrador (TOCTOU)**: contagem movida para dentro da transação, com trava de linha
+  - navegação do painel sem `allowedRoles` — só matriz de permissões
+- [x] **Verificação final** (feita fora do time de agentes, porque os dois verificadores da rodada 3 bateram no limite de sessão):
+  - **teto de privilégio × perfil raiz**: o perfil `is_system` passou a não ser limitado pelo teto. Sem isso, um recurso criado por migration futura ficaria inconcedível por qualquer pessoa — ninguém teria a célula nova. Não afrouxa nada: `POST /roles` grava `is_system=false` sempre
+  - **suíte de integração serializada** (`-p 1`): os pacotes compartilham um Postgres e em paralelo disputavam as mesmas linhas — 3 falhas em 4 execuções paralelas contra 0 em 3 serializadas. Era contenção do banco de teste, não defeito de produto
+  - **teste de conflito independente da máquina**: exigir `23P01` puro amarrava o resultado ao hardware (verde 30/30 local, vermelho no runner de 2 vCPUs). Passou a aceitar também a contenção cujo `where` aponta a própria verificação da constraint, registrando a divisão entre as duas provas e exigindo que a constraint tenha atuado ao menos uma vez
+  - `apps/admin/public` vazio quebrava o `COPY` do Dockerfile no CI
 
-**Pronto quando**: `make up && make migrate && make seed` sobe tudo numa máquina limpa, os três perfis logam, o CI está verde **com o seed e com a repetição dos testes de concorrência** e as revisões passam.
+**Estado: concluída.** `make up && make migrate && make seed` sobe numa máquina limpa, os três perfis logam, e o CI está verde nos cinco jobs — incluindo integração com seed e a repetição dos testes de concorrência.
+
+**Ressalva registrada**: as correções da rodada 3 têm cobertura automatizada e passaram na verificação completa da suíte, mas **não passaram por revisão adversarial independente** — os dois verificadores da rodada bateram no limite de sessão. Um terceiro ataque sobre a troca de e-mail, o teto de matriz, a corrida de rotação e a trava do último administrador continua sendo trabalho pendente, e deve rodar antes da Fase 1.
 
 ## Fase 1 — Núcleo ponta a ponta
 
