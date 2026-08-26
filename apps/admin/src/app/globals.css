@@ -140,6 +140,20 @@
   border-color: oklch(1 0 0 / 10%);
 }
 
+/* Um degrau acima do `shadow-soft`, para a superfície que precisa parecer mais
+   solta do que o resto — hoje, só o cartão de login sobre o wash vazio.
+   Composta SOBRE `panel-float`: substitui a sombra dele de propósito (duas
+   declarações de box-shadow no mesmo elemento não somam, a última vence), e por
+   isso repete o brilho interno da borda, que é o que dá o relevo. */
+@utility shadow-soft-lg {
+  box-shadow: 0 1px 0 0 oklch(1 0 0 / 60%) inset,
+              0 40px 90px -40px oklch(0.38 0.05 120 / 46%),
+              0 12px 32px -16px oklch(0.38 0.05 120 / 18%);
+}
+.dark .shadow-soft-lg {
+  box-shadow: 0 40px 90px -40px oklch(0 0 0 / 66%), 0 12px 32px -16px oklch(0 0 0 / 44%);
+}
+
 @utility glass {
   background-color: oklch(1 0 0 / 72%);
   backdrop-filter: blur(16px) saturate(140%);

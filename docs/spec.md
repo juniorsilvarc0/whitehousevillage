@@ -28,10 +28,28 @@ papel  ×  recurso  ×  ação (ver|criar|editar|excluir)  ×  escopo (all|own)
 
 - `escopo = own` filtra por `owner_id = usuário` **no SQL**, não na aplicação.
 - O front lê `/auth/me` para esconder o que o usuário não pode fazer; a barreira real é sempre o middleware.
-- Perfis nascem como *seed* da matriz: `admin` (tudo, `all`), `usuario` (operação, `all`, sem configurações), `corretor` (CRM + reservas + comissões, `own`).
+- Perfis nascem como *seed* da matriz: `admin` (tudo, `all`), `usuario` (operação, `all`, sem configurações), `corretor` (CRM, reservas, orçamentos, agenda e as **próprias** comissões, em `own`). Duas concessões dele ficam em `all`, e por motivo escrito: ler a configuração do funil — sem ela o kanban não sabe desenhar as colunas — e criar contato, porque `contacts` ainda não tem coluna de dono. A segunda vira `own` no dia em que a coluna existir.
+- O catálogo de recursos — quais existem, quais ações cada um aceita e onde `own` faz sentido — é **dado** (`resources`), lido do banco. Não há lista equivalente em Go: duas fontes divergem no dia em que alguém edita só uma.
+
+### O que "corretor não vê financeiro" quer dizer
+
+Financeiro não é um bloco único, e tratá-lo como tal foi o que gerou um critério
+de aceite impossível de cumprir: o §11 promete ao corretor um painel de comissões
+previstas e pagas, e a redação antiga do critério mandava responder `403` em
+`/finance/*` — as duas coisas não cabem na mesma implementação.
+
+A decisão (20/08/2026): o financeiro tem três recursos no catálogo e o corretor
+alcança **um**.
+
+| Recurso | Corretor | Por quê |
+|---|---|---|
+| `finance.receivables` | `403` | caixa da casa |
+| `finance.payables` | `403` | caixa da casa |
+| `finance.commissions` | `200`, escopo `own` | é o dinheiro dele, e é o painel do §11 |
 
 ### Critérios de aceite
-- Corretor autenticado recebe `403` em `/finance/*` e lista apenas as próprias oportunidades — provado por teste de integração.
+- Corretor autenticado recebe `403` em `/finance/receivables` e `/finance/payables`, e `200` restrito a `own` em `/finance/commissions` — provado por teste de integração.
+- Corretor lista apenas as próprias oportunidades — o escopo `own` vira `AND owner_id = $user` no SQL, provado por teste de integração.
 - Alterar a matriz de um papel muda o comportamento sem deploy.
 - Nenhum endpoint fica sem checagem de permissão (teste de contrato varre a tabela de rotas e falha se faltar).
 
@@ -251,6 +269,7 @@ quote → hold ──► confirmed ──► checked_in ──► checked_out �
 - **Pagamentos** com forma (PIX, cartão, transferência, dinheiro), data, referência externa e conciliação.
 - **Comissões**: regra por corretor e produto (percentual sobre a diária, sem incidir sobre limpeza/caução); geradas na confirmação e liberadas conforme política.
 - **Repasse ao proprietário**: apuração por competência, com receita, taxas e líquido; snapshot da regra usada.
+- **Visibilidade**: recebíveis, pagáveis, pagamentos e conciliação são da gestão (escopo `all`). Comissão tem dono, então é o único recurso financeiro com escopo `own` — o corretor lê as próprias e nunca as dos outros (§1 e §11). É o mesmo eixo do RBAC, não uma regra à parte.
 - **Razão append-only**: nada é editado, tudo é estornado com contrapartida.
 - Caução devolvida no check-out (integral ou parcial, com laudo de dano anexado).
 
@@ -264,7 +283,8 @@ quote → hold ──► confirmed ──► checked_in ──► checked_out �
 
 - Cadastro vinculado a um usuário de perfil `corretor`; regra de comissão por produto e faixa; meta mensal.
 - Painel próprio: leads, oportunidades, pré-reservas, comissões previstas e pagas, desempenho.
-- Corretor **nunca** vê financeiro global, dados de outros corretores ou configurações.
+- Corretor **nunca** vê o financeiro da casa (`finance.receivables`, `finance.payables`, conciliação), dados de outros corretores ou configurações.
+- As comissões previstas e pagas do painel saem de `finance.commissions` em escopo `own` — a mesma linha da matriz que o §1 registra. O painel existe porque o escopo existe; não é exceção aberta no código.
 
 ---
 

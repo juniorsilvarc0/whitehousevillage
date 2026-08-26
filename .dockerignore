@@ -1,0 +1,43 @@
+# O contexto de build é a raiz do repositório (as duas Dockerfiles vivem em
+# infra/ e copiam apps/*). Tudo que não vira imagem fica fora daqui: contexto
+# menor sobe mais rápido para o daemon e segredo local não vaza para a camada.
+
+# VCS, CI e configuração de agentes
+.git
+.gitignore
+.github
+.claude
+
+# Segredos e ambiente local — nunca entram em imagem
+.env
+.env.*
+!.env.example
+
+# Node / Next — o estágio `deps` reinstala a partir do lockfile
+node_modules
+**/node_modules
+.pnpm-store
+**/.next
+**/out
+**/*.tsbuildinfo
+
+# Go — artefato de build local e cobertura
+apps/api/bin
+**/*.test
+coverage.out
+
+# Infra que não pertence a imagem nenhuma
+infra/backups
+infra/traefik/acme.json
+**/*.dump
+
+# Documentação: só o README acompanha a imagem
+docs
+*.md
+!README.md
+
+# Sistema operacional e editores
+.DS_Store
+.idea
+.vscode
+*.swp

@@ -68,15 +68,22 @@ Três decisões que valem o projeto inteiro:
 ## 2. Identidade e acesso
 
 ```
-users(id, property_id, name, email UNIQUE, password_hash, role_id, broker_id?, active, last_login_at)
+users(id, property_id, name, email UNIQUE, password_hash, role_id, broker_id?, phone?, active, last_login_at, deleted_at?)
 roles(id, code UNIQUE, name, is_system)
-resources(code PK, label, group)                      -- catálogo: reservations, crm.opportunities, finance...
+resources(code PK, label, group_label, actions text[], supports_own bool, sort_order)
+        -- catálogo: reservations, crm.opportunities, finance… — é a fonte de GET /roles/resources
 role_permissions(role_id, resource_code, action, scope) -- action: ver|criar|editar|excluir · scope: all|own
 refresh_tokens(id, user_id, token_hash, family_id, expires_at, revoked_at, replaced_by)
 password_resets(id, user_id, token_hash, expires_at, used_at)
 ```
 
 O eixo **`scope`** é o que o portal_amimoveis não tem e é exatamente o que resolve "corretor vê só o dele": o repositório aplica `AND owner_id = $user` quando o escopo é `own`. Sem `if role == "corretor"` em lugar nenhum.
+
+`users.broker_id` é o vínculo do usuário de perfil `corretor` com o cadastro comercial dele (`brokers`, §10). Nasce **sem foreign key**, e de propósito: `brokers` só existe a partir da migration do financeiro, e uma FK não pode apontar para tabela que ainda não foi criada. A FK entra junto com a tabela referenciada; até lá o índice parcial `users(broker_id) WHERE broker_id IS NOT NULL` já paga o join do painel do corretor.
+
+`resources.sort_order` é a ordem das linhas na grade de perfis — o agrupamento visual da tela é dado, não uma ordenação alfabética que embaralharia "Reservas" com "Recebíveis".
+
+`resources.actions` e `resources.supports_own` também são **dado**, não lista em Go: nem todo recurso tem as quatro ações (o razão financeiro é append-only e mensagem enviada não se apaga, então `finance.*` e `chat` não oferecem `excluir`; painel, relatórios e auditoria só oferecem `ver`), e escopo `own` só é oferecido onde existe dono identificável na linha. Onde não existe, a tela desabilita "só os meus" em vez de prometer um filtro que o SQL não sabe aplicar.
 
 ---
 
@@ -110,12 +117,15 @@ min_nights_rules(id, rate_table_id, date_type, nights)
 commercial_policies(id, property_id, version, deposit_pct, balance_due_days, hold_hours,
                     discount_auto_pct, discount_approval_pct, event_deposit_cents, valid_from)
 cancellation_policies(id, property_id, version, name, valid_from)
-cancellation_tiers(id, policy_id, days_before_min, days_before_max, refund_pct, retain_deposit_pct)
+cancellation_tiers(id, policy_id, days_before_min, days_before_max, refund_pct, label, sort_order)
+        -- min/max NULL = sem piso / sem teto (é o `-1` de booking.Tier traduzido para SQL)
 ```
 
 Precedência é **dado**, não `if/else` — mudar a ordem de resolução é `UPDATE date_type_rules`.
 
 `special_periods` **não** leva constraint de exclusão: a sobreposição é intencional (Réveillon dentro da alta temporada) e a precedência resolve.
+
+Três tabelas ganharam **chave natural** para o seed poder reencontrar a própria linha na segunda execução: `special_periods(property_id, name)`, `rate_tables(property_id, name)` e `cancellation_tiers(policy_id, sort_order)`. Por isso o nome do período carrega o ano (`Réveillon 2026/2027`): o Réveillon do ano seguinte é linha nova, não edição desta.
 
 ---
 
@@ -123,14 +133,15 @@ Precedência é **dado**, não `if/else` — mudar a ordem de resolução é `UP
 
 ```
 reservations(id, property_id, code UNIQUE,            -- WH-2026-0001
-             unit_type_id, contact_id, broker_id?, channel_id?, source,
+             unit_type_id, contact_id, broker_id?, source,
              check_in date, check_out date, guests_count,
              status, is_event, event_type?,
              subtotal_cents, discount_pct, discount_cents, cleaning_cents,
-             deposit_cents, total_cents,
+             event_deposit_cents, total_cents, deposit_cents,
              rate_table_id, policy_version, cancellation_policy_id,   -- snapshots
              hold_expires_at, confirmed_at, cancelled_at, cancel_reason,
              rebooked_from_id?, notes, created_by, created_at, updated_at)
+             -- channel_id entra com o módulo de canais (Fase 4); ainda não existe na tabela
 
 reservation_nights(reservation_id, night date, date_type, unit_type_id, price_cents)  -- PK(reservation_id, night)
 reservation_units(reservation_id, unit_id, stay_block_id, locked bool)                -- PK(reservation_id, unit_id)
@@ -140,7 +151,11 @@ reservation_events(id, reservation_id, type, payload jsonb, actor_id, at)       
 
 **`reservation_nights` é o que faz auditoria, financeiro e BI funcionarem.** Guarda a tarifa efetivamente aplicada em cada noite; mudar o tarifário amanhã não reescreve o passado, e ADR/RevPAR saem de um `GROUP BY`.
 
-Constraints: `CHECK (check_out > check_in)`, `CHECK (discount_pct BETWEEN 0 AND 10)`, `CHECK (guests_count > 0)`.
+Constraints: `CHECK (check_out > check_in)`, `CHECK (guests_count > 0)` e `CHECK (discount_pct BETWEEN 0 AND 100)`.
+
+O teto do banco é sanidade, não alçada. A alçada comercial — ≤ 5% a gestão fecha, 6–10% pede o proprietário, > 10% não autorizado (spec §3) — é **política versionada**, avaliada no domínio e congelada na reserva. Como `CHECK` fixo em 10 ela viraria número de schema: mudar a alçada exigiria migration, e as reservas antigas passariam a violar a regra nova.
+
+> **Dívida registrada** (`roadmap.md`, tarefa **1a**): a tabela nasceu com **32 colunas**, acima do teto de ~25 desta página. O bloco financeiro — `subtotal_cents`, `discount_*`, `cleaning_cents`, `event_deposit_cents`, `total_cents`, `deposit_cents`, `rate_table_id`, `policy_version`, `cancellation_policy_id` — é satélite natural (`reservation_pricing`, 1:1), porque é *snapshot congelado* e não estado: escreve-se na criação e não muda mais, enquanto identidade, estado e datas mudam a cada transição. A extração é a **primeira** tarefa da Fase 1, antes de `channel_id` e das colunas de remarcação entrarem — cada coluna nova encarece a mudança, e hoje nenhum código lê a tabela.
 
 ---
 
@@ -289,7 +304,7 @@ pii_access_log(id, actor_id, contact_id, reason, at)
 |---|---|
 | `stay_blocks` | `EXCLUDE USING gist (unit_id WITH =, period WITH &&) WHERE status IN ('hold','confirmed')` |
 | `stay_blocks` | `CHECK (lower(period) < upper(period))` · `CHECK (status<>'hold' OR expires_at IS NOT NULL)` · gist em `period` · parcial em `expires_at` |
-| `reservations` | `UNIQUE(code)` · `CHECK (check_out > check_in)` · `CHECK (discount_pct BETWEEN 0 AND 10)` |
+| `reservations` | `UNIQUE(code)` · `CHECK (check_out > check_in)` · `CHECK (discount_pct BETWEEN 0 AND 100)` — alçada é política versionada, não constraint |
 | `reservation_nights` | `PRIMARY KEY (reservation_id, night)` |
 | `rates` | `UNIQUE(rate_table_id, unit_type_id, date_type)` |
 | `holidays` | `UNIQUE(property_id, date)` |
@@ -300,6 +315,11 @@ pii_access_log(id, actor_id, contact_id, reason, at)
 | `channel_events` | `UNIQUE(channel_id, external_uid)` |
 | `idempotency_keys` | `UNIQUE(key, endpoint)` |
 | `role_permissions` | `PRIMARY KEY (role_id, resource_code, action)` |
+| `resources` | `CHECK (cardinality(actions) > 0 AND actions <@ ARRAY['ver','criar','editar','excluir'])` |
+| `users` | `UNIQUE(email)` · `INDEX(broker_id) WHERE broker_id IS NOT NULL` — parcial porque só corretor tem vínculo; a FK entra com `brokers` |
+| `special_periods` | `UNIQUE(property_id, name)` — chave natural do seed |
+| `rate_tables` | `UNIQUE(property_id, name)` — chave natural do seed |
+| `cancellation_tiers` | `UNIQUE(policy_id, sort_order)` — chave natural do seed |
 | todas | índice em toda FK |
 
 ---
@@ -311,6 +331,24 @@ pii_access_log(id, actor_id, contact_id, reason, at)
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`), e por isso ela sobe **no mesmo commit** da migration:
+
+| Migration | O que trouxe |
+|---|---|
+| `20260820120000_core` | propriedade, identidade e RBAC (`users`, `roles`, `resources`, `role_permissions`, `refresh_tokens`, `password_resets`), auditoria, `app_settings` e `idempotency_keys` |
+| `20260820130000_inventario_reservas` | inventário, calendário comercial e tarifário, políticas, contatos, `reservations`, `reservation_*` e `stay_blocks` com a `EXCLUDE` |
+| `20260820140000_catalogo_e_chaves_naturais` | `users.broker_id` + índice parcial; catálogo completo em `resources` (`actions`, `supports_own`, `sort_order` e o `CHECK` do vocabulário); chaves naturais de `special_periods`, `rate_tables` e `cancellation_tiers` |
+
 ## 16. Seeds
 
-`cmd/seed` é idempotente e popula: propriedade, 8 unidades, 4 produtos e composição, feriados e períodos de 2026–2027, Tabela Comercial V1, política comercial e de cancelamento, funil padrão com SLA, catálogo de recursos e os 3 perfis, e um usuário de cada perfil para desenvolvimento.
+`cmd/seed` popula, numa **transação única**: propriedade, 8 unidades, 4 produtos e a composição (a Completa apontando para as oito), tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (24 tarifas + estadia mínima), política comercial e de cancelamento v1, o catálogo de 23 recursos, os 3 perfis com a matriz inteira e um usuário de cada perfil para desenvolvimento.
+
+**Idempotente por contrato**: rodar dez vezes tem o mesmo efeito de rodar uma. Três decisões sustentam isso:
+
+1. Toda escrita é `INSERT ... ON CONFLICT` sobre a **chave natural** da tabela (`slug`, `code`, `(property_id, code)`, `(rate_table_id, unit_type_id, date_type)`…), nunca sobre id gerado — id novo a cada execução é exatamente o que duplicaria tudo na segunda rodada.
+2. O `DO UPDATE` leva `WHERE (colunas) IS DISTINCT FROM (EXCLUDED.colunas)`: linha já correta não é reescrita e não sobe `updated_at`. A segunda execução loga zero criadas e zero atualizadas — é essa a prova de idempotência.
+3. O seed **corrige divergência, mas não apaga acréscimo**: nunca há `DELETE`. Permissão que a gestão concedeu a mais na tela sobrevive; escopo que divergiu da matriz volta ao valor do seed.
+
+Ainda **não** semeia o funil padrão do CRM: `crm_pipelines`/`crm_stages` só existem depois da migration do módulo.
+
+Senha de desenvolvimento com hash argon2id via `internal/auth`; **nunca em texto, nunca em log**. Em `APP_ENV=production` o bloco de usuários é pulado com aviso, a menos que `SEED_DEV_USERS=true` — conta com senha conhecida em produção é porta dos fundos, não conveniência.

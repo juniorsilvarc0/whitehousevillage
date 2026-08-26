@@ -1,0 +1,179 @@
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+)
+
+// O seed é a única fonte da matriz inicial; se ela sair incoerente, o erro só
+// apareceria com o banco na frente. Estes testes não tocam em banco: conferem a
+// declaração antes de qualquer I/O.
+
+func TestMatrizEhCoerenteComOCatalogo(t *testing.T) {
+	// montarMatriz recusa recurso fora do catálogo, ação que o recurso não
+	// oferece e escopo `own` em recurso sem dono.
+	if _, err := montarMatriz(); err != nil {
+		t.Fatalf("matriz do seed inválida: %v", err)
+	}
+}
+
+func TestAdminRecebeOCatalogoInteiro(t *testing.T) {
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	concedido := map[string]bool{}
+	for _, l := range linhas {
+		if l.perfil != "admin" {
+			continue
+		}
+		if l.escopo != escopoAll {
+			t.Fatalf("admin com escopo %q em %s:%s — administrador enxerga tudo", l.escopo, l.recurso, l.acao)
+		}
+		concedido[l.recurso+":"+l.acao] = true
+	}
+
+	for _, r := range catalogoSeed {
+		for _, a := range r.acoes {
+			if !concedido[r.codigo+":"+a] {
+				t.Errorf("admin não recebeu %s:%s — recurso novo nasceria inacessível", r.codigo, a)
+			}
+		}
+	}
+}
+
+// Sem `roles:editar` ninguém conserta o acesso de mais ninguém: é o que o
+// `ContarAdministradoresAtivos` do módulo de usuários usa para impedir que o
+// último administrador se desative.
+func TestAdminPodeEditarPerfis(t *testing.T) {
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range linhas {
+		if l.perfil == "admin" && l.recurso == auth.RecursoPerfis && l.acao == editar {
+			return
+		}
+	}
+	t.Fatal("admin sem roles:editar — a instalação ficaria sem quem administra o acesso")
+}
+
+// A spec §1 e §11 são explícitas: corretor nunca vê financeiro global,
+// configurações nem dados dos outros corretores.
+func TestCorretorNaoAlcancaFinanceiroGlobalNemConfiguracoes(t *testing.T) {
+	proibidos := []string{
+		"finance.receivables", "finance.payables",
+		"inventory", "channels",
+		auth.RecursoUsuarios, auth.RecursoPerfis, "settings", "integrations", "audit",
+	}
+
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range linhas {
+		if l.perfil != "corretor" {
+			continue
+		}
+		for _, p := range proibidos {
+			if l.recurso == p {
+				t.Errorf("corretor recebeu %s:%s, que a spec proíbe", l.recurso, l.acao)
+			}
+		}
+	}
+}
+
+// O que tem dono é `own`. A exceção é `contacts`, que ainda não tem coluna de
+// dono — está anotada no seed e some quando a coluna existir.
+func TestCorretorOperaSobreOProprioDado(t *testing.T) {
+	catalogo := map[string]recurso{}
+	for _, r := range catalogoSeed {
+		catalogo[r.codigo] = r
+	}
+
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range linhas {
+		if l.perfil != "corretor" || l.escopo == escopoOwn {
+			continue
+		}
+		switch l.recurso {
+		case "dashboard", "crm.pipelines", "contacts":
+			// Painel próprio, desenho do funil e cadastro do contato do lead:
+			// nenhum deles tem dono na linha.
+		default:
+			if catalogo[l.recurso].suportaOwn {
+				t.Errorf("corretor com escopo all em %s, que tem dono", l.recurso)
+			}
+		}
+	}
+}
+
+func TestCatalogoNaoTemCodigoRepetidoNemAcaoInvalida(t *testing.T) {
+	validas := map[string]bool{ver: true, criar: true, editar: true, excluir: true}
+	vistos := map[string]bool{}
+
+	for _, r := range catalogoSeed {
+		if vistos[r.codigo] {
+			t.Errorf("recurso %q repetido no catálogo", r.codigo)
+		}
+		vistos[r.codigo] = true
+
+		if len(r.acoes) == 0 {
+			t.Errorf("recurso %q sem nenhuma ação — linha invisível na grade", r.codigo)
+		}
+		for _, a := range r.acoes {
+			if !validas[a] {
+				t.Errorf("recurso %q oferece a ação %q, fora do CHECK de role_permissions", r.codigo, a)
+			}
+		}
+		if strings.TrimSpace(r.rotulo) == "" || strings.TrimSpace(r.grupo) == "" {
+			t.Errorf("recurso %q sem rótulo ou grupo — a tela de perfis não sabe onde desenhá-lo", r.codigo)
+		}
+	}
+
+	// O código Go cita estes dois; sem eles no catálogo, PUT /roles/{id}/permissions
+	// recusaria por chave estrangeira o que a própria API oferece.
+	for _, obrigatorio := range []string{auth.RecursoUsuarios, auth.RecursoPerfis} {
+		if !vistos[obrigatorio] {
+			t.Errorf("recurso %q citado em internal/auth/recursos.go está fora do catálogo", obrigatorio)
+		}
+	}
+}
+
+// A senha de desenvolvimento precisa passar pelo mesmo verificador do login;
+// hash gerado por outro caminho entraria no banco e ninguém conseguiria entrar.
+func TestSenhaDeDesenvolvimentoPassaNoVerificadorDoLogin(t *testing.T) {
+	hash, err := auth.Hash(senhaDeDesenvolvimento)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(hash, "$argon2id$") {
+		t.Fatalf("hash fora do formato argon2id: %q", hash[:min(12, len(hash))])
+	}
+	ok, err := auth.Verify(hash, senhaDeDesenvolvimento)
+	if err != nil || !ok {
+		t.Fatalf("senha do seed não verifica: ok=%v err=%v", ok, err)
+	}
+}
+
+// A tabela V1 é conferida linha a linha contra docs/spec.md §3, em REAIS.
+// O teste existe para o dia em que alguém copiar o número da spec direto para
+// um campo `_cents` e vender a diária por R$ 8,50.
+func TestTarifasEntramEmCentavos(t *testing.T) {
+	for _, tar := range tarifasSeed {
+		for i, v := range tar.valores {
+			if got := reais(v); got != v*100 {
+				t.Fatalf("%s/%s: %d reais viraram %d centavos", tar.produto, ordemDosTipos[i], v, got)
+			}
+		}
+	}
+	if len(ordemDosTipos) != len(tarifasSeed[0].valores) {
+		t.Fatal("a matriz de tarifas não tem uma coluna por tipo de data")
+	}
+}

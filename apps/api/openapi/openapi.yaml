@@ -15,6 +15,8 @@ servers:
 tags:
   - name: Saúde
   - name: Autenticação
+  - name: Usuários
+  - name: Perfis
   - name: Disponibilidade
   - name: Reservas
 
@@ -54,6 +56,14 @@ paths:
       responses:
         "200":
           description: Autenticado
+          headers:
+            Set-Cookie:
+              description: |
+                `wh_refresh=<token>; HttpOnly; SameSite=Lax; Path=/api/v1/auth`
+                (+ `Secure` em produção), válido por 30 dias. O refresh nunca vai
+                no corpo por padrão — fora do cookie `httpOnly` ele fica ao
+                alcance de qualquer XSS.
+              schema: { type: string }
           content:
             application/json:
               schema:
@@ -65,7 +75,144 @@ paths:
                       access_token: { type: string }
                       expires_in: { type: integer, example: 900 }
                       user: { $ref: "#/components/schemas/Usuario" }
-        "401": { $ref: "#/components/responses/Erro" }
+        "401":
+          description: |
+            `INVALID_CREDENTIALS` — a resposta é **idêntica** para e-mail
+            inexistente, senha errada e e-mail bloqueado por tentativas
+            (5 erros em 15 min bloqueiam por 15 min). Diferenciar aqui seria
+            entregar de graça a lista de quem tem conta.
+          $ref: "#/components/responses/Erro"
+
+  /auth/refresh:
+    post:
+      tags: [Autenticação]
+      summary: Rotaciona o refresh token e devolve um novo par
+      security: []
+      description: |
+        O refresh chega no cookie `httpOnly` `wh_refresh` — o caminho do painel —
+        ou, para cliente que não guarda cookie, no corpo. Se vierem os dois, o
+        cookie vence.
+
+        **A rotação é obrigatória**: toda chamada bem-sucedida revoga o token
+        apresentado e emite outro na mesma família (`family_id`). Reapresentar um
+        token **já rotacionado** só acontece em dois casos — cliente com bug ou
+        token roubado — e o contrato trata os dois como roubo: responde
+        `401 TOKEN_REUSED` e **revoga a família inteira de sessões**, derrubando
+        ladrão e dono legítimo juntos. O dono refaz o login; o ladrão fica com um
+        token morto.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+                  description: Alternativa ao cookie, para cliente sem cookie jar.
+      responses:
+        "200":
+          description: Novo par emitido e cookie de refresh substituído
+          headers:
+            Set-Cookie:
+              description: "`wh_refresh=<novo>; HttpOnly; SameSite=Lax; Path=/api/v1/auth` (+ `Secure` em produção)."
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      access_token: { type: string }
+                      expires_in: { type: integer, example: 900 }
+                      user: { $ref: "#/components/schemas/Usuario" }
+        "401":
+          description: |
+            `TOKEN_INVALID` — ausente, expirado, desconhecido ou de família já
+            revogada. `TOKEN_REUSED` — já rotacionado: a família inteira acabou
+            de ser revogada; o cliente deve limpar o estado e mandar logar.
+          $ref: "#/components/responses/Erro"
+
+  /auth/logout:
+    post:
+      tags: [Autenticação]
+      summary: Encerra a sessão revogando a família inteira
+      description: |
+        Revoga o refresh apresentado **e toda a sua família**, então nenhum
+        descendente daquele login continua válido. O access token já emitido
+        segue valendo até expirar (15 min) — é o preço de não manter lista negra
+        de JWT, e o motivo de o access ser curto.
+
+        Idempotente: sessão inexistente ou já revogada também responde 204.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "204":
+          description: Sessão encerrada e cookie de refresh apagado
+          headers:
+            Set-Cookie:
+              description: "`wh_refresh=; Max-Age=0; Path=/api/v1/auth`."
+              schema: { type: string }
+
+  /auth/password/forgot:
+    post:
+      tags: [Autenticação]
+      summary: Dispara o e-mail de recuperação de senha
+      security: []
+      description: |
+        Responde **sempre** 202, o e-mail existindo ou não, e no mesmo tempo de
+        resposta: revelar qual endereço tem conta é enumeração de usuários. O
+        token é de uso único e vale 1 h.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "202": { description: "Aceito. Se o e-mail existir, a mensagem sai — a resposta é idêntica nos dois casos." }
+        "429":
+          description: "`RATE_LIMITED` — o disparo é limitado por e-mail e por IP."
+          $ref: "#/components/responses/Erro"
+
+  /auth/password/reset:
+    post:
+      tags: [Autenticação]
+      summary: Troca a senha usando o token de recuperação
+      security: []
+      description: |
+        Consome o token (uso único, 1 h). Trocar a senha revoga **todas** as
+        famílias de sessão do usuário — se a recuperação foi feita porque a conta
+        estava comprometida, o invasor perde o acesso no mesmo instante.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:    { type: string }
+                password: { type: string, format: password, minLength: 8 }
+      responses:
+        "204": { description: Senha trocada e todas as sessões revogadas }
+        "400":
+          description: "`TOKEN_INVALID` — token inexistente, expirado ou já usado."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — senha fora da política (`details.password`)."
+          $ref: "#/components/responses/Erro"
 
   /auth/me:
     get:
@@ -85,12 +232,433 @@ paths:
                       user: { $ref: "#/components/schemas/Usuario" }
                       permissions:
                         type: array
-                        items:
-                          type: object
-                          properties:
-                            resource: { type: string, example: reservations }
-                            action: { type: string, enum: [ver, criar, editar, excluir] }
-                            scope: { type: string, enum: [all, own] }
+                        description: |
+                          A matriz do perfil, achatada. O painel usa para esconder
+                          o que o usuário não pode fazer — é espelho, não barreira:
+                          a checagem que vale é a do middleware, a cada requisição.
+                        items: { $ref: "#/components/schemas/Permissao" }
+
+  /users:
+    get:
+      tags: [Usuários]
+      summary: Lista usuários
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - name: sort
+          in: query
+          schema: { type: string, default: name, enum: [name, -name, email, -email, created_at, -created_at, last_login_at, -last_login_at] }
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Busca por nome ou e-mail.
+        - name: role
+          in: query
+          schema: { type: string, example: corretor }
+          description: Filtra pelo `code` do perfil — o mesmo de `/roles`, não o uuid.
+        - name: active
+          in: query
+          schema: { type: boolean }
+          description: Ausente traz ativos e inativos.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Usuario" }
+                  - $ref: "#/components/schemas/Paginacao"
+    post:
+      tags: [Usuários]
+      summary: Cria usuário
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UsuarioCriar" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string, example: /api/v1/users/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Usuario" }
+        "403":
+          description: |
+            `FORBIDDEN` — `role_id` de perfil mais poderoso que o do ator, ou
+            ator sem `roles:editar`. Atribuir papel é administrar acesso.
+          $ref: "#/components/responses/Erro"
+        "409":
+          description: |
+            `EMAIL_IN_USE` — e-mail já cadastrado. Quem decide é a constraint
+            `UNIQUE` do banco (violação `23505` traduzida), não um `SELECT` antes
+            do `INSERT`, que perderia a corrida.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /users/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Usuários]
+      summary: Detalhe do usuário
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Usuario" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Usuários]
+      summary: Substitui o usuário
+      description: |
+        Substituição integral: campo opcional ausente volta ao padrão
+        (`phone` fica nulo, `active` volta a `true`). `password` ausente **mantém
+        a senha atual** — PUT não é motivo para derrubar a senha de ninguém.
+        Para alteração parcial use `PATCH`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/UsuarioAtualizar"
+                - type: object
+                  required: [name, email, role_id]
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Usuario" }
+        "403":
+          description: |
+            `FORBIDDEN` — `role_id` de perfil mais poderoso que o do ator, ou
+            ator sem `roles:editar`. Atribuir papel é administrar acesso.
+          $ref: "#/components/responses/Erro"
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`EMAIL_IN_USE` — o e-mail já pertence a outro usuário."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Usuários]
+      summary: Atualiza parcialmente o usuário
+      description: |
+        Só o que veio no corpo muda. Campo **ausente** não é tocado; campo com
+        `null` limpa (vale para `phone`) — a distinção que o `Opt[T]` carrega.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UsuarioAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Usuario" }
+        "403":
+          description: |
+            `FORBIDDEN` — `role_id` de perfil mais poderoso que o do ator, ou
+            ator sem `roles:editar`. Atribuir papel é administrar acesso.
+          $ref: "#/components/responses/Erro"
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`EMAIL_IN_USE` — o e-mail já pertence a outro usuário."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Usuários]
+      summary: Desativa o usuário (soft delete)
+      description: |
+        Marca `active = false` e revoga todas as famílias de sessão. Não apaga a
+        linha: reserva, oportunidade e auditoria apontam para o usuário, e
+        histórico com autor órfão não é histórico. Reativar é `PATCH` com
+        `active: true`.
+      responses:
+        "204": { description: Desativado }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: |
+            `VALIDATION_ERROR` — o usuário autenticado não pode desativar a si
+            mesmo, nem o último usuário ativo de perfil `admin` (ficaria uma
+            instalação sem ninguém capaz de configurar).
+          $ref: "#/components/responses/Erro"
+
+  /roles:
+    get:
+      tags: [Perfis]
+      summary: Lista perfis
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - name: q
+          in: query
+          schema: { type: string }
+          description: Busca por código ou nome.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Perfil" }
+                  - $ref: "#/components/schemas/Paginacao"
+    post:
+      tags: [Perfis]
+      summary: Cria perfil
+      description: |
+        Nasce sem nenhuma permissão — a matriz vem depois, por
+        `PUT /roles/{id}/permissions`. `is_system` nunca vem do cliente: só o
+        seed marca perfil de sistema.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string, pattern: "^[a-z][a-z0-9_]{1,30}$", example: recepcao }
+                name: { type: string, example: Recepção }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Perfil" }
+        "422":
+          description: "`VALIDATION_ERROR` — `code` fora do padrão ou já em uso (`details.code`)."
+          $ref: "#/components/responses/Erro"
+
+  /roles/resources:
+    get:
+      tags: [Perfis]
+      summary: Catálogo de recursos × ações — a matriz de permissão possível
+      description: |
+        Fonte **única** da tela de perfis: as linhas da grade saem daqui, e
+        `PUT /roles/{id}/permissions` recusa qualquer par que não exista neste
+        catálogo. Não é paginado — o catálogo é pequeno, versionado por seed, e
+        vem inteiro.
+
+        `scopes` diz quais escopos fazem sentido no recurso: onde não existe dono
+        (configurações, tarifário) só há `all`, e a tela desabilita "só os meus"
+        em vez de oferecer uma opção que o SQL não sabe aplicar.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code:    { type: string, example: crm.opportunities }
+                        label:   { type: string, example: Oportunidades }
+                        group:   { type: string, example: CRM, description: "Rótulo do agrupamento na tela de perfis." }
+                        actions:
+                          type: array
+                          items: { type: string, enum: [ver, criar, editar, excluir] }
+                        scopes:
+                          type: array
+                          items: { type: string, enum: [all, own] }
+
+  /roles/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Perfis]
+      summary: Detalhe do perfil, já com a matriz aplicada
+      description: A lista não traz `permissions`; o detalhe traz, porque é o que a tela de edição precisa numa chamada.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/Perfil"
+                      - type: object
+                        properties:
+                          permissions:
+                            type: array
+                            items: { $ref: "#/components/schemas/Permissao" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Perfis]
+      summary: Substitui o perfil
+      description: |
+        Substituição integral do cadastro do perfil: `code` e `name` são
+        **obrigatórios**, porque o corpo é o estado final e não um remendo. Para
+        mudar só um dos dois use `PATCH`.
+
+        **A matriz não vem aqui.** Quem troca permissão é
+        `PUT /roles/{id}/permissions`. Um PUT de cadastro que zerasse a matriz
+        por omissão tiraria o acesso de todos os usuários do perfil sem ninguém
+        ter pedido isso. A resposta traz `permissions` — o mesmo corpo do `GET`,
+        para a tela reexibir o perfil inteiro sem uma segunda chamada — mas ela
+        sai exatamente como estava.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code, name]
+              properties:
+                code: { type: string, pattern: "^[a-z][a-z0-9_]{1,30}$", example: recepcao }
+                name: { type: string, example: Recepção }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - $ref: "#/components/schemas/Perfil"
+                      - type: object
+                        properties:
+                          permissions:
+                            type: array
+                            items: { $ref: "#/components/schemas/Permissao" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`ROLE_IMMUTABLE` — perfil com `is_system = true` não se altera, nem de nome."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — `code` fora do padrão, ausente, ou já em uso por outro perfil (`details.code`)."
+          $ref: "#/components/responses/Erro"
+    patch:
+      tags: [Perfis]
+      summary: Renomeia o perfil
+      description: Só rótulo e código, e só o que vier no corpo muda — para substituição integral use `PUT`. A matriz tem endpoint próprio, para não misturar edição de nome com mudança de acesso.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, pattern: "^[a-z][a-z0-9_]{1,30}$" }
+                name: { type: string }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Perfil" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`ROLE_IMMUTABLE` — perfil com `is_system = true` não se altera."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Perfis]
+      summary: Exclui o perfil
+      responses:
+        "204": { description: Excluído }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `ROLE_IMMUTABLE` — perfil de sistema.
+            `ROLE_IN_USE` — ainda há usuários no perfil (`details.users_count`);
+            mova-os antes. Excluir em cascata deixaria gente sem permissão nenhuma
+            e sem aviso.
+          $ref: "#/components/responses/Erro"
+
+  /roles/{id}/permissions:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [Perfis]
+      summary: Substitui a matriz de permissões do perfil
+      description: |
+        **Substitui**, não acumula: o que não vier no corpo deixa de valer. É
+        `DELETE` + `INSERT` na mesma transação, então a tela manda o estado
+        inteiro da grade sem precisar calcular diferença.
+
+        Perfil com `is_system = true` (o `admin`) responde `409 ROLE_IMMUTABLE`.
+        Permitir editar a matriz do admin é deixar alguém trancar a chave dentro
+        do carro: bastaria remover `configuracoes:editar` para ninguém mais
+        conseguir consertar a instalação.
+
+        Pares fora do catálogo de `GET /roles/resources`, ou `(resource, action)`
+        repetido no corpo — a chave é `(role_id, resource_code, action)`, um par
+        não pode ter dois escopos — são recusados com `422` apontando o índice em
+        `details`. A matriz nova vale na requisição seguinte do usuário: sem
+        deploy, sem novo login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: { $ref: "#/components/schemas/Permissao" }
+      responses:
+        "200":
+          description: Matriz aplicada, como ficou gravada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Permissao" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`ROLE_IMMUTABLE` — a matriz de perfil de sistema é imutável."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — par fora do catálogo ou duplicado (`details.permissions`)."
+          $ref: "#/components/responses/Erro"
 
   /availability/units:
     get:
@@ -262,7 +830,8 @@ components:
                     type: string
                     enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, DATE_CONFLICT,
                            MIN_STAY_NOT_MET, CAPACITY_EXCEEDED, DISCOUNT_ABOVE_LIMIT, HOLD_EXPIRED,
-                           IDEMPOTENCY_MISMATCH, RATE_LIMITED, INTERNAL]
+                           IDEMPOTENCY_MISMATCH, RATE_LIMITED, INVALID_CREDENTIALS, TOKEN_INVALID,
+                           TOKEN_REUSED, EMAIL_IN_USE, ROLE_IMMUTABLE, ROLE_IN_USE, INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
 
@@ -283,13 +852,92 @@ components:
       enum: [normal, fds, feriado, alta, reveillon, carnaval]
       description: Resolvido por precedência — réveillon/carnaval > feriado > alta > fds > normal.
 
+    Permissao:
+      type: object
+      required: [resource, action, scope]
+      properties:
+        resource: { type: string, example: reservations, description: "Código vindo de `GET /roles/resources`." }
+        action:   { type: string, enum: [ver, criar, editar, excluir] }
+        scope:
+          type: string
+          enum: [all, own]
+          default: all
+          description: |
+            `own` vira `AND owner_id = <usuário>` no SQL do repositório. Filtrar
+            em memória depois da consulta faria a paginação mentir — `total` de
+            uma página que o usuário nem pode ver.
+
+    Perfil:
+      type: object
+      properties:
+        id:        { type: string, format: uuid }
+        code:      { type: string, example: corretor, description: "Estável: é por ele que seed, filtros e testes referenciam o perfil." }
+        name:      { type: string, example: Corretor }
+        is_system: { type: boolean, description: "Perfil de sistema (`admin`): não se renomeia, não se exclui e a matriz não se altera." }
+
     Usuario:
       type: object
       properties:
-        id:    { type: string, format: uuid }
-        name:  { type: string }
-        email: { type: string, format: email }
-        role:  { type: string, enum: [admin, usuario, corretor] }
+        id:      { type: string, format: uuid }
+        name:    { type: string }
+        email:   { type: string, format: email }
+        phone:   { type: [string, "null"], example: "+5585999990000" }
+        role_id: { type: string, format: uuid }
+        role:
+          type: string
+          example: corretor
+          description: |
+            `code` do perfil. **Não é enum fechado** — perfil é dado, criável em
+            `/roles`; front que faça `switch` por este valor quebra no primeiro
+            perfil novo. Para decidir o que mostrar, use `permissions`.
+        role_name: { type: string, example: Corretor }
+        broker_id:
+          type: [string, "null"]
+          format: uuid
+          description: Só leitura. Preenchido quando a conta é a de um corretor.
+        active:  { type: boolean }
+        last_login_at: { type: [string, "null"], format: date-time }
+        created_at:    { type: string, format: date-time }
+
+    UsuarioCriar:
+      type: object
+      required: [name, email, password, role_id]
+      properties:
+        name:     { type: string, minLength: 2 }
+        email:    { type: string, format: email, description: "Único. Colisão devolve 409 `EMAIL_IN_USE`." }
+        password: { type: string, format: password, minLength: 8, description: "Guardado em argon2id; nunca volta em resposta nenhuma." }
+        role_id:  { type: string, format: uuid, description: "Vale a mesma regra do `UsuarioAtualizar`: exige `roles:editar` e papel subconjunto do ator." }
+        phone:    { type: [string, "null"], example: "+5585999990000" }
+        active:   { type: boolean, default: true }
+
+    UsuarioAtualizar:
+      type: object
+      description: |
+        Corpo do `PATCH` (tudo opcional) e base do `PUT`. Campo **ausente** não
+        muda nada; campo com `null` limpa — é a distinção que o `Opt[T]` do Go
+        carrega e que um `map[string]any` perderia.
+      properties:
+        name:     { type: string, minLength: 2 }
+        email:    { type: string, format: email }
+        password: { type: string, format: password, minLength: 8, description: "Trocar a senha revoga todas as sessões do usuário." }
+        role_id:
+          type: string
+          format: uuid
+          description: |
+            Muda o perfil; passa a valer na requisição seguinte, sem novo login.
+
+            Atribuir papel é ato de administração de acesso: exige
+            `roles:editar` (não basta `usuarios:editar`), e o papel alvo só é
+            aceito se a matriz dele for **subconjunto** da do ator — ninguém
+            concede o que não tem, senão editar usuário vira escalada de
+            privilégio em um passo. Fora disso: `403 FORBIDDEN`.
+
+            Trocar o **próprio** `role_id` é recusado com `422
+            VALIDATION_ERROR`, pela mesma razão que ninguém se desativa: o
+            caminho para uma instalação sem administrador não pode passar por
+            um clique distraído.
+        phone:    { type: [string, "null"] }
+        active:   { type: boolean, description: "`false` bloqueia o login e revoga as sessões — mesmo efeito do `DELETE`." }
 
     PedidoDeOrcamento:
       type: object
@@ -348,7 +996,7 @@ components:
         guests_count:  { type: integer }
         total_cents:   { type: integer, format: int64 }
         deposit_cents: { type: integer, format: int64 }
-        hold_expires_at: { type: string, format: date-time, nullable: true }
+        hold_expires_at: { type: [string, "null"], format: date-time }
         units:
           type: array
           description: Unidades físicas alocadas. A White House Completa aloca todas.

@@ -42,19 +42,93 @@ jobs:
           --health-cmd "pg_isready -U postgres" --health-interval 5s
           --health-timeout 5s --health-retries 10
         ports: ['5432:5432']
+    defaults:
+      run:
+        working-directory: apps/api
+    env:
+      # MIGRATIONS_PATH fica no padrão (./migrations), que a partir de apps/api
+      # aponta para o diretório certo.
+      DATABASE_URL: postgres://postgres:test@localhost:5432/whvtest?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - name: Instalar golang-migrate
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: apps/api/go.sum
+      # Roda o NOSSO cmd/migrate, não o CLI externo: o que o CI valida tem de
+      # ser exatamente a ferramenta que aplica schema na VPS.
+      - name: Aplicar, reverter até zero e reaplicar
         run: |
-          curl -sSL https://github.com/golang-migrate/migrate/releases/download/v4.18.1/migrate.linux-amd64.tar.gz \
-            | tar xz -C /usr/local/bin migrate
-      - name: Aplicar e reverter
+          go run ./cmd/migrate up
+          go run ./cmd/migrate version
+          go run ./cmd/migrate down -all
+          go run ./cmd/migrate up
+          go run ./cmd/migrate version
+
+  integration:
+    name: Testes de integração (Go + Postgres)
+    runs-on: ubuntu-latest
+    # Teto de tempo do job: a repetição do teste de concorrência espera pelo
+    # `deadlock_timeout` do Postgres quando o defeito está presente, e job sem
+    # teto queima hora de runner até o limite de 6 h. Medido: ~4 min o job
+    # inteiro com as 10 repetições.
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16-alpine
         env:
-          DB: postgres://postgres:test@localhost:5432/whvtest?sslmode=disable
-        run: |
-          migrate -path apps/api/migrations -database "$DB" up
-          migrate -path apps/api/migrations -database "$DB" down -all
-          migrate -path apps/api/migrations -database "$DB" up
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: whvintegration
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+        ports: ['5432:5432']
+    # Sem `working-directory: apps/api` de propósito: as etapas abaixo chamam os
+    # alvos do Makefile da raiz. Os comandos (flags, regex, número de
+    # repetições) moram num lugar só — CI e `make test-integration` divergirem é
+    # exatamente como um passo entra num lado e some do outro sem ninguém ver.
+    env:
+      DATABASE_URL: postgres://postgres:test@localhost:5432/whvintegration?sslmode=disable
+      TZ: America/Fortaleza
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: apps/api/go.sum
+      - name: Schema
+        run: make it-schema
+      # O seed NÃO é conveniência: sem ele a tabela `resources` fica vazia e todo
+      # teste que concede permissão bate na FK `role_permissions_resource_code_fkey`
+      # (23503). Além disso `TestPerfilCorretorSemeadoSalvaSemAlteracao` se PULA
+      # quando não existe o perfil `corretor` — e teste pulado conta como verde,
+      # que é cobertura perdida disfarçada de sucesso. Reproduzido em Postgres
+      # real: sem seed, 12 testes de `internal/modules/users` vermelhos e 1
+      # pulado; com seed, todos executam.
+      - name: Seed
+        run: make it-seed
+      # -race porque é aqui que moram os testes de disputa.
+      - name: Suíte com a tag integration
+        run: make it-suite
+      # POR QUE REPETIR, e não rodar uma vez: o defeito mais grave desta rodada
+      # (a perdedora de uma disputa de datas recebendo 500 em vez de 409, porque
+      # o Postgres devolve 40P01 no lugar de 23P01) é PROBABILÍSTICO — só
+      # aparece quando duas transações se cruzam dentro da janela da constraint.
+      # Medido em Postgres real nesta rodada: `-count=1` passou VERDE com o
+      # defeito presente e `-count=10` reprovou. Foi assim que ele atravessou
+      # duas revisões adversariais seguidas.
+      # Com ~1/3 de chance de detecção por execução, 10 repetições deixam
+      # (2/3)^10 ~ 2% de chance de a falha atravessar o CI; uma execução deixaria
+      # 67%. Custo medido: ~75 s para os 6 testes de concorrência x 10.
+      # O alvo falha se o regex de seleção não casar com nenhum teste — teste
+      # renomeado vira erro, nunca etapa vazia e verde.
+      # Roda mesmo com a suíte vermelha (`!cancelled()`): o sinal de concorrência
+      # é o mais caro de obter e o mais fácil de perder. Se ele ficasse atrás de
+      # um `needs` implícito, uma falha qualquer da suíte esconderia a disputa de
+      # datas e a rodada seguinte descobriria tudo de novo do zero.
+      - name: Concorrência, repetida (a falha intermitente não pode passar)
+        if: ${{ !cancelled() }}
+        run: make it-concorrencia
 
   admin:
     name: Painel (Next.js)
@@ -74,3 +148,19 @@ jobs:
       - run: pnpm install --frozen-lockfile || pnpm install
       - run: pnpm exec tsc --noEmit
       - run: pnpm build
+
+  build-images:
+    name: Build das imagens
+    runs-on: ubuntu-latest
+    # Só em push para main: buildar imagem em todo PR custa minuto e não
+    # acrescenta sinal — o build do Go e do Next já rodaram nos jobs acima.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [api, admin, migrations]
+    steps:
+      - uses: actions/checkout@v4
+      # Sem push para registry ainda: o objetivo aqui é provar que a Dockerfile
+      # não quebrou. Publicar entra quando a VPS existir.
+      - name: Imagem da API (api, worker, migrate, seed)
+        run: docker build -f infra/api.Dockerfile -t whv-api:${{ github.sha }} .
+      - name: Imagem do painel
+        run: docker build -f infra/admin.Dockerfile -t whv-admin:${{ github.sha }} .

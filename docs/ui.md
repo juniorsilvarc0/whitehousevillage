@@ -107,7 +107,7 @@ body {
 | **Botões** | Pílula (`rounded-full`) em todos os tamanhos; primário em `bg-brand-gradient` |
 | **Toast** | `sonner`, `top-center`, com offsets de safe-area |
 
-Navegação declarativa em `src/config/navigation.ts`, com `allowedRoles` por item — o `corretor` enxerga quatro itens. **O guard real é no servidor**; a lista só esconde.
+Navegação declarativa em `src/config/navigation.ts`. Cada item declara **recurso + ação do catálogo do banco** (`reservations:ver`, `finance.commissions:ver`…) e é filtrado por `can(recurso, acao)` sobre as permissões que `/auth/me` devolve — **nunca** por uma lista de papéis escrita no front. `allowedRoles: ["admin","usuario"]` é a mesma `if role == "corretor"` que a regra 8 do CLAUDE.md proíbe, só que em TypeScript: um perfil criado na tela de perfis nasceria com o menu vazio, e mudar a matriz de um papel deixaria de mudar o que ele vê. Com a matriz do seed, o `corretor` enxerga Painel, Mapa, Reservas, Funil, WhatsApp, Agenda e Comissões — e não Financeiro (recebíveis e pagáveis), Inventário, Canais, Relatórios nem Configurações. **O guard real é no servidor**; a lista só esconde.
 
 ## 8. Padrões de tela
 

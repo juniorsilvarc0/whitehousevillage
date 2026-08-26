@@ -58,17 +58,39 @@ Rollback: as imagens são versionadas por tag de commit; `docker compose up -d` 
 
 ## 4. CI/CD (GitHub Actions)
 
+O que existe hoje em `.github/workflows/ci.yml` — a tabela é o arquivo, não a intenção:
+
 | Job | O que roda |
 |---|---|
-| `lint` | `golangci-lint run ./...` · `eslint` · `tsc --noEmit` |
-| `test-api` | `go test ./... -race` — inclui o **teste de concorrência do overbooking** |
-| `test-admin` | `vitest --run` |
-| `migrations` | Postgres efêmero: `migrate up` → `migrate down` até zero |
-| `contract` | Valida que toda rota está na OpenAPI, expõe os 6 verbos e checa permissão |
-| `build` | Build das imagens; em `main`, push para o registry com a tag do commit |
-| `e2e` *(a partir da Fase 1)* | Playwright contra o compose completo |
+| `api` | `gofmt -l` (falha se houver arquivo fora de forma), `go vet ./...`, `go test ./... -race -count=1` |
+| `migrations` | Postgres de serviço: `migrate up` → `version` → `down -all` → `up` → `version`, com o **nosso** `cmd/migrate` |
+| `integration` | Postgres de serviço: **schema → seed → suíte `-tags=integration` → concorrência repetida**. Detalhado abaixo |
+| `admin` | `pnpm install --frozen-lockfile`, `tsc --noEmit`, `pnpm build` |
+| `build-images` | Só em push para `main`: builda as imagens da API e do painel (sem push para registry enquanto não houver VPS) |
+
+Pendências conhecidas do CI, para não parecerem entregues: `golangci-lint` e `eslint` ainda não têm job (rodam por `make lint`), o job de contrato (toda rota na OpenAPI) e o `e2e` com Playwright entram na Fase 1.
 
 Regras: `main` protegida, PR obrigatório, CI verde para merge, sem push direto.
+
+### 4.1 Job de integração — por que tem seed e por que repete
+
+O job roda os **alvos do Makefile**, não comandos soltos, para que `make test-integration` na máquina do desenvolvedor e o CI executem exatamente a mesma coisa. Os alvos `it-schema`, `it-seed`, `it-suite` e `it-concorrencia` assumem `DATABASE_URL` apontando para um banco descartável; `make test-integration` sobe o Postgres efêmero (`whv-it-postgres`, porta `55432`) e chama os quatro na ordem.
+
+| Etapa | Comando | Por que existe |
+|---|---|---|
+| Schema | `make it-schema` | Aplica as migrations. Passo separado, como em produção |
+| **Seed** | `make it-seed` | Sem ele a tabela `resources` fica vazia: todo teste que concede permissão bate na FK `role_permissions_resource_code_fkey` (**23503**), e `TestPerfilCorretorSemeadoSalvaSemAlteracao` se **pula** — teste pulado conta como verde, que é cobertura perdida disfarçada de sucesso |
+| Suíte | `make it-suite` | `go test -tags=integration ./... -race -count=1` |
+| **Concorrência** | `make it-concorrencia` | Repete os testes de disputa `-count=10`. O defeito de datas sob contenção é probabilístico: medido em Postgres real, `-count=1` passou **verde** com o defeito presente e `-count=10` reprovou — foi assim que ele atravessou duas revisões |
+
+Quais testes são "de concorrência" é decidido por **nome**, no regex `TESTES_CONCORRENCIA` do Makefile (`Overbooking|Concorren|Simultane|Corrida|Disputa`), porque Go não tem categoria de teste. Duas consequências práticas:
+
+- quem escrever uma disputa nova **batiza com uma dessas palavras**, senão o teste fica fora da repetição;
+- se o regex não casar com nenhum teste, o alvo **falha de propósito** — renomear um teste vira erro visível, nunca uma etapa vazia e verde.
+
+`REPETICOES_CONCORRENCIA` (10) e `TESTES_CONCORRENCIA` são variáveis do Makefile e podem ser sobrescritas na linha de comando (`make test-integration REPETICOES_CONCORRENCIA=30`) para caçar uma intermitência mais rara. Com ~1/3 de chance de detecção por execução, 10 repetições deixam ~2% de chance de a falha atravessar o CI, contra 67% de uma execução só. Custo medido: ~75 s para os 6 testes de concorrência × 10; o job tem `timeout-minutes: 25` para que um impasse não queime hora de runner até o teto de 6 h da plataforma.
+
+> `hashFiles()` **não** é permitido em `if:` de job — já derrubou o CI aqui. Condição de job usa só `github.*` e expressões de contexto estático.
 
 ## 5. Backup e restore
 
@@ -92,7 +114,7 @@ gunzip -c backup-20260820.sql.gz | docker compose exec -T postgres psql -U $POST
 
 - TLS obrigatório; HSTS; cookies `httpOnly`, `Secure`, `SameSite=Lax`.
 - Senha com argon2id. Refresh rotativo com detecção de reuso.
-- Rate limit por IP no login e por token na API pública.
+- Rate limit por IP no login e por token na API pública. **Hoje o contador vive na memória do processo** (`httpx.Limitador`): enquanto for assim, roda-se **uma** instância da API — com duas réplicas o limite multiplica e todo deploy zera a janela. Redis entra na Fase 6 (dívida **D1** em `docs/roadmap.md`).
 - Postgres **não** exposto para fora do compose. Segredos por env, nunca no git.
 - Imagens sem shell (`distroless`) e usuário não-root.
 - `acme.json` com permissão 600 — Traefik recusa subir de outro jeito.

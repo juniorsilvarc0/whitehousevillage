@@ -2,6 +2,11 @@
 /apps/api/bin/
 *.test
 coverage.out
+# binários compilados no diretório do módulo (go build sem -o)
+/apps/api/api
+/apps/api/worker
+/apps/api/migrate
+/apps/api/seed
 
 # Node / Next
 node_modules/

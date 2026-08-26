@@ -33,6 +33,17 @@ func (e *Error) WithCause(err error) *Error { c := *e; c.cause = err; return &c 
 // WithDetails anexa dados estruturados que o front usa para explicar o erro.
 func (e *Error) WithDetails(d any) *Error { c := *e; c.Details = d; return &c }
 
+// WithStatus troca o status HTTP mantendo o code. Existe porque o contrato usa
+// TOKEN_INVALID em dois lugares com status diferentes: 401 no /auth/refresh
+// (credencial de sessão inválida) e 400 no /auth/password/reset (o token do
+// e-mail não é credencial de sessão — responder 401 ali faria o painel achar
+// que precisa relogar em vez de pedir outro link).
+func (e *Error) WithStatus(s int) *Error { c := *e; c.status = s; return &c }
+
+// WithMessage troca a mensagem legível preservando o code, que é o que o front
+// consome.
+func (e *Error) WithMessage(m string) *Error { c := *e; c.Message = m; return &c }
+
 func define(code, msg string, status int) *Error {
 	return &Error{Code: code, Message: msg, status: status}
 }
@@ -53,6 +64,20 @@ var (
 	DiscountAboveLimit  = define("DISCOUNT_ABOVE_LIMIT", "Desconto acima da alçada.", http.StatusUnprocessableEntity)
 	HoldExpired         = define("HOLD_EXPIRED", "A pré-reserva expirou.", http.StatusConflict)
 	IdempotencyMismatch = define("IDEMPOTENCY_MISMATCH", "Chave de idempotência reutilizada com corpo diferente.", http.StatusConflict)
+)
+
+// Erros de identidade e acesso.
+//
+// InvalidCredentials é deliberadamente o MESMO erro para e-mail inexistente,
+// senha errada e e-mail bloqueado por tentativas. Um código próprio para
+// "bloqueado" confirmaria que a conta existe — vira oráculo de enumeração.
+var (
+	InvalidCredentials = define("INVALID_CREDENTIALS", "E-mail ou senha inválidos.", http.StatusUnauthorized)
+	TokenInvalid       = define("TOKEN_INVALID", "Token ausente, expirado ou desconhecido.", http.StatusUnauthorized)
+	TokenReused        = define("TOKEN_REUSED", "Sessão comprometida: faça login novamente.", http.StatusUnauthorized)
+	EmailInUse         = define("EMAIL_IN_USE", "E-mail já cadastrado.", http.StatusConflict)
+	RoleImmutable      = define("ROLE_IMMUTABLE", "Perfil de sistema não pode ser alterado nem excluído.", http.StatusConflict)
+	RoleInUse          = define("ROLE_IN_USE", "Ainda há usuários neste perfil.", http.StatusConflict)
 )
 
 func NotFound(resource string) *Error {
