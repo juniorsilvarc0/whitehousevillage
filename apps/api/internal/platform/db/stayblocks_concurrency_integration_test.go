@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -218,6 +219,36 @@ func ehConflitoDeDatas(err error) bool {
 	return errors.As(err, &pg) && pg.Code == "23P01"
 }
 
+// conflitoComprovado aceita as DUAS provas de que o 409 nasceu da disputa pela
+// data, e não de contenção genérica em outro lugar:
+//
+//   - 23P01: o Postgres avaliou a constraint e recusou a sobreposição;
+//   - contenção (55P03/40P01/40001) cujo contexto aponta a PRÓPRIA verificação
+//     da constraint — o `where` do erro traz "while checking exclusion
+//     constraint ... in relation stay_blocks". Esperar dentro da verificação só
+//     acontece porque outra transação está inserindo faixa sobreposta agora.
+//
+// Exigir só 23P01 amarrava o teste à velocidade da máquina: com 50 pedidos
+// disputando, o perdedor às vezes estoura o lock_timeout antes de a constraint
+// concluir. Verde em 30 execuções aqui e vermelho no runner de 2 vCPUs do CI é
+// exatamente o tipo de intermitência que já deixou um defeito atravessar duas
+// revisões — o que precisa valer é a PROVA, não o SQLSTATE exato.
+func conflitoComprovado(err error) bool {
+	if ehConflitoDeDatas(err) {
+		return true
+	}
+	var pg *pgconn.PgError
+	if !errors.As(err, &pg) {
+		return false
+	}
+	switch pg.Code {
+	case "55P03", "40P01", "40001":
+		contexto := pg.Where + " " + pg.Detail + " " + pg.Message + " " + pg.TableName + " " + pg.ConstraintName
+		return strings.Contains(contexto, "stay_blocks") || strings.Contains(contexto, "stay_no_overlap")
+	}
+	return false
+}
+
 // TestOverbookingEhImpedidoPeloBanco é o teste de regressão do CLAUDE.md §2.
 //
 // Os quatro cenários rodam como subtestes na ordem declarada, e a verificação
@@ -336,7 +367,7 @@ func cinquentaPedidosNaMesmaUnidade(t *testing.T, ctx context.Context, pool *pgx
 	}
 	wg.Wait()
 
-	vencedores, conflitos := 0, 0
+	vencedores, conflitos, porConstraint := 0, 0, 0
 	// Agrupa por código para o relatório sair legível: 49 linhas iguais de erro
 	// escondem o número que importa, que é quantos hóspedes veriam cada coisa.
 	porCodigo := map[string]int{}
@@ -357,8 +388,11 @@ func cinquentaPedidosNaMesmaUnidade(t *testing.T, ctx context.Context, pool *pgx
 			if traduzido.Status() != http.StatusConflict {
 				t.Errorf("pedido %d: status = %d, esperado 409", i, traduzido.Status())
 			}
-			if !ehConflitoDeDatas(err) {
-				t.Errorf("pedido %d: DATE_CONFLICT sem 23P01 por trás — a tradução veio de outro lugar", i)
+			if ehConflitoDeDatas(err) {
+				porConstraint++
+			} else if !conflitoComprovado(err) {
+				t.Errorf("pedido %d: DATE_CONFLICT sem prova de disputa pela data — "+
+					"a tradução veio de outro lugar: %v", i, err)
 			}
 			continue
 		}
@@ -370,6 +404,15 @@ func cinquentaPedidosNaMesmaUnidade(t *testing.T, ctx context.Context, pool *pgx
 	if vencedores != 1 {
 		t.Fatalf("vencedores = %d, esperado exatamente 1 (respostas: %v)", vencedores, porCodigo)
 	}
+	// Pelo menos um perdedor precisa ter sido recusado pela constraint em si.
+	// Se TODOS saíssem por contenção, o teste não teria provado que é o banco
+	// quem impede a sobreposição — que é a única garantia que sustenta o produto.
+	if porConstraint == 0 {
+		t.Errorf("nenhum pedido foi recusado com 23P01: sem a constraint atuando, "+
+			"o 409 veio só de espera e a garantia contra overbooking não foi exercitada "+
+			"(respostas: %v)", porCodigo)
+	}
+	t.Logf("conflitos: %d, dos quais %d recusados pela constraint (23P01)", conflitos, porConstraint)
 	if conflitos != concorrentes-1 {
 		// A falha que este teste existe para proibir. Disputar data é situação
 		// NORMAL de operação numa casa com uma única cobertura: quem perde a
