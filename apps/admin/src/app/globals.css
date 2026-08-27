@@ -32,6 +32,8 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-alcada-livre: var(--alcada-livre);
+  --color-alcada-atencao: var(--alcada-atencao);
   --font-sans: var(--font-geist-sans);
   --font-display: var(--font-outfit);
   --font-heading: var(--font-outfit);
@@ -79,6 +81,14 @@
   --chart-4: oklch(0.70 0.040 120);
   --chart-5: oklch(0.36 0.045 140);
 
+  /* Semáforo de alçada de desconto. São tokens, e não `bg-[#f59e0b]` solto no
+     componente, porque um semáforo precisa de três matizes que a paleta da
+     marca (toda no verde-oliva) não tem — e cor fora do sistema é o
+     anti-padrão que espalha hex pelo código. O vermelho reaproveita
+     `--destructive`: "não autorizado" é a mesma família de "recusado". */
+  --alcada-livre: oklch(0.52 0.115 148);
+  --alcada-atencao: oklch(0.58 0.135 72);
+
   --radius: 1.1rem;
 }
 
@@ -102,6 +112,10 @@
   --border: oklch(1 0 0 / 12%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.66 0.055 110);
+  /* No escuro os dois sobem de luminosidade: 0.52 sobre fundo 0.17 não passa
+     de contraste de texto. */
+  --alcada-livre: oklch(0.74 0.135 148);
+  --alcada-atencao: oklch(0.78 0.130 78);
 }
 
 /* ── Casca 3.0 ──────────────────────────────────────────────────────────────

@@ -11,9 +11,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/config"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
@@ -50,6 +55,19 @@ func New(o Opcoes) (http.Handler, error) {
 		Auth:  auth.NewHandler(authSvc, o.Config.IsProduction()),
 		Users: users.NewHandler(usersSvc),
 		Roles: roles.NewHandler(rolesSvc),
+
+		// Fase 1. Os quatro módulos expõem o MESMO construtor
+		// `NovoHandler(pool, tx)` — foi o contrato combinado entre os agentes
+		// justamente para a montagem caber em quatro linhas iguais.
+		//
+		// Preencher os quatro é OBRIGATÓRIO, e não opcional: `rotas_inventario.go`
+		// e `rotas_reservas.go` deixaram de guardar contra handler nulo para que
+		// o teste de contrato do CI enxergue as rotas deles. Um main que
+		// esquecer um campo sobe com as rotas apontando para ponteiro nulo.
+		Inventario:      inventario.NovoHandler(o.Pool, tx),
+		Tarifario:       tarifario.NovoHandler(o.Pool, tx),
+		Disponibilidade: disponibilidade.NovoHandler(o.Pool, tx),
+		Reservas:        reservas.NovoHandler(o.Pool, tx),
 	}
 
 	tabela := Rotas(deps)
@@ -64,10 +82,23 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 	r := chi.NewRouter()
 
 	r.Use(httpx.RequestID)
-	// RealIP confia no X-Forwarded-For do proxy. Vale porque em produção só o
-	// Traefik fala com a API; expor a porta direto na internet faria o IP do
-	// limitador virar campo controlado pelo atacante.
-	r.Use(middleware.RealIP)
+	// httpx.RealIP, e não `chi/middleware.RealIP`: o do chi está DEPRECADO por
+	// spoofing (GHSA-3fxj-6jh8-hvhx e dois irmãos) porque lê a entrada mais à
+	// ESQUERDA de X-Forwarded-For — a única que o cliente escreve. O nosso só
+	// acredita em cabeçalho quando o peer direto é rede interna, e lê a cadeia
+	// da direita para a esquerda. Importa aqui porque este IP é a chave do
+	// limitador do /auth/login e a coluna `audit_log.ip`.
+	r.Use(httpx.RealIP)
+	// DEPOIS do RealIP, e não antes: o audit lê `httpx.IPDoCliente`, que devolve
+	// o IP que o RealIP resolveu e guardou no contexto — antes dele, a leitura
+	// cairia no peer direto (o Traefik). Montado aqui, e não dentro do grupo
+	// protegido, porque escrita de rota pública também deixa trilha (troca de
+	// senha) e porque o custo é duas leituras de header por requisição.
+	//
+	// Sem esta linha `audit_log.ip` e `audit_log.user_agent` saem NULOS no
+	// sistema montado — as suítes de módulo montam o middleware à mão e passam
+	// verde, e foi assim que a ausência atravessou duas revisões.
+	r.Use(audit.Middleware)
 	r.Use(httpx.Recoverer)
 	r.Use(httpx.RequestLogger)
 	r.Use(httpx.CORS(cfg.CORSOrigins))

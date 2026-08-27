@@ -202,7 +202,19 @@ var matrizSeed = map[string][]concessao{
 		{"dashboard", somenteLeitura, escopoAll},
 		{"reservations", leituraEscrita, escopoOwn},
 		{"quotes", leituraEscrita, escopoOwn},
-		{"calendar", leituraEscrita, escopoOwn},
+		// `calendar` com as QUATRO ações, e não só ver+criar. A revisão mediu a
+		// assimetria: `POST /blocks` (calendar, criar) devolvia 201 e
+		// `DELETE /blocks/{id}` (calendar, excluir) devolvia 403 — o corretor
+		// bloqueava data e não conseguia desbloquear. Permissão que deixa criar
+		// e não deixa desfazer não é restrição, é armadilha: o único conserto
+		// vira pedir para um admin, e a operação aprende a não usar a tela.
+		//
+		// DEPENDE DO FILTRO POR DONO: `excluir` em `own` só é seguro porque
+		// `stay_blocks.owner_id` existe (20260826120000) e o repositório aplica
+		// `AND owner_id = $usuario` em `LiberarBloqueio`. Sem esse filtro no
+		// SQL, `own` degrada para `all` e esta linha passa a permitir apagar o
+		// bloqueio alheio — mais grave que a assimetria que ela corrige.
+		{"calendar", tudo, escopoOwn},
 		{"agenda", leituraEscrita, escopoOwn},
 
 		// `contacts` em `all` é a exceção incômoda: a tabela não tem coluna de

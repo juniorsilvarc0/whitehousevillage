@@ -332,3 +332,59 @@ func (a *ambiente) auditoriasDe(t *testing.T, entidadeID uuid.UUID, acao string)
 	}
 	return n
 }
+
+// silenciarPopulacao desativa todos os usuários existentes e DEVOLVE o estado no
+// fim do teste.
+//
+// Os cenários de "último administrador" só provam alguma coisa com a população
+// determinística: a trava tem de contar exatamente dois administradores ativos
+// para que o segundo seja, de fato, o último. Zerar o resto é legítimo.
+//
+// O que não era legítimo era não devolver. Medido nesta árvore: depois de uma
+// passada de `make test-integration`, as TRÊS contas de desenvolvimento do seed
+// — `admin@wh.local`, `gestao@wh.local` e `corretor@wh.local` — ficavam com
+// `active = false`, e ninguém mais entrava no sistema. O seed não conserta: ele
+// é idempotente por chave natural e não toca em quem já existe ("Quem já existe
+// não é tocado: reescrever o hash apagaria a senha que o dev escolheu"), então
+// rodá-lo de novo responde "nada mudou" com o ambiente quebrado.
+//
+// Num banco efêmero isso não aparece. Numa base de desenvolvimento — que é onde
+// a suíte também roda — aparece como "o login parou de funcionar depois dos
+// testes", e a causa fica a três arquivos de distância de quem procura.
+func silenciarPopulacao(t *testing.T, a *ambiente) {
+	t.Helper()
+
+	linhas, err := a.pool.Query(a.ctx, `SELECT id FROM users WHERE active`)
+	if err != nil {
+		t.Fatalf("lendo a população ativa: %v", err)
+	}
+	var ativos []uuid.UUID
+	for linhas.Next() {
+		var id uuid.UUID
+		if err := linhas.Scan(&id); err != nil {
+			linhas.Close()
+			t.Fatalf("lendo usuário ativo: %v", err)
+		}
+		ativos = append(ativos, id)
+	}
+	linhas.Close()
+	if err := linhas.Err(); err != nil {
+		t.Fatalf("lendo a população ativa: %v", err)
+	}
+
+	if _, err := a.pool.Exec(a.ctx, `UPDATE users SET active = false`); err != nil {
+		t.Fatalf("zerando a população de usuários: %v", err)
+	}
+
+	t.Cleanup(func() {
+		devolver, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		// Reativa só quem ESTAVA ativo. Um `SET active = true` geral ressuscitaria
+		// as contas que o próprio teste desativou de propósito.
+		if _, err := a.pool.Exec(devolver,
+			`UPDATE users SET active = true WHERE id = ANY($1)`, ativos); err != nil {
+			t.Errorf("NÃO devolvi a população de usuários ao estado anterior (%v) — %d contas ficaram "+
+				"desativadas, incluindo possivelmente as do seed: ninguém mais entra no sistema", err, len(ativos))
+		}
+	})
+}

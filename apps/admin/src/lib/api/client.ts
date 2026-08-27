@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 
 import { SESSION_COOKIE_NAME } from "@/lib/auth/cookies";
+import { normalizarCodigo, type CodigoDeErro } from "@/lib/api/codigos";
 import type { Lista, Meta } from "@/lib/api/types";
 
 /**
@@ -12,30 +13,9 @@ import type { Lista, Meta } from "@/lib/api/types";
  * exposta.
  */
 
-/** Códigos do contrato (`components/responses/Erro`), na ordem do openapi. */
-export type CodigoDeErro =
-  | "VALIDATION_ERROR"
-  | "UNAUTHORIZED"
-  | "FORBIDDEN"
-  | "NOT_FOUND"
-  | "DATE_CONFLICT"
-  | "MIN_STAY_NOT_MET"
-  | "CAPACITY_EXCEEDED"
-  | "DISCOUNT_ABOVE_LIMIT"
-  | "HOLD_EXPIRED"
-  | "IDEMPOTENCY_MISMATCH"
-  | "RATE_LIMITED"
-  | "INVALID_CREDENTIALS"
-  | "TOKEN_INVALID"
-  | "TOKEN_REUSED"
-  | "EMAIL_IN_USE"
-  | "ROLE_IMMUTABLE"
-  | "ROLE_IN_USE"
-  | "INTERNAL"
-  // Fora do contrato: a API não respondeu (caiu, DNS, timeout). É do BFF, não
-  // do servidor, e por isso não pode se disfarçar de INTERNAL — a tela precisa
-  // saber que o problema é de conexão para oferecer "tentar de novo".
-  | "NETWORK_ERROR";
+/** Reexportado por conveniência: o tipo vive em `codigos.ts`, que não depende
+ *  de `next/headers` e por isso pode ser lido também no navegador. */
+export type { CodigoDeErro };
 
 export class ApiError extends Error {
   readonly code: CodigoDeErro;
@@ -95,7 +75,7 @@ export type ApiFetchInit = {
   onResponse?: (resposta: Response) => void;
 };
 
-type Envelope<T> = { data?: T; meta?: Meta; error?: { code?: string; message?: string; details?: Record<string, unknown> } };
+type Envelope<T, M> = { data?: T; meta?: M; error?: { code?: string; message?: string; details?: Record<string, unknown> } };
 
 function montarUrl(path: string, query?: Query): string {
   const url = new URL(`${apiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`);
@@ -123,6 +103,18 @@ export async function apiFetch<T>(path: string, init: ApiFetchInit = {}): Promis
   return data;
 }
 
+/**
+ * Igual ao `apiFetch`, mas entrega o `meta` do envelope tipado pelo chamador.
+ *
+ * Nem todo `meta` é paginação: `POST /rates/bulk` devolve em `meta` quantas
+ * células criou, atualizou e **removeu**, e essa contagem é o único jeito de a
+ * tela dizer "6 removidas" para quem salvou, em vez de a remoção aparecer
+ * quando a venda daquele produto falhar.
+ */
+export async function apiFetchComMeta<T, M>(path: string, init: ApiFetchInit = {}): Promise<{ data: T; meta?: M }> {
+  return apiRequest<T, M>(path, init);
+}
+
 /** Igual ao `apiFetch`, mas devolve `meta` junto — para lista paginada. */
 export async function apiList<T>(path: string, init: ApiFetchInit = {}): Promise<Lista<T>> {
   const { data, meta } = await apiRequest<T[]>(path, init);
@@ -132,7 +124,7 @@ export async function apiList<T>(path: string, init: ApiFetchInit = {}): Promise
   };
 }
 
-async function apiRequest<T>(path: string, init: ApiFetchInit): Promise<{ data: T; meta?: Meta }> {
+async function apiRequest<T, M = Meta>(path: string, init: ApiFetchInit): Promise<{ data: T; meta?: M }> {
   if (typeof window !== "undefined") {
     throw new Error("apiFetch é servidor-only: o token vive em cookie httpOnly e não existe no navegador.");
   }
@@ -179,10 +171,10 @@ async function apiRequest<T>(path: string, init: ApiFetchInit): Promise<{ data: 
   if (resposta.status === 204) return { data: undefined as T };
 
   const texto = await resposta.text();
-  let envelope: Envelope<T> = {};
+  let envelope: Envelope<T, M> = {};
   if (texto) {
     try {
-      envelope = JSON.parse(texto) as Envelope<T>;
+      envelope = JSON.parse(texto) as Envelope<T, M>;
     } catch {
       // Corpo que não é JSON só acontece quando algo no caminho respondeu no
       // lugar da API (proxy, gateway). Tratar como erro de infraestrutura.
@@ -201,22 +193,4 @@ async function apiRequest<T>(path: string, init: ApiFetchInit): Promise<{ data: 
   }
 
   return { data: envelope.data as T, meta: envelope.meta };
-}
-
-/** Código desconhecido não pode virar `undefined` no meio da tela: mapeia pelo
- *  status, que é o que sobra de estável quando o corpo foge do contrato. */
-function normalizarCodigo(code: string | undefined, status: number): CodigoDeErro {
-  const conhecidos: readonly string[] = [
-    "VALIDATION_ERROR", "UNAUTHORIZED", "FORBIDDEN", "NOT_FOUND", "DATE_CONFLICT",
-    "MIN_STAY_NOT_MET", "CAPACITY_EXCEEDED", "DISCOUNT_ABOVE_LIMIT", "HOLD_EXPIRED",
-    "IDEMPOTENCY_MISMATCH", "RATE_LIMITED", "INVALID_CREDENTIALS", "TOKEN_INVALID",
-    "TOKEN_REUSED", "EMAIL_IN_USE", "ROLE_IMMUTABLE", "ROLE_IN_USE", "INTERNAL",
-  ];
-  if (code && conhecidos.includes(code)) return code as CodigoDeErro;
-  if (status === 401) return "UNAUTHORIZED";
-  if (status === 403) return "FORBIDDEN";
-  if (status === 404) return "NOT_FOUND";
-  if (status === 422) return "VALIDATION_ERROR";
-  if (status === 429) return "RATE_LIMITED";
-  return "INTERNAL";
 }

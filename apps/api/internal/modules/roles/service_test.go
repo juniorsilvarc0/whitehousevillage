@@ -346,7 +346,9 @@ func TestMatrizNaoAmpliaOEscopoDoAtor(t *testing.T) {
 		{Resource: "chat", Action: auth.AcaoVer, Scope: auth.EscopoAll},
 	})
 
-	exigirForbidden(t, err)
+	// O `_ =` é explícito: `exigirForbidden` já falha o teste sozinha e o
+	// `*apperr.Error` que ela devolve não interessa a este caso.
+	_ = exigirForbidden(t, err)
 	if len(repo.gravadas) > 0 {
 		t.Fatal("o escopo ampliado foi gravado")
 	}

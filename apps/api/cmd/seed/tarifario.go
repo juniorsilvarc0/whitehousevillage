@@ -136,14 +136,21 @@ const (
 	descontoGestaoPct       = "5.00"  // até aqui a gestão fecha sozinha
 	descontoProprietarioPct = "10.00" // de 6 a 10% exige o proprietário; acima, ninguém
 	caucaoDeEventoReais     = 2000    // cobrada como recebível reembolsável
+
+	// Limite da extensão de pré-reserva (spec §5: "com limite configurável").
+	// A spec não fixa números — estes são ponto de partida operacional, e a
+	// gestão os ajusta pela tela de política sem migration.
+	extensaoDeHoldHoras = 24 // quanto cada `extend-hold` adiciona
+	extensoesDeHoldMax  = 1  // quantas vezes a pré-reserva pode ser esticada
 )
 
 func politicaComercial(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
 	const q = `
 		INSERT INTO commercial_policies (
 			property_id, version, deposit_pct, balance_due_days, hold_hours,
-			discount_auto_pct, discount_approval_pct, event_deposit_cents, valid_from)
-		VALUES ($1, 1, $2::numeric, $3, $4, $5::numeric, $6::numeric, $7, $8)
+			discount_auto_pct, discount_approval_pct, event_deposit_cents, valid_from,
+			hold_extension_hours, hold_max_extensions)
+		VALUES ($1, 1, $2::numeric, $3, $4, $5::numeric, $6::numeric, $7, $8, $9, $10)
 		ON CONFLICT (property_id, version) DO UPDATE
 		   SET deposit_pct           = EXCLUDED.deposit_pct,
 		       balance_due_days      = EXCLUDED.balance_due_days,
@@ -151,21 +158,26 @@ func politicaComercial(ctx context.Context, tx pgx.Tx, st *estado) (contagem, er
 		       discount_auto_pct     = EXCLUDED.discount_auto_pct,
 		       discount_approval_pct = EXCLUDED.discount_approval_pct,
 		       event_deposit_cents   = EXCLUDED.event_deposit_cents,
-		       valid_from            = EXCLUDED.valid_from
+		       valid_from            = EXCLUDED.valid_from,
+		       hold_extension_hours  = EXCLUDED.hold_extension_hours,
+		       hold_max_extensions   = EXCLUDED.hold_max_extensions
 		 WHERE (commercial_policies.deposit_pct, commercial_policies.balance_due_days,
 		        commercial_policies.hold_hours, commercial_policies.discount_auto_pct,
 		        commercial_policies.discount_approval_pct, commercial_policies.event_deposit_cents,
-		        commercial_policies.valid_from)
+		        commercial_policies.valid_from, commercial_policies.hold_extension_hours,
+		        commercial_policies.hold_max_extensions)
 		       IS DISTINCT FROM
 		       (EXCLUDED.deposit_pct, EXCLUDED.balance_due_days, EXCLUDED.hold_hours,
 		        EXCLUDED.discount_auto_pct, EXCLUDED.discount_approval_pct,
-		        EXCLUDED.event_deposit_cents, EXCLUDED.valid_from)
+		        EXCLUDED.event_deposit_cents, EXCLUDED.valid_from,
+		        EXCLUDED.hold_extension_hours, EXCLUDED.hold_max_extensions)
 		RETURNING (xmax = 0)`
 
 	c, err := upsert(ctx, tx, q, st.propriedadeID,
 		sinalPct, int32(saldoDiasAntes), int32(preReservaHoras),
 		descontoGestaoPct, descontoProprietarioPct,
-		reais(caucaoDeEventoReais), vigenciaV1)
+		reais(caucaoDeEventoReais), vigenciaV1,
+		int32(extensaoDeHoldHoras), int32(extensoesDeHoldMax))
 	c.Previstas = 1
 	return c, err
 }

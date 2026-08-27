@@ -50,17 +50,32 @@
 
 ## Fase 1 — Núcleo ponta a ponta
 
-- [ ] **1a Dívida da Fase 0 — extrair `reservation_pricing` (1:1 com `reservations`)**. `reservations` nasceu com **32 colunas**, acima do teto de ~25 da regra 9 do CLAUDE.md. O bloco financeiro é satélite natural, porque é *snapshot imutável* e não estado: `subtotal_cents`, `discount_pct`, `discount_cents`, `cleaning_cents`, `event_deposit_cents`, `total_cents`, `deposit_cents`, `rate_table_id`, `policy_version`, `cancellation_policy_id`. Em `reservations` ficam **identidade, estado e datas**.
-  **Antes** de 1e (reservas), e antes de a tabela ganhar as colunas de canal (`channel_id`) e de remarcação previstas: cada coluna nova torna a extração mais cara, e hoje nenhum código depende da tabela — é a janela mais barata que vai existir.
-- [ ] 1b Inventário: 8 unidades, 4 produtos, composição da Completa
-- [ ] 1c Tarifário e políticas versionadas (Tabela V1)
-- [ ] 1d Motor puro de disponibilidade e orçamento + suíte de testes
-- [ ] 1e Reservas: `stay_blocks` com `EXCLUDE`, alocação, hold com expiração real, confirmação, cancelamento por política
-- [ ] 1f Mapa de ocupação em tempo real (SSE)
-- [ ] 1g CRM: funil, oportunidade, atividades, SLA, alertas, ganho → reserva
-- [ ] 1h Chat WhatsApp (uazapi) com takeover
+- [x] 1a Inventário: produtos, unidades e a composição da Completa
+- [x] 1b Tarifário e políticas versionadas (Tabela V1), com `PUT` criando versão em vez de editar
+- [x] 1c Motor de disponibilidade e orçamento ligado ao banco
+- [x] 1d Reservas: ciclo de vida completo, alocação de unidade, expiração real da pré-reserva
+- [x] Telas de configuração (inventário, tarifário, calendário, política) e o `QuoteBuilder` com semáforo de alçada
+- [x] Auditoria (`audit_log`) recebendo as escritas da fase, com IP e user-agent
+- [ ] 1e Mapa de ocupação em tempo real (SSE) — **não entrou**
+- [ ] 1f CRM (funil, oportunidade, atividades, SLA) — **não entrou**
+- [ ] 1g Chat WhatsApp via uazapi — **não entrou**
 
-**Pronto quando**: a jornada roda ao vivo — mensagem no WhatsApp → lead → oportunidade → orçamento com desconto pedindo aprovação → pré-reserva travando as 8 unidades → sinal → reserva confirmada na agenda.
+### Três revisões adversariais, e o que elas ensinaram
+
+**Rodada 1** — 11 achados, 1 crítico: a exclusividade da White House Completa **não era invariante do banco**, era consequência de uma consulta devolver 8 linhas. Desativar uma unidade permitia vender a casa inteira entregando 7, pelo preço de 8.
+
+**Rodada 2** — 7 dos 11 fechados; o crítico voltou **por outra porta** (`PUT /unit-types/{id}/members` com venda viva).
+
+**Rodada 3** — o agente de inventário mapeou e fechou **cinco** portas, não uma: acrescentar unidade, remover unidade, trocar `consumes` por `PATCH`, trocar por `PUT`, e produto novo compartilhando unidades (esta já estava fechada pela constraint). A pior era o `consumes` `all_members → one_member`: quem pagou R$ 20.200 pela casa inteira recebia **um** apartamento, e os outros sete eram vendidos a terceiros.
+
+**A lição de processo**, registrada em `docs/agents.md` §4.1: posse por pasta evita colisão e **cria tarefa órfã**. `SchemaVersionEsperada` ficou atrás da migration duas vezes, sinalizada por quatro agentes; `audit.Middleware` foi pedido por três e nunca ligado; o teto do bloqueio foi recusado por "não é minha pasta" e ficou sem dono. Daí o papel de **`integrador`**.
+
+### Estado da verificação — leia antes de confiar
+
+- Portão completo **verde**: `gofmt`, `build`, `vet`, 15 pacotes unitários, 15 de integração serializada, `lint` (que **nunca havia rodado** — o script chamava `next lint`, removido no Next 16, e o eslint nem estava instalado), `tsc`, 104 testes do painel e build.
+- Seed idempotente conferido (278 previstas, 0 criadas na segunda execução).
+- **A rodada 3 não teve revisão adversarial independente**: os dois agentes de verificação bateram no limite de sessão. A verificação foi feita pelo tech-lead.
+- **Brecha declarada e não fechada**: a guarda de composição roda dentro da transação e serializa contra outra alteração de composição, **não contra uma venda concorrente**. Em `READ COMMITTED`, entre o `SELECT` e o commit cabe um `POST /reservations`. Sonda de concorrência escrita (`composicao_concorrente_integration_test.go`) **não reproduziu o buraco em 60 disputas** — o que não prova ausência. A garantia definitiva é uma invariante no banco (constraint adiável ou trigger exigindo `|reservation_units| = |composição|` para produto `all_members`), e é a **primeira tarefa da Fase 2**.
 
 ## Fase 2 — Dinheiro e rotina
 Financeiro (recebíveis, pagáveis, pagamentos, conciliação, caução), comissões, agenda operacional, hóspedes e LGPD.

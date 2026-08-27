@@ -61,6 +61,18 @@ Quatro mecanismos, em ordem de importância:
 3. **Worktree para tarefa longa e paralela** — `git worktree add ../wt-<agente>-<tarefa> -b feat/<agente>/<tarefa>`. O merge é serializado pelo `tech-lead` na ordem `db → backend/integrações → frontend → qa`. Tarefa curta e isolada roda direto na branch, sem worktree (worktree tem custo).
 4. **Arquivos-ímã de conflito têm dono único**: `internal/router/routes.go`, `apps/admin/src/config/navigation.ts` e `openapi.yaml` pertencem ao `tech-lead`. Os agentes **propõem a linha no relatório**; o tech-lead aplica. Isso mata os conflitos que sobram.
 
+## 4.1 O papel que faltava: `integrador`
+
+Duas rodadas seguidas produziram **tarefa órfã** — trabalho que todo mundo enxergou, ninguém fez, e passou porque não era pasta de ninguém:
+
+- `SchemaVersionEsperada` (`internal/router/saude.go`) ficou atrás da migration **duas vezes**, sinalizada por quatro agentes num relatório cada;
+- `audit.Middleware` foi pedido pelo dono do pacote de auditoria, pelo inventário e pelo tarifário — e nunca foi ligado no `router.go`, então 43 linhas de trilha nasceram sem IP nem user-agent;
+- o teto de tamanho do bloqueio operacional foi mandado para `internal/domain`, recusado por não ser pasta de quem recebeu, e ficou sem dono nos dois relatórios.
+
+**Toda rodada tem um `integrador`**, dono dos arquivos que não pertencem a módulo nenhum: `internal/router/{router,routes,saude}.go`, o que sobrar de `internal/platform`, `openapi.yaml` quando o ajuste é consequência de implementação, `Makefile` e configuração de ferramenta. Ele entra **por último** na fase de correção e a fecha varrendo os relatórios dos outros atrás de "precisa que alguém", "fora da minha pasta" e "sinalizo para quem for".
+
+Sem esse papel, posse por pasta vira desculpa: cada agente entrega o seu, e o buraco entre eles fica de pé até a revisão adversarial cobrar.
+
 ## 5. Regras comuns a todos
 
 - Rodar `make check` (lint + typecheck + testes do próprio escopo) **antes** de reportar.

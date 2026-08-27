@@ -5,7 +5,11 @@ import (
 	"net/http"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
 )
 
@@ -53,10 +57,37 @@ type Deps struct {
 	Auth  *auth.Handler
 	Users *users.Handler
 	Roles *roles.Handler
+
+	// Fase 1. Cada um é preenchido pelo main quando o módulo existir; a tabela
+	// de rotas de cada módulo mora no PRÓPRIO arquivo rotas_<modulo>.go.
+	Inventario      *inventario.Handler
+	Tarifario       *tarifario.Handler
+	Disponibilidade *disponibilidade.Handler
+	Reservas        *reservas.Handler
 }
 
-// Rotas devolve a tabela completa da API v1.
+// Rotas devolve a tabela completa da API v1, concatenando os grupos.
+//
+// Um grupo por módulo, cada um no seu arquivo: é o que permite dois módulos
+// serem escritos ao mesmo tempo sem disputar este arquivo. Acrescentar módulo é
+// criar rotas_<modulo>.go e somar uma linha nesta lista.
 func Rotas(d Deps) []Rota {
+	var todas []Rota
+	for _, grupo := range []func(Deps) []Rota{
+		rotasNucleo,
+		rotasInventario,
+		rotasTarifario,
+		rotasDisponibilidade,
+		rotasReservas,
+	} {
+		todas = append(todas, grupo(d)...)
+	}
+	return todas
+}
+
+// rotasNucleo são as rotas que já existiam antes da Fase 1: sonda, sessão,
+// usuários e perfis.
+func rotasNucleo(d Deps) []Rota {
 	return []Rota{
 		// ───────── Saúde ─────────
 		{Metodo: http.MethodGet, Path: "/healthz", Acesso: AcessoPublico, Handler: d.Saude.Vivo},

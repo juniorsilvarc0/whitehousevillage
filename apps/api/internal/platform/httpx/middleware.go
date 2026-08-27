@@ -34,6 +34,105 @@ func RequestID(next http.Handler) http.Handler {
 	})
 }
 
+// ─────────────────────────── IP do cliente ──────────────────────────────────
+
+// Cabeçalhos de encaminhamento que este middleware entende, em ordem de
+// preferência. `Forwarded` (RFC 7239) não entra: o Traefik desta instalação não
+// o emite, e implementar meio parser é pior que não implementar.
+const (
+	HeaderXForwardedFor = "X-Forwarded-For"
+	HeaderXRealIP       = "X-Real-Ip"
+)
+
+// RealIP resolve o IP do cliente e o guarda no contexto.
+//
+// SUBSTITUI `chi/middleware.RealIP`, que está DEPRECADO por spoofing
+// (GHSA-3fxj-6jh8-hvhx, GHSA-rjr7-jggh-pgcp, GHSA-9g5q-2w5x-hmxf): ele confia no
+// valor MAIS À ESQUERDA de `X-Forwarded-For` — e o mais à esquerda é justamente
+// o único que o cliente escreve — e ainda aceita `True-Client-IP`/`X-Real-IP`
+// sem perguntar se alguma infraestrutura os define.
+//
+// Isso não era teoria nesta árvore. O IP alimenta duas coisas que doem: a chave
+// do limitador de tentativas do `/auth/login` (IP forjável = força bruta com
+// contador zerado a cada requisição) e, desde que `audit.Middleware` foi
+// montado, a coluna `audit_log.ip` — a trilha da spec §16 passaria a registrar o
+// endereço que o próprio autor da escrita escolheu digitar.
+//
+// A regra aqui tem duas metades, e é a segunda que fecha o buraco:
+//
+//  1. Se o peer direto NÃO é infraestrutura nossa (endereço público falando
+//     direto com a API), nenhum cabeçalho é lido. Cliente da internet não tem
+//     autoridade para declarar o próprio IP.
+//  2. Se o peer é loopback ou rede privada (o Traefik no compose, o
+//     `httptest` da suíte), lê-se `X-Forwarded-For` da DIREITA para a esquerda e
+//     vale a primeira entrada pública. O proxy APENDA o que ele mesmo viu, então
+//     a entrada mais à direita é a única que um salto confiável escreveu; tudo o
+//     que estiver à esquerda dela pode ter vindo do cliente.
+//
+// Não exige configuração nova (nem lista de proxies confiáveis em `config`),
+// de propósito: a alternativa exigiria mexer em pasta de outro agente, e o
+// critério "o peer é privado" já descreve exatamente a topologia do compose e
+// da VPS, onde só o Traefik fala com a API.
+func RealIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(comIPDoCliente(r.Context(), resolverIPDoCliente(r))))
+	})
+}
+
+func resolverIPDoCliente(r *http.Request) string {
+	peer := ipDoRemoteAddr(r.RemoteAddr)
+
+	// Metade 1: peer público fala por si, e só por si.
+	if !ehInfraestruturaInterna(peer) {
+		return peer
+	}
+
+	// Metade 2: da direita para a esquerda.
+	if bruto := r.Header.Get(HeaderXForwardedFor); bruto != "" {
+		partes := strings.Split(bruto, ",")
+		for i := len(partes) - 1; i >= 0; i-- {
+			candidato := strings.TrimSpace(partes[i])
+			// A porta é opcional no XFF e aparece em IPv6 entre colchetes.
+			if host, _, err := net.SplitHostPort(candidato); err == nil {
+				candidato = host
+			}
+			candidato = strings.Trim(candidato, "[]")
+			if ip := net.ParseIP(candidato); ip != nil && !ehInfraestruturaInterna(candidato) {
+				return candidato
+			}
+		}
+		// Cadeia inteira privada: rede interna falando com rede interna. A
+		// entrada mais à esquerda é a origem verdadeira aqui.
+		if primeiro := strings.TrimSpace(partes[0]); net.ParseIP(primeiro) != nil {
+			return primeiro
+		}
+	}
+
+	if real := strings.TrimSpace(r.Header.Get(HeaderXRealIP)); net.ParseIP(real) != nil {
+		return real
+	}
+	return peer
+}
+
+// ehInfraestruturaInterna responde se o endereço é de dentro: loopback, rede
+// privada (RFC 1918 e fc00::/7), link-local ou não-endereço. Endereço ilegível
+// conta como interno para o resolvedor não promover lixo a IP de cliente.
+func ehInfraestruturaInterna(endereco string) bool {
+	ip := net.ParseIP(endereco)
+	if ip == nil {
+		return true
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+func ipDoRemoteAddr(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
+}
+
 // Recoverer transforma panic em 500 com o mesmo envelope de erro de sempre.
 // A stack vai para o log; a resposta não diz mais que "erro interno" — stack
 // trace na resposta é mapa da aplicação entregue de graça.
@@ -69,6 +168,9 @@ func RequestLogger(next http.Handler) http.Handler {
 		inicio := time.Now()
 		gravador := &respostaObservada{ResponseWriter: w, status: http.StatusOK}
 
+		// O portador tem de entrar ANTES de servir: o autenticador roda abaixo
+		// e escreve nele. Sem isso `user_id` sai vazio em toda linha.
+		r = r.WithContext(comPortadorDoAtor(r.Context()))
 		next.ServeHTTP(gravador, r)
 
 		// Usar o padrão da rota ("/users/{id}") em vez do path evita explodir a
@@ -240,14 +342,18 @@ func (l *Limitador) Middleware(next http.Handler) http.Handler {
 
 // ─────────────────────────── Auxiliares ─────────────────────────────────────
 
-// IPDoCliente devolve o IP sem a porta. Confia no que o middleware RealIP do
-// chi já normalizou a partir do proxy — em produção só o proxy fala com a API.
+// IPDoCliente devolve o IP do cliente, sem porta.
+//
+// Prefere o que `RealIP` resolveu e guardou no contexto; cai no peer direto
+// quando o middleware não está na cadeia (chamada fora do servidor, teste de
+// unidade de outro middleware). Nunca lê cabeçalho por conta própria: a decisão
+// de confiar ou não num salto é de `RealIP`, e duplicá-la aqui é como as duas
+// respostas passam a divergir.
 func IPDoCliente(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
+	if ip := IPDoContexto(r.Context()); ip != "" {
+		return ip
 	}
-	return host
+	return ipDoRemoteAddr(r.RemoteAddr)
 }
 
 // RequestIDDe é o atalho para o log dentro de middleware.

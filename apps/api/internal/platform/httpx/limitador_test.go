@@ -43,8 +43,15 @@ func TestLimitadorJanelaExpira(t *testing.T) {
 	l := NovoLimitador(2, 20*time.Millisecond)
 	const chave = "ip:203.0.113.7"
 
-	if !l.Permitir(chave) || !l.Permitir(chave) {
-		t.Fatal("as duas primeiras deveriam passar")
+	// Uma chamada por linha, e não `a() || b()`: com o `||` o curto-circuito
+	// esconde QUAL das duas recusou, e a expressão repetida é indistinguível de
+	// um copiar-colar (é o que o `staticcheck` acusava, com razão). Aqui cada
+	// chamada consome um dos dois tokens da janela, e a mensagem diz qual falhou.
+	if !l.Permitir(chave) {
+		t.Fatal("a primeira dentro da janela deveria passar")
+	}
+	if !l.Permitir(chave) {
+		t.Fatal("a segunda dentro da janela deveria passar")
 	}
 	if l.Permitir(chave) {
 		t.Fatal("a terceira deveria ser recusada dentro da janela")

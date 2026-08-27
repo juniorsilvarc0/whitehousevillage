@@ -1,7 +1,10 @@
 package httpx
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -107,4 +110,81 @@ func TestLimitadorMarcaEEsquece(t *testing.T) {
 	if l.Marcado("ok:ana@wh.com|203.0.113.7") {
 		t.Fatal("passada a janela, a marca deveria ter caducado")
 	}
+}
+
+// ─────────── O log tem de dizer QUEM, e não "" para todo mundo ───────────
+//
+// Antes desta correção, TODA linha de log da API real saía com `user_id=""`,
+// mesmo com token válido — porque `context.WithValue` só desce e o
+// `auth.Middleware` roda ABAIXO do RequestLogger, servindo o próximo com um
+// contexto NOVO que o logger (segurando o request antigo) nunca vê. Medido na
+// API no ar, com token de admin:
+//
+//	PATCH /api/v1/units/{id} status=200 user_id="" ip=::1
+//
+// A asserção é feita sobre a LINHA DE LOG de verdade, e não sobre um espião:
+// espião posto no lugar errado da cadeia passa verde com o defeito presente —
+// foi o que aconteceu na primeira versão deste teste.
+func TestRequestLoggerRegistraOAtorDefinidoAbaixoDele(t *testing.T) {
+	linhas := capturarLog(t)
+
+	// Espelha a cadeia do router: RequestLogger por FORA, autenticação por
+	// DENTRO — que é exatamente a ordem que produzia o `user_id` vazio.
+	h := RequestLogger(autenticadorDeTeste("u-123", http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPatch, "/x", nil))
+
+	if got := campoDoLog(t, linhas.String(), "user_id"); got != "u-123" {
+		t.Fatalf("a linha de log saiu com user_id=%q, esperado \"u-123\" — o log não diz "+
+			"quem fez a escrita, e investigar incidente vira adivinhação.\nlinha: %s", got, linhas.String())
+	}
+}
+
+// Controle: requisição anônima continua saindo com user_id vazio. O portador não
+// pode inventar identidade para quem não autenticou.
+func TestRequestLoggerNaoInventaAtorParaAnonimo(t *testing.T) {
+	linhas := capturarLog(t)
+
+	h := RequestLogger(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+
+	if got := campoDoLog(t, linhas.String(), "user_id"); got != "" {
+		t.Fatalf("requisição anônima virou ator %q", got)
+	}
+}
+
+// autenticadorDeTeste faz o que o auth.Middleware faz e é a razão do defeito:
+// serve o próximo com um contexto NOVO, que só desce.
+func autenticadorDeTeste(id string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(ComAtor(r.Context(), id)))
+	})
+}
+
+func capturarLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+
+	var buf bytes.Buffer
+	anterior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(anterior) })
+	return &buf
+}
+
+func campoDoLog(t *testing.T, linha, campo string) string {
+	t.Helper()
+
+	if strings.TrimSpace(linha) == "" {
+		t.Fatal("o RequestLogger não registrou nenhuma linha")
+	}
+	var registro map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(linha)), &registro); err != nil {
+		t.Fatalf("linha de log não é JSON: %q", linha)
+	}
+	v, ok := registro[campo]
+	if !ok {
+		t.Fatalf("a linha de log não tem o campo %q: %s", campo, linha)
+	}
+	s, _ := v.(string)
+	return s
 }

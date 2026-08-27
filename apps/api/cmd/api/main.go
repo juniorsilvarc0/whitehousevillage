@@ -54,6 +54,12 @@ func executar() error {
 			"versao", versao, "esperada", router.SchemaVersionEsperada, "dirty", sujo)
 	}
 
+	// Os handlers dos quatro módulos da Fase 1 (inventário, tarifário,
+	// disponibilidade e reservas) são montados dentro de router.New, junto com
+	// os do núcleo: `Deps` e a tabela de rotas são internos ao pacote router, e
+	// o único ponto de composição exportado é este construtor. Montar aqui
+	// exigiria exportar a montagem do chi — mais superfície pública para nenhum
+	// ganho, e um segundo lugar onde esquecer um módulo.
 	handler, err := router.New(router.Opcoes{Config: cfg, Pool: pool})
 	if err != nil {
 		return err

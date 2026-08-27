@@ -1,0 +1,475 @@
+package disponibilidade
+
+import (
+	"context"
+	"errors"
+
+	"github.com/google/uuid"
+
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/booking"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/money"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
+)
+
+// Recurso e ação do RBAC deste módulo. Os códigos vêm do catálogo semeado em
+// cmd/seed/acesso.go; o service os cita para consultar o ESCOPO concedido, que o
+// middleware não repassa (ele só responde sim/não).
+const (
+	recursoCalendario = "calendar"
+)
+
+// repositorio é o repositório visto pelo service. Interface, e não o tipo
+// concreto, para a montagem da resposta — inclusive a tarja do escopo `own` —
+// ser testável sem Postgres.
+type repositorio interface {
+	Contexto(ctx context.Context, propriedade uuid.UUID, tabela *uuid.UUID, versao *int) (Contexto, error)
+	Calendario(ctx context.Context, propriedade uuid.UUID, j Janela) (calendar.Commercial, error)
+	Tarifas(ctx context.Context, tabela uuid.UUID, produto *uuid.UUID) (map[uuid.UUID]map[calendar.DateType]money.Cents, error)
+	EstadiaMinima(ctx context.Context, tabela uuid.UUID) (map[calendar.DateType]int, error)
+	Produtos(ctx context.Context, propriedade uuid.UUID, produto *uuid.UUID) ([]Produto, error)
+	Composicao(ctx context.Context, propriedade, produto uuid.UUID) (ComposicaoDoProduto, error)
+	Ocupacao(ctx context.Context, propriedade uuid.UUID, j Janela, produto *uuid.UUID) (map[ChaveDia]Contagem, error)
+	Mapa(ctx context.Context, propriedade uuid.UUID, j Janela, unidade *uuid.UUID) ([]CelulaBruta, error)
+}
+
+// Servico liga o banco ao motor comercial.
+type Servico struct {
+	repo repositorio
+
+	// tx entra pelo contrato de construtor combinado entre os módulos. As três
+	// rotas deste módulo são de LEITURA — POST /quotes calcula e não grava —
+	// então nenhuma abre transação. Fica guardado para o dia em que o orçamento
+	// passar a persistir (ver relatório: a tabela `quotes` não existe).
+	tx *db.TxManager
+}
+
+func NovoServico(repo repositorio, tx *db.TxManager) *Servico {
+	return &Servico{repo: repo, tx: tx}
+}
+
+// propriedade devolve a casa do requisitante. Toda consulta deste módulo é
+// escopada por ela — sem isso, uma segunda propriedade no futuro veria o
+// calendário da primeira.
+func propriedade(ctx context.Context) (uuid.UUID, error) {
+	u, ok := auth.UserFrom(ctx)
+	if !ok {
+		return uuid.Nil, apperr.Unauthorized
+	}
+	return u.PropertyID, nil
+}
+
+// ─────────────────────────── GET /availability ──────────────────────────────
+
+// PorProduto responde "dá para vender?": por produto, quantas unidades estão
+// livres em cada dia da janela, com a tarifa e o mínimo de noites daquela noite.
+func (s *Servico) PorProduto(ctx context.Context, j Janela, produto *uuid.UUID) ([]DisponibilidadeDoProduto, error) {
+	casa, err := propriedade(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	produtos, err := s.repo.Produtos(ctx, casa, produto)
+	if err != nil {
+		return nil, err
+	}
+	// Filtro que não casa com nada é 404, não lista vazia: a tela pediu UM
+	// produto e precisa saber que ele não existe (ou foi desativado).
+	if produto != nil && len(produtos) == 0 {
+		return nil, apperr.NotFound("Produto")
+	}
+
+	comercial, err := s.repo.Contexto(ctx, casa, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	tarifas, err := s.repo.Tarifas(ctx, comercial.RateTableID, produto)
+	if err != nil {
+		return nil, err
+	}
+	minimos, err := s.repo.EstadiaMinima(ctx, comercial.RateTableID)
+	if err != nil {
+		return nil, err
+	}
+	cal, err := s.repo.Calendario(ctx, casa, j)
+	if err != nil {
+		return nil, err
+	}
+	ocupacao, err := s.repo.Ocupacao(ctx, casa, j, produto)
+	if err != nil {
+		return nil, err
+	}
+
+	// Classifica cada dia UMA vez, e não uma vez por produto: com 4 produtos e
+	// 366 dias, a diferença é 1.464 classificações contra 366.
+	noites := j.Noites()
+	tipos := make([]calendar.Classification, len(noites))
+	for i, d := range noites {
+		tipos[i] = cal.Classify(d)
+	}
+
+	out := make([]DisponibilidadeDoProduto, 0, len(produtos))
+	for _, p := range produtos {
+		linha := DisponibilidadeDoProduto{
+			UnitTypeID:   p.ID,
+			UnitTypeCode: p.Codigo,
+			Nome:         p.Nome,
+			Consome:      p.Consome,
+			Dias:         make([]DiaDoProduto, 0, len(noites)),
+		}
+		for i, d := range noites {
+			iso := d.String()
+			c := ocupacao[ChaveDia{Produto: p.ID, Dia: iso}]
+			// total_units e active_units são os mesmos em todos os dias da
+			// janela (a composição não muda dia a dia); a primeira célula já
+			// os define.
+			if c.Declaradas > linha.TotalUnidades {
+				linha.TotalUnidades = c.Declaradas
+			}
+			if c.Ativas > linha.UnidadesAtivas {
+				linha.UnidadesAtivas = c.Ativas
+			}
+
+			dia := DiaDoProduto{
+				Data:       iso,
+				TipoDeData: tipos[i].Type,
+				MinNoites:  minimos[tipos[i].Type],
+			}
+			// A tarifa é lida ANTES de decidir a disponibilidade porque ela
+			// faz parte da decisão: dia sem tarifa é dia que o orçamento
+			// recusa com RATE_NOT_FOUND, e prometer o que a venda recusa é o
+			// defeito que esta rota tinha.
+			valor, temTarifa := tarifas[p.ID][tipos[i].Type]
+			if temTarifa {
+				centavos := int64(valor)
+				dia.Preco = &centavos
+			}
+			dia.Disponivel, dia.Motivo = vendaveis(p.Consome, c, temTarifa)
+			linha.Dias = append(linha.Dias, dia)
+		}
+		out = append(out, linha)
+	}
+	return out, nil
+}
+
+// vendaveis traduz o estado da composição num dia em "quantas dá para VENDER" —
+// e, quando nenhuma, em por quê.
+//
+// VENDÁVEL, não livre. A rota antiga contava unidade sem bloqueio e parava aí,
+// e por isso prometia data que a venda recusava. Foi medido dos dois jeitos:
+// apto-2s com a tarifa de fds apagada devolvia `available: 3` com
+// `price_cents: null` enquanto POST /quotes na mesma data respondia 422
+// RATE_NOT_FOUND; e a Completa com AP-03 inativa devolvia `available: 1`
+// enquanto POST /reservations respondia 422 COMPOSITION_INCOMPLETE. Um número
+// que a venda não honra não é disponibilidade, é uma promessa que morre na
+// frente do operador.
+//
+// Para `all_members` — a White House Completa — o resultado é 0 ou 1, nunca um
+// número intermediário: ela consome as oito unidades, então UMA unidade ocupada
+// fecha o produto inteiro. A regra sai da COMPOSIÇÃO (`consumes` +
+// `unit_type_members`), nunca do nome nem do código do produto: acrescentar uma
+// nona unidade à casa não pode exigir edição de código.
+//
+// A ordem dos testes é a precedência do contrato, e ela ordena por QUEM PRECISA
+// AGIR: composição quebrada e tarifa faltando são configuração pela metade (a
+// gestão age hoje); ocupado é o negócio funcionando (não há o que consertar).
+func vendaveis(consome string, c Contagem, temTarifa bool) (int, *string) {
+	switch {
+	case consome == ConsomeTodas && c.Ativas < c.Declaradas:
+		// 7 de 8 não é a casa inteira. Zera TODOS os dias, inclusive os que
+		// nenhum hóspede tocou — não é a data que está indisponível, é o
+		// produto que não pode ser entregue.
+		return 0, motivo(MotivoComposicaoIncompleta)
+	case !temTarifa:
+		return 0, motivo(MotivoSemTarifa)
+	case c.Ativas == 0:
+		// Composição sem nenhuma unidade de pé (ou sem membro nenhum): não há
+		// o que entregar, e a venda recusa pelo mesmo motivo.
+		return 0, motivo(MotivoUnidadeInativa)
+	}
+
+	livres := c.Ativas - c.Ocupadas
+	if consome == ConsomeTodas {
+		livres = 0
+		if c.Ocupadas == 0 {
+			livres = 1
+		}
+	}
+	if livres <= 0 {
+		return 0, motivo(MotivoOcupado)
+	}
+	return livres, nil
+}
+
+// motivo devolve o ponteiro que o contrato pede — `unavailable_reason` é
+// `string | null`, e `null` é o caso em que há o que vender.
+func motivo(m string) *string { return &m }
+
+// ─────────────────────────── GET /availability/units ────────────────────────
+
+// PorUnidade responde "quem está onde?": a matriz unidade × dia.
+func (s *Servico) PorUnidade(ctx context.Context, j Janela, unidade *uuid.UUID) ([]LinhaDoMapa, error) {
+	casa, err := propriedade(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	cal, err := s.repo.Calendario(ctx, casa, j)
+	if err != nil {
+		return nil, err
+	}
+	celulas, err := s.repo.Mapa(ctx, casa, j, unidade)
+	if err != nil {
+		return nil, err
+	}
+	if unidade != nil && len(celulas) == 0 {
+		return nil, apperr.NotFound("Unidade")
+	}
+
+	tipos := map[string]calendar.DateType{}
+	for _, d := range j.Noites() {
+		tipos[d.String()] = cal.Classify(d).Type
+	}
+
+	// Escopo `own` NÃO filtra linhas aqui, e isso é decisão consciente.
+	//
+	// `AND owner_id = $usuario` num mapa de OCUPAÇÃO faria as datas dos outros
+	// aparecerem como livres — o corretor prometeria a casa a um hóspede e a
+	// gravação estouraria 409 depois. Um calendário que mente é pior que um
+	// calendário sem nomes. Então a ocupação continua visível inteira e o que
+	// some é a IDENTIFICAÇÃO da reserva alheia: id, código e hóspede.
+	somenteProprias := auth.SomenteProprios(ctx, recursoCalendario, auth.AcaoVer)
+	eu, _ := auth.UsuarioID(ctx)
+
+	// O agrupamento anda por ÍNDICE, não por ponteiro para o elemento: `append`
+	// realoca o slice, e um ponteiro guardado antes disso passaria a escrever no
+	// array antigo — as diárias das primeiras unidades sumiriam da resposta.
+	porNoite := len(j.Noites())
+	out := make([]LinhaDoMapa, 0, 8)
+	atual := -1
+	for _, c := range celulas {
+		if atual < 0 || out[atual].UnitID != c.UnitID {
+			out = append(out, LinhaDoMapa{
+				UnitID:   c.UnitID,
+				UnitCode: c.UnitCode,
+				UnitName: c.UnitName,
+				Dias:     make([]DiaDaUnidade, 0, porNoite),
+			})
+			atual = len(out) - 1
+		}
+
+		dia := DiaDaUnidade{
+			Data:       c.Dia,
+			Status:     statusDaCelula(c),
+			TipoDeData: tipos[c.Dia],
+		}
+		if c.StayBlockID != nil {
+			dia.StayBlockID = c.StayBlockID
+			if !somenteProprias || (c.DonoID != nil && *c.DonoID == eu) {
+				dia.ReservaID = c.ReservaID
+				dia.ReservaCodigo = c.ReservaCodigo
+				dia.Hospede = c.Hospede
+			}
+		}
+		out[atual].Dias = append(out[atual].Dias, dia)
+	}
+	return out, nil
+}
+
+// statusDaCelula deriva o status que a tela pinta.
+//
+// Bloco de reserva mostra o STATUS (`hold`/`confirmed`), porque a diferença
+// entre "segurado" e "pago" é o que a gestão precisa ver para cobrar o sinal.
+// Bloco operacional mostra a ORIGEM (`maintenance`/`owner_hold`/`ota`), porque
+// ali não há sinal a cobrar — há um motivo de a unidade estar fora de venda.
+func statusDaCelula(c CelulaBruta) string {
+	if c.StayBlockID == nil || c.BlocoSource == nil {
+		return StatusLivre
+	}
+	switch *c.BlocoSource {
+	case "maintenance":
+		return StatusManutencao
+	case "owner_hold":
+		return StatusProprietario
+	case "ota":
+		return StatusOTA
+	}
+	if c.BlocoStatus == nil {
+		return StatusConfirmado
+	}
+	switch *c.BlocoStatus {
+	case "hold":
+		return StatusHold
+	case blocoConcluido:
+		// A estadia foi cumprida. A célula continua nomeando reserva e
+		// hóspede: sem ela a ocupação realizada evapora do mapa e o ADR passa
+		// a dividir receita por noites que o relatório diz que ninguém dormiu.
+		return StatusConcluido
+	}
+	return StatusConfirmado
+}
+
+// ─────────────────────────── POST /quotes ───────────────────────────────────
+
+// Orcar calcula o orçamento. NÃO grava e NÃO segura a data: só a pré-reserva
+// (POST /reservations) insere em stay_blocks. Por isso um orçamento pode virar
+// 409 DATE_CONFLICT na hora de virar reserva, e isso é correto.
+func (s *Servico) Orcar(ctx context.Context, e Entrada) (Orcamento, error) {
+	casa, err := propriedade(ctx)
+	if err != nil {
+		return Orcamento{}, err
+	}
+
+	produtos, err := s.repo.Produtos(ctx, casa, &e.UnitTypeID)
+	if err != nil {
+		return Orcamento{}, err
+	}
+	if len(produtos) == 0 {
+		return Orcamento{}, apperr.NotFound("Produto")
+	}
+	p := produtos[0]
+
+	// A composição é conferida ANTES de qualquer conta. Sem isso o orçamento
+	// da Completa com AP-03 inativa saía 200, com o preço das oito unidades,
+	// e só POST /reservations recusava — o operador cotava, prometia a data ao
+	// hóspede e a venda morria na frente dele. Orçar o que não se pode vender é
+	// prometer, e o contrato declara COMPOSITION_INCOMPLETE nesta rota
+	// exatamente por isso.
+	composicao, err := s.repo.Composicao(ctx, casa, p.ID)
+	if err != nil {
+		return Orcamento{}, err
+	}
+	if err := conferirComposicao(p, composicao); err != nil {
+		return Orcamento{}, err
+	}
+
+	comercial, err := s.repo.Contexto(ctx, casa, e.RateTableID, e.PolicyVersion)
+	if err != nil {
+		return Orcamento{}, err
+	}
+	tarifas, err := s.repo.Tarifas(ctx, comercial.RateTableID, &e.UnitTypeID)
+	if err != nil {
+		return Orcamento{}, err
+	}
+	minimos, err := s.repo.EstadiaMinima(ctx, comercial.RateTableID)
+	if err != nil {
+		return Orcamento{}, err
+	}
+
+	// A janela do calendário é a própria estadia. Quando check_out não é
+	// posterior a check_in, quem recusa é o motor (VALIDATION_ERROR); montar a
+	// janela aqui devolveria o mesmo código por outro caminho, e dois lugares
+	// dizendo o mesmo "não" divergem no dia em que só um for editado.
+	cal := calendar.Commercial{}
+	if e.CheckIn.Before(e.CheckOut) {
+		if cal, err = s.repo.Calendario(ctx, casa, Janela{De: e.CheckIn, Ate: e.CheckOut}); err != nil {
+			return Orcamento{}, err
+		}
+	}
+
+	politica := comercial.Politica
+	politica.MinNights = minimos
+
+	quote, err := booking.Build(booking.Request{
+		Product: booking.Product{
+			ID:          p.ID.String(),
+			Name:        p.Nome,
+			Capacity:    p.Capacidade,
+			Rates:       tarifas[p.ID],
+			CleaningFee: p.LimpezaCent,
+		},
+		CheckIn:     e.CheckIn,
+		CheckOut:    e.CheckOut,
+		Guests:      e.Hospedes,
+		DiscountPct: e.DescontoPct,
+		IsEvent:     e.IsEvento,
+	}, cal, politica)
+	if err != nil {
+		return Orcamento{}, traduzirRegra(err)
+	}
+
+	return novoOrcamento(quote, comercial.RateTableID), nil
+}
+
+// conferirComposicao recusa o orçamento do produto que não pode ser entregue.
+//
+// O critério é o MESMO que POST /reservations aplica, e tem de continuar sendo:
+// duas respostas diferentes para a mesma pergunta é o defeito de origem — a
+// consulta dizia sim e a venda dizia não.
+//
+//   - `all_members`: só é entregável com a composição INTEIRA de pé. A Completa
+//     vende a casa; sete oitavos pelo preço da casa é o hóspede encontrando um
+//     estranho num dos quartos.
+//   - `one_member`: basta UMA unidade ativa. Duas de três continua vendável —
+//     o que a venda recusa é a composição sem nenhuma.
+func conferirComposicao(p Produto, c ComposicaoDoProduto) error {
+	entregavel := c.Ativas > 0
+	if p.Consome == ConsomeTodas {
+		entregavel = c.Declaradas > 0 && c.Ativas == c.Declaradas
+	}
+	if entregavel {
+		return nil
+	}
+	return composicaoIncompleta(p.Codigo, c)
+}
+
+// composicaoIncompleta monta o 422 com o mesmo Code e o mesmo `details` que a
+// venda emite — a tela que já sabe listar as unidades que faltam não precisa
+// aprender um segundo formato.
+//
+// É 422 e não 409 porque a data não está em disputa: NENHUMA data resolve
+// composição quebrada, e mandar o operador tentar outra semana seria mandá-lo
+// tentar para sempre. Quem age é a gestão do inventário.
+//
+// O Code é literal e não a constante de `reservas`: importar aquele pacote daqui
+// fecharia um ciclo (ele já importa este). O que amarra os dois é o teste de
+// integração, que exige de /quotes o mesmo código que /reservations devolve.
+func composicaoIncompleta(codigo string, c ComposicaoDoProduto) error {
+	faltando := c.Faltando
+	if faltando == nil {
+		faltando = []string{}
+	}
+	return (&apperr.Error{
+		Code:    "COMPOSITION_INCOMPLETE",
+		Message: "O produto não tem todas as unidades da composição ativas.",
+	}).WithStatus(422).WithDetails(map[string]any{
+		"unit_type_code":     codigo,
+		"expected_units":     c.Declaradas,
+		"active_units":       c.Ativas,
+		"missing_unit_codes": faltando,
+	})
+}
+
+// traduzirRegra converte a violação do motor no erro da API PRESERVANDO o Code
+// e os details.
+//
+// O front reage ao Code, nunca ao texto — então o código que sai daqui tem de
+// ser exatamente o que booking.RuleError carimbou. Onde o apperr já tem a
+// constante, usa-se a constante; onde ainda não tem (RATE_NOT_FOUND, que o motor
+// já emite hoje), monta-se o erro com o mesmo Code em 422, que é o status que o
+// contrato declara. Inventar VALIDATION_ERROR no lugar seria mentir sobre a
+// causa e deixar a tela sem como dizer "falta cadastrar a tarifa deste período".
+func traduzirRegra(err error) error {
+	var regra *booking.RuleError
+	if !errors.As(err, &regra) {
+		return err
+	}
+
+	switch regra.Code {
+	case "VALIDATION_ERROR":
+		return apperr.Validation(regra.Details).WithMessage(regra.Message).WithCause(err)
+	case "CAPACITY_EXCEEDED":
+		return apperr.CapacityExceeded.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
+	case "MIN_STAY_NOT_MET":
+		return apperr.MinStayNotMet.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
+	case "DISCOUNT_ABOVE_LIMIT":
+		return apperr.DiscountAboveLimit.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
+	default:
+		return (&apperr.Error{Code: regra.Code, Message: regra.Message}).
+			WithStatus(422).
+			WithDetails(regra.Details).
+			WithCause(err)
+	}
+}

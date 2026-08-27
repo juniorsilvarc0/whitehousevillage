@@ -28,9 +28,7 @@ import (
 func duasContasDeAdministrador(t *testing.T, a *ambiente) (idX, idY uuid.UUID, sessaoX, sessaoY sessao, papelRaso uuid.UUID) {
 	t.Helper()
 
-	if _, err := a.pool.Exec(a.ctx, `UPDATE users SET active = false`); err != nil {
-		t.Fatalf("zerando a população de usuários: %v", err)
-	}
+	silenciarPopulacao(t, a)
 
 	papelAdmin := a.criarPerfilComCatalogoInteiro(t, "admin_corrida")
 	papelRaso = a.criarPerfil(t, "raso", "dashboard:ver:all")
@@ -112,6 +110,24 @@ func conferirCorrida(t *testing.T, a *ambiente, rX, rY resposta) {
 			// conta do perdedor ANTES de a requisição do perdedor carregar a
 			// sessão, e o middleware recusou a conta inativa. A operação também
 			// não aconteceu — o que importa é que ninguém gravou.
+		case r.Status == http.StatusForbidden:
+			// O terceiro desfecho legítimo, e o que fazia este teste piscar de
+			// vermelho sob carga (1 falha em 10 repetições, medido em
+			// 26/08/2026): o vencedor COMMITOU o rebaixamento antes de o RBAC do
+			// perdedor ler a matriz, e o perdedor chegou ao autorizador já sem
+			// `users:editar`. A trava do último administrador nem chegou a ser
+			// consultada — quem recusou foi a autorização, uma camada acima.
+			//
+			// Em linguagem de negócio é o mesmo desfecho: a escrita não
+			// aconteceu e a instalação continua com administrador. Recusar este
+			// caso fazia a suíte acusar defeito onde houve só uma ordem
+			// diferente de commit — e teste que reprova por sorte é teste que
+			// se aprende a ignorar.
+			//
+			// E não enfraquece a asserção: no OUTRO entrelaçamento, em que as
+			// duas requisições são autorizadas antes de qualquer commit, a trava
+			// é a única defesa e os dois 200 continuam derrubando o teste. É
+			// exatamente por isso que a corrida roda com `-count=10`.
 		default:
 			t.Fatalf("resposta inesperada: %d %s", r.Status, r.Corpo)
 		}

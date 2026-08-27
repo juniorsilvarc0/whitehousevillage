@@ -8,6 +8,27 @@ info:
     Este arquivo é a **fonte da verdade**: é mergeado antes da implementação, e é
     contra ele que o painel e os testes são escritos. Pertence ao agente
     `tech-lead`; os demais propõem alterações, não editam.
+
+    ## Campo desconhecido no corpo é erro, nunca silêncio
+
+    Toda requisição com corpo **recusa** propriedade que o schema não declara,
+    com `422 VALIDATION_ERROR` e o nome do campo em `details`. Não é purismo: um
+    corpo com campo errado que responde `200` é a pior resposta possível — o
+    cliente acha que gravou, o servidor não gravou nada, e não há erro em lugar
+    nenhum para alguém investigar. Foi exatamente assim que
+    `PATCH /reservations/{id}` com `{"guests": 6}` respondeu `200` e manteve
+    `guests_count` em 4 (medido, 26/08/2026).
+
+    A regra vale para `POST`, `PUT` e `PATCH`. Em `PATCH`, campo **ausente** não
+    muda nada e campo com `null` limpa — ausência é silêncio combinado; nome
+    desconhecido não é.
+
+    ## Um dado, um nome
+
+    Uma informação tem **um** nome em todo o contrato: o mesmo na entrada, na
+    saída e na coluna do banco. Número de hóspedes é `guests_count` em pedido de
+    orçamento, criação, edição, remarcação e resposta — não `guests` em metade
+    delas.
 servers:
   - url: http://localhost:8080/api/v1
     description: Desenvolvimento
@@ -17,8 +38,14 @@ tags:
   - name: Autenticação
   - name: Usuários
   - name: Perfis
+  - name: Inventário
+    description: Propriedade, produtos (o que se vende) e unidades físicas (o que se ocupa).
+  - name: Tarifário
+    description: Tarifas, calendário comercial e políticas — tudo dado versionado, e nada reescreve o passado.
   - name: Disponibilidade
+    description: Mapa de ocupação e orçamento. Não bloqueia data.
   - name: Reservas
+    description: O ciclo de vida da venda e o bloqueio operacional do calendário.
 
 paths:
   /healthz:
@@ -660,13 +687,297 @@ paths:
           description: "`VALIDATION_ERROR` — par fora do catálogo ou duplicado (`details.permissions`)."
           $ref: "#/components/responses/Erro"
 
-  /availability/units:
+  # ════════════════════════════════════════════════════════════════════
+  # Inventário — propriedade, produtos (o que se vende) e unidades
+  # físicas (o que é ocupado e limpo). Módulo `inventario`.
+  # ════════════════════════════════════════════════════════════════════
+
+  /properties:
     get:
-      tags: [Disponibilidade]
-      summary: Matriz unidade × dia — a fonte do mapa de ocupação
+      tags: [Inventário]
+      summary: Lista as propriedades
+      description: |
+        Hoje há uma só. O endpoint existe porque `property_id` acompanha todas as
+        tabelas desde o começo (db.md §Convenções) — quando a segunda casa
+        entrar, nada no painel muda de forma.
+
+        Não há `POST` nem `DELETE`: criar propriedade é ato de instalação, feito
+        por migration/seed. Documentar um verbo que ninguém implementa é
+        exatamente o que o teste de contrato existe para pegar.
+      x-rbac: { recurso: inventory, acao: ver }
       parameters:
-        - { name: from, in: query, required: true, schema: { type: string, format: date } }
-        - { name: to,   in: query, required: true, schema: { type: string, format: date } }
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean }, description: Ausente traz ativas e inativas. }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Propriedade" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+
+  /properties/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Inventário]
+      summary: Detalhe da propriedade
+      x-rbac: { recurso: inventory, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Propriedade" }
+        "404": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Inventário]
+      summary: Atualiza dados da propriedade
+      description: |
+        Campo **ausente** não muda nada; campo com `null` limpa — a distinção que
+        o `Opt[T]` do Go carrega (CLAUDE.md §6).
+
+        `timezone` é aceito, mas mudá-lo reinterpreta "hoje" no sistema inteiro
+        (spec §Convenções: "hoje" tem uma única definição). Vale `America/*`;
+        outro valor é `422 VALIDATION_ERROR`.
+      x-rbac: { recurso: inventory, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PropriedadeAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Propriedade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /unit-types:
+    get:
+      tags: [Inventário]
+      summary: Lista os produtos
+      description: |
+        Produto é o que se vende; unidade é o que se ocupa. São coisas
+        diferentes de propósito: sem unidade nominal não existe constraint capaz
+        de impedir overbooking, e a operação não saberia qual apartamento
+        preparar.
+      x-rbac: { recurso: inventory, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean } }
+        - { name: q,        in: query, schema: { type: string }, description: Busca por `code` ou `name`. }
+        - name: sort
+          in: query
+          schema: { type: string, default: sort_order, enum: [sort_order, -sort_order, code, -code, name, -name] }
+          description: O padrão é `sort_order` — a ordem do catálogo comercial é dado, não alfabética.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Produto" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Inventário]
+      summary: Cria um produto
+      description: |
+        `consumes` decide quantas linhas de `stay_blocks` uma venda insere:
+        `one_member` insere **uma** (a unidade escolhida pelo alocador) e
+        `all_members` insere **todas** as unidades da composição — é assim que a
+        exclusividade da White House Completa cai de graça da constraint do
+        banco, sem nenhum `SELECT` antes do `INSERT`.
+
+        Produto nasce sem composição. Ela é definida em
+        `PUT /unit-types/{id}/members`, e sem ela nenhuma venda é possível
+        (`422 VALIDATION_ERROR`).
+      x-rbac: { recurso: inventory, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProdutoCriar" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string, example: /api/v1/unit-types/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Produto" }
+        "409":
+          description: |
+            `CODE_IN_USE` — já existe produto com esse `code` na propriedade.
+            Quem decide é a constraint `UNIQUE (property_id, code)` (violação
+            `23505` traduzida), não um `SELECT` antes do `INSERT`, que perderia
+            a corrida.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /unit-types/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Inventário]
+      summary: Detalhe do produto
+      x-rbac: { recurso: inventory, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Produto" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Inventário]
+      summary: Substitui o produto
+      description: |
+        Substituição integral — campo opcional ausente volta ao padrão do schema.
+
+        **`consumes` é guardado aqui exatamente como no `PATCH`.** Um verbo que
+        recusa e outro que aceita a mesma mudança não é contrato, é convite:
+        quem não troca pelo `PATCH` troca reenviando o cadastro inteiro. Ver o
+        `409` abaixo.
+      x-rbac: { recurso: inventory, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProdutoCriar" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Produto" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — a mudança de `consumes` alcança uma estadia viva
+            (`hold`, `confirmed` ou `checked_in`) que ainda não terminou.
+            `details` traz `live_reservations[]`, com `code`, `check_in`,
+            `check_out` e `unit_codes`.
+
+            Medido em 26/08/2026, antes da guarda: a Completa vendida por
+            R$ 20.200,00 teve `consumes` trocado de `all_members` para
+            `one_member` com `200`; a venda seguinte da casa inteira saiu com UMA
+            unidade pelo preço das oito, e as outras sete foram vendidas a
+            terceiros nas mesmas datas. A troca inversa (`one_member` →
+            `all_members`) quebra a invariante do outro lado: a estadia passa a
+            ocupar 1 unidade num produto que declara consumir 4.
+
+            `CODE_IN_USE` — outro produto da propriedade já usa esse `code`.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Inventário]
+      summary: Atualiza o produto
+      description: |
+        Campo ausente não muda nada; campo com `null` limpa.
+
+        **Mudar `cleaning_fee_cents` ou `capacity` não reescreve o passado**:
+        orçamento e reserva já emitidos guardam o valor que usaram
+        (`reservations.cleaning_cents`, `reservation_nights.price_cents`). A
+        alteração vale do próximo cálculo em diante.
+      x-rbac: { recurso: inventory, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProdutoAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Produto" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — a mudança de `consumes` alcança uma estadia viva
+            (`hold`, `confirmed` ou `checked_in`) que ainda não terminou.
+            `details` traz `live_reservations[]`, com `code`, `check_in`,
+            `check_out` e `unit_codes`.
+
+            Medido em 26/08/2026, antes da guarda: a Completa vendida por
+            R$ 20.200,00 teve `consumes` trocado de `all_members` para
+            `one_member` com `200`; a venda seguinte da casa inteira saiu com UMA
+            unidade pelo preço das oito, e as outras sete foram vendidas a
+            terceiros nas mesmas datas. A troca inversa (`one_member` →
+            `all_members`) quebra a invariante do outro lado: a estadia passa a
+            ocupar 1 unidade num produto que declara consumir 4.
+
+            `CODE_IN_USE` — outro produto da propriedade já usa esse `code`.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Inventário]
+      summary: Desativa o produto
+      description: |
+        Desativação (`active = false`), não remoção: produto referenciado por
+        reserva ou por tarifa não pode sumir sem levar o histórico junto. Produto
+        inativo não aparece na disponibilidade nem aceita venda nova, e as
+        reservas antigas continuam legíveis.
+      x-rbac: { recurso: inventory, acao: excluir }
+      responses:
+        "204": { description: Desativado }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — há reserva ativa (`hold`, `confirmed` ou
+            `checked_in`) neste produto (`details.reservations_count`). Encerre-as
+            antes.
+          $ref: "#/components/responses/Erro"
+
+  /unit-types/{id}/members:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Inventário]
+      summary: Composição do produto — quais unidades ele consome
+      description: |
+        Sempre devolvido **ordenado por `units.code`**. Não é estética: é a mesma
+        ordem em que o servidor insere as linhas de `stay_blocks`, e ordens
+        divergentes entre duas transações concorrentes causam deadlock (db.md §1).
+      x-rbac: { recurso: inventory, acao: ver }
       responses:
         "200":
           description: OK
@@ -677,25 +988,1268 @@ paths:
                 properties:
                   data:
                     type: array
-                    items:
-                      type: object
-                      properties:
-                        unit_id: { type: string, format: uuid }
-                        unit_code: { type: string, example: COB-01 }
-                        days:
-                          type: array
-                          items:
-                            type: object
-                            properties:
-                              date: { type: string, format: date }
-                              status: { type: string, enum: [livre, hold, confirmed, maintenance, ota] }
-                              date_type: { $ref: "#/components/schemas/TipoDeData" }
-                              price_cents: { type: integer, format: int64 }
+                    items: { $ref: "#/components/schemas/UnidadeDaComposicao" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Inventário]
+      summary: Substitui a composição do produto
+      description: |
+        **Substitui**, não acumula: o que não vier no corpo deixa de fazer parte.
+        É `DELETE` + `INSERT` na mesma transação, então a tela manda o estado
+        inteiro da grade sem precisar calcular diferença — mesma forma do
+        `PUT /roles/{id}/permissions`.
+
+        Regras:
+
+        - Lista vazia é recusada (`422`): produto sem composição não pode ser
+          vendido, e um produto vendável sem unidade é um overbooking silencioso.
+        - Unidade repetida no corpo é recusada (`422`, com o índice em `details`):
+          a chave é `(unit_type_id, unit_id)`.
+        - Reenviar o **mesmo conjunto** é no-op e responde `200`, inclusive em
+          outra ordem. Sem isso um produto vendido ficaria integralmente
+          imutável e a tela não conseguiria salvar um formulário que ninguém
+          tocou.
+
+        ## A composição É validada contra as reservas vivas (`409`)
+
+        Este parágrafo substitui o que o contrato dizia até 26/08/2026 — que a
+        composição "não é validada contra reservas futuras nesta fase", porque
+        as reservas antigas apontam para `reservation_units`, que é snapshot. O
+        raciocínio estava errado, e foi ele que autorizou por escrito o defeito
+        crítico da Fase 1. O perigo nunca foi a reserva antiga PERDER unidades:
+
+        - **Unidade acrescentada** fica livre dentro das datas de uma estadia
+          exclusiva já vendida. Medido em 26/08/2026: a Completa vendida de 10 a
+          13/05 com 8 unidades, `AP-99` acrescentado à composição, e
+          `POST /reservations` do apto-2s conseguiu vender `AP-99` para a noite
+          de 11/05 — um estranho dormindo dentro da casa alugada inteira. A
+          `EXCLUDE` não impede isso porque não existe linha de `stay_blocks`
+          para `AP-99`: constraint não enxerga ausência de linha.
+        - **Unidade removida** faz a PRÓXIMA venda do produto entregar a menos
+          pelo mesmo preço. Medido: composição encolhida para 7, venda seguinte
+          emitida com 7 unidades e o total das 8.
+
+        A regra, por tipo de consumo:
+
+        | `consumes` | acrescentar unidade | remover unidade |
+        |---|---|---|
+        | `all_members` | **`409 RESOURCE_IN_USE`** | **`409 RESOURCE_IN_USE`** |
+        | `one_member` | permitido | **`409`** só se a unidade estiver ocupada por estadia viva do produto |
+
+        Em `one_member` a venda escolheu **uma** unidade no ato e a segurou;
+        crescer o pool não muda o que ela segura. Recusar toda adição travaria a
+        casa — o apto-2s quase sempre tem venda viva, e ninguém jamais
+        conseguiria acrescentar um apartamento. O que se recusa ali é só tirar a
+        unidade que a estadia ocupa.
+
+        Recusar, e não propagar: propagar resolveria a adição e não a remoção,
+        onde significaria APAGAR bloco de estadia vendida — exatamente o que o
+        `ON DELETE RESTRICT` de `stay_blocks` existe para impedir. O custo cai
+        sobre o evento raro (cadastro) e não sobre o normal (venda).
+
+        O `409` **nomeia as reservas e as datas** para a saída ser acionável:
+        `details` traz `adding_unit_codes`, `removing_unit_codes`,
+        `reservations_count` e `live_reservations[]` (com `code`, `check_in`,
+        `check_out`, `unit_codes`). Sem isso a recusa vira "tente de novo mais
+        tarde" e o operador não sabe qual reserva remarcar.
+
+        A mesma guarda vale para `consumes` em `PATCH /unit-types/{id}` e
+        `PUT /unit-types/{id}` — trocar `all_members` → `one_member` com venda
+        viva entrega um apartamento a quem pagou pela casa inteira, e a troca
+        inversa quebra a invariante ao contrário.
+      x-rbac: { recurso: inventory, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [unit_ids]
+              properties:
+                unit_ids:
+                  type: array
+                  minItems: 1
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Composição aplicada, como ficou gravada (ordenada por `code`)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/UnidadeDaComposicao" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — a mudança de composição alcança uma estadia viva
+            (`hold`, `confirmed` ou `checked_in`) que ainda não terminou. `details`:
+            `adding_unit_codes`, `removing_unit_codes`, `reservations_count` e
+            `live_reservations[]` com `code`, `check_in`, `check_out` e `unit_codes`.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — lista vazia, unidade repetida ou unidade de outra propriedade."
+          $ref: "#/components/responses/Erro"
+
+  /units:
+    get:
+      tags: [Inventário]
+      summary: Lista as unidades físicas
+      x-rbac: { recurso: inventory, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean } }
+        - { name: q,        in: query, schema: { type: string }, description: Busca por `code` ou `name`. }
+        - name: unit_type_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: Filtra pelas unidades que compõem o produto (`unit_type_members`).
+        - name: sort
+          in: query
+          schema: { type: string, default: code, enum: [code, -code, sort_order, -sort_order, name, -name] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Unidade" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Inventário]
+      summary: Cria uma unidade física
+      description: |
+        `code` é a identidade operacional da unidade (`AP-01`, `SP-04`,
+        `COB-01`) e é por ele que tudo se ordena. A unidade **não** carrega
+        produto: o vínculo é a composição (`unit_type_members`), que é
+        muitos-para-muitos — `AP-01` pertence ao Apartamento 2 Suítes **e** à
+        White House Completa ao mesmo tempo.
+      x-rbac: { recurso: inventory, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnidadeCriar" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string, example: /api/v1/units/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Unidade" }
+        "409":
+          description: "`CODE_IN_USE` — já existe unidade com esse `code` na propriedade (`UNIQUE (property_id, code)`)."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /units/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Inventário]
+      summary: Detalhe da unidade
+      x-rbac: { recurso: inventory, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Unidade" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Inventário]
+      summary: Substitui a unidade
+      x-rbac: { recurso: inventory, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnidadeCriar" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Unidade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Inventário]
+      summary: Atualiza a unidade
+      description: Campo ausente não muda nada; campo com `null` limpa.
+      x-rbac: { recurso: inventory, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UnidadeAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Unidade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Inventário]
+      summary: Desativa a unidade
+      description: |
+        Desativação (`active = false`). A FK de `stay_blocks` para `units` é
+        `ON DELETE RESTRICT` justamente porque apagar uma unidade apagaria a
+        prova de quem dormiu onde. Unidade inativa sai da alocação automática e
+        do mapa de ocupação; o histórico permanece.
+      x-rbac: { recurso: inventory, acao: excluir }
+      responses:
+        "204": { description: Desativada }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — a unidade tem ocupação futura em `stay_blocks`
+            com status `hold` ou `confirmed` (`details.blocks_count`), ou ainda
+            compõe algum produto (`details.unit_types`).
+          $ref: "#/components/responses/Erro"
+
+  # ════════════════════════════════════════════════════════════════════
+  # Tarifário e política comercial — módulo `tarifario`.
+  #
+  # TUDO aqui é dado versionado, nunca constante em código (spec §Convenções).
+  # E nada aqui reescreve o passado: orçamento e reserva já emitidos guardam o
+  # que usaram (`reservation_nights.price_cents`, `reservations.rate_table_id`,
+  # `policy_version`, `cancellation_policy_id`). Mudar tarifa, feriado, período,
+  # mínimo de noites ou política vale **do próximo cálculo em diante**.
+  # ════════════════════════════════════════════════════════════════════
+
+  /rate-tables:
+    get:
+      tags: [Tarifário]
+      summary: Lista as tabelas de tarifas
+      description: |
+        Tabela de tarifas é versionada por vigência (`valid_from`/`valid_to`).
+        A vigente numa data é a de maior `valid_from` que cobre a data e está
+        `active`; `valid_to` nulo é "sem fim".
+      x-rbac: { recurso: settings, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean } }
+        - name: on
+          in: query
+          schema: { type: string, format: date }
+          description: Traz apenas a(s) tabela(s) vigente(s) na data informada.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/TabelaDeTarifas" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Tarifário]
+      summary: Cria uma tabela de tarifas
+      x-rbac: { recurso: settings, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TabelaDeTarifasEntrada" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TabelaDeTarifas" }
+        "409":
+          description: "`CODE_IN_USE` — `name` já usado na propriedade. É a chave natural `UNIQUE (property_id, name)` que o seed usa para reencontrar a própria linha."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /rate-tables/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Tarifário]
+      summary: Detalhe da tabela de tarifas
+      x-rbac: { recurso: settings, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TabelaDeTarifas" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Tarifário]
+      summary: Substitui a tabela de tarifas
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TabelaDeTarifasEntrada" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TabelaDeTarifas" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Tarifário]
+      summary: Atualiza a tabela de tarifas
+      description: |
+        Mudar a vigência de uma tabela **não** mexe em reserva alguma: a reserva
+        congelou `rate_table_id` e as noites já estão gravadas com preço.
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TabelaDeTarifasAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/TabelaDeTarifas" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Tarifário]
+      summary: Desativa a tabela de tarifas
+      description: |
+        Desativação (`active = false`). Remoção física apagaria em cascata as
+        tarifas e os mínimos de noite que reservas antigas referenciam por
+        `rate_table_id`.
+      x-rbac: { recurso: settings, acao: excluir }
+      responses:
+        "204": { description: Desativada }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`RESOURCE_IN_USE` — é a única tabela vigente hoje; sem ela nenhum orçamento sai (`RATE_NOT_FOUND`)."
+          $ref: "#/components/responses/Erro"
+
+  /rates:
+    get:
+      tags: [Tarifário]
+      summary: Lista as tarifas (produto × tipo de data → valor)
+      description: |
+        `GET /rates?rate_table_id=...` reproduz a grade inteira da tabela — é o
+        critério de aceite da spec §3 ("`GET /rates` reproduz a Tabela V1
+        exatamente").
+      x-rbac: { recurso: settings, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: rate_table_id, in: query, schema: { type: string, format: uuid } }
+        - { name: unit_type_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: date_type,     in: query, schema: { $ref: "#/components/schemas/TipoDeData" } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Tarifa" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Tarifário]
+      summary: Cria uma tarifa
+      x-rbac: { recurso: settings, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TarifaEntrada" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Tarifa" }
+        "409":
+          description: "`CODE_IN_USE` — já há tarifa para esse `(rate_table_id, unit_type_id, date_type)`. Use `PATCH` ou `POST /rates/bulk`."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /rates/bulk:
+    post:
+      tags: [Tarifário]
+      summary: Substitui a grade dos produtos enviados, numa transação
+      description: |
+        A tela do tarifário é uma grade produto × tipo de data. Salvar célula a
+        célula seriam 24 requisições que podem falhar pela metade e deixar a
+        tabela comercial num estado que nunca existiu no papel. Aqui é **uma
+        transação**: ou a grade inteira entra, ou nada entra.
+
+        ## O raio de ação é o produto, não a tabela
+
+        A substituição é **escopada aos produtos citados na chamada**. Para cada
+        produto em `unit_type_ids`, as células daquele produto nesta tabela
+        passam a ser exatamente as que vieram em `rates` — as demais são
+        removidas. Produto **fora** de `unit_type_ids` não é tocado: a tarifa
+        dele continua exatamente como estava.
+
+        Isto é uma **correção de contrato**, e a redação anterior ("o par que não
+        vier no corpo é removido da tabela") era o defeito. Medido em 26/08/2026,
+        contra Postgres real: salvar a grade de um único produto (6 células)
+        apagou as 18 células dos outros três — `rates` foi de 24 linhas para 6 —
+        e a venda deles passou a responder `422 RATE_NOT_FOUND` enquanto
+        `GET /availability` continuava anunciando `available: 1` com
+        `price_cents: null`. A tela oferecia o que a venda ia recusar, e ninguém
+        pediu para apagar nada.
+
+        A tela do tarifário salva um produto por vez ou a grade toda; nos dois
+        casos ela manda os produtos que editou, e é esse o escopo. Nenhuma
+        chamada apaga preço de produto que o operador não abriu.
+
+        ## Zerar um produto é ato explícito
+
+        Citar o produto em `unit_type_ids` e **não** mandar nenhuma célula dele é
+        o jeito — o único — de deixá-lo sem tarifa. É deliberado que apagar exija
+        nomear o alvo: remoção nunca deve ser consequência de omissão. Produto
+        sem tarifa some da venda (`RATE_NOT_FOUND`) e some da oferta
+        (`GET /availability` devolve `available: 0` com
+        `unavailable_reason: sem_tarifa`).
+
+        ## O caminho comum continua sem cerimônia
+
+        `unit_type_ids` **ausente** vale como "os produtos distintos que aparecem
+        em `rates`". A tela que salva a grade toda manda o mesmo corpo de sempre
+        e ganha a semântica nova de graça; só quem zera um produto precisa
+        escrever a lista.
+
+        Não reescreve nada já emitido: reservas guardam `rate_table_id` e o preço
+        de cada noite em `reservation_nights`.
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GradeParaSalvar" }
+      responses:
+        "200":
+          description: |
+            Grade aplicada. `data` é a tabela inteira como ficou gravada
+            (inclusive os produtos que esta chamada não tocou — é o estado que a
+            tela redesenha), e `meta` diz o que a chamada efetivamente fez.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Tarifa" }
+                  meta: { $ref: "#/components/schemas/MetaDaGrade" }
+        "404":
+          description: "`NOT_FOUND` — `rate_table_id` inexistente nesta propriedade."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — par `(unit_type_id, date_type)` repetido no
+            corpo (o índice vem em `details.rates`), `date_type` fora do
+            vocabulário, `amount_cents` não positivo, `unit_type_id` que não
+            existe nesta propriedade, ou célula cujo `unit_type_id` **não está**
+            em `unit_type_ids` (o índice vem em `details.rates`) — mandar preço
+            de um produto fora do escopo declarado é erro de cliente, não licença
+            para ampliar o escopo em silêncio.
+          $ref: "#/components/responses/Erro"
+
+  /rates/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Tarifário]
+      summary: Detalhe da tarifa
+      x-rbac: { recurso: settings, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Tarifa" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Tarifário]
+      summary: Substitui a tarifa
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TarifaEntrada" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Tarifa" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Tarifário]
+      summary: Atualiza a tarifa
+      description: |
+        Na prática só `amount_cents` muda. **Alterar a tarifa muda o próximo
+        orçamento e não muda nenhum orçamento ou reserva já emitidos** — é o
+        critério de aceite literal da spec §3.
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TarifaAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Tarifa" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Tarifário]
+      summary: Remove a tarifa da grade
+      description: |
+        Remoção física — a linha é a célula da grade, não tem histórico próprio:
+        o histórico está congelado em `reservation_nights`. Sem a célula, a
+        noite daquele tipo passa a devolver `422 RATE_NOT_FOUND` no próximo
+        orçamento, que é o comportamento correto: melhor recusar do que vender
+        por um valor inventado.
+      x-rbac: { recurso: settings, acao: excluir }
+      responses:
+        "204": { description: Removida }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+
+  /holidays:
+    get:
+      tags: [Tarifário]
+      summary: Lista os feriados
+      description: Data em `holidays` classifica a noite como `feriado` (precedência 80).
+      x-rbac: { recurso: settings, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: from,     in: query, schema: { type: string, format: date } }
+        - { name: to,       in: query, schema: { type: string, format: date } }
+        - { name: active,   in: query, schema: { type: boolean } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Feriado" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Tarifário]
+      summary: Cria um feriado
+      x-rbac: { recurso: settings, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FeriadoEntrada" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Feriado" }
+        "409":
+          description: "`CODE_IN_USE` — já existe feriado nessa data (`UNIQUE (property_id, date)`)."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /holidays/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Tarifário]
+      summary: Detalhe do feriado
+      x-rbac: { recurso: settings, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Feriado" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Tarifário]
+      summary: Substitui o feriado
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FeriadoEntrada" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Feriado" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Tarifário]
+      summary: Atualiza o feriado
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FeriadoAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Feriado" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Tarifário]
+      summary: Remove o feriado
+      description: |
+        Remoção física. Reservas já emitidas não mudam: a classificação da noite
+        está congelada em `reservation_nights.date_type`.
+      x-rbac: { recurso: settings, acao: excluir }
+      responses:
+        "204": { description: Removido }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+
+  /special-periods:
+    get:
+      tags: [Tarifário]
+      summary: Lista os períodos especiais
+      description: |
+        Períodos **podem se sobrepor de propósito** (Réveillon dentro da alta
+        temporada) — por isso a tabela não tem constraint de exclusão. Quem
+        resolve o empate é a precedência (`date_type_rules`), que é dado.
+      x-rbac: { recurso: settings, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: from,     in: query, schema: { type: string, format: date } }
+        - { name: to,       in: query, schema: { type: string, format: date } }
+        - { name: kind,     in: query, schema: { type: string, enum: [reveillon, carnaval, alta, evento] } }
+        - { name: active,   in: query, schema: { type: boolean } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/PeriodoEspecial" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Tarifário]
+      summary: Cria um período especial
+      description: |
+        `name` carrega o ano (`Réveillon 2026/2027`) porque é chave natural
+        (`UNIQUE (property_id, name)`): o Réveillon do ano seguinte é linha nova,
+        não edição desta.
+
+        O intervalo é **inclusivo nas duas pontas** (`starts_on`..`ends_on`) —
+        diferente da estadia, que é half-open. Período é uma faixa do calendário
+        comercial, não uma ocupação: 28/12 a 02/01 classifica as seis datas,
+        inclusive 02/01.
+      x-rbac: { recurso: settings, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PeriodoEspecialEntrada" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PeriodoEspecial" }
+        "409":
+          description: "`CODE_IN_USE` — `name` já usado na propriedade (chave natural do seed)."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — `ends_on` anterior a `starts_on`."
+          $ref: "#/components/responses/Erro"
+
+  /special-periods/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Tarifário]
+      summary: Detalhe do período especial
+      x-rbac: { recurso: settings, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PeriodoEspecial" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Tarifário]
+      summary: Substitui o período especial
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PeriodoEspecialEntrada" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PeriodoEspecial" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Tarifário]
+      summary: Atualiza o período especial
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PeriodoEspecialAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PeriodoEspecial" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Tarifário]
+      summary: Remove o período especial
+      x-rbac: { recurso: settings, acao: excluir }
+      responses:
+        "204": { description: Removido }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+
+  /min-nights:
+    get:
+      tags: [Tarifário]
+      summary: Lista as regras de estadia mínima
+      description: |
+        Mínimo por tipo de data, dentro de uma tabela de tarifas. Vale o **maior
+        mínimo entre as noites da estadia** (spec §3) — quem aplica é o motor
+        `booking.Build`, não o handler.
+      x-rbac: { recurso: settings, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: rate_table_id, in: query, schema: { type: string, format: uuid } }
+        - { name: date_type,     in: query, schema: { $ref: "#/components/schemas/TipoDeData" } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MinimoDeNoites" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Tarifário]
+      summary: Cria uma regra de estadia mínima
+      x-rbac: { recurso: settings, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MinimoDeNoitesEntrada" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MinimoDeNoites" }
+        "409":
+          description: "`CODE_IN_USE` — já há regra para esse `(rate_table_id, date_type)`."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /min-nights/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Tarifário]
+      summary: Detalhe da regra de estadia mínima
+      x-rbac: { recurso: settings, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MinimoDeNoites" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Tarifário]
+      summary: Substitui a regra de estadia mínima
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MinimoDeNoitesEntrada" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MinimoDeNoites" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Tarifário]
+      summary: Atualiza a regra de estadia mínima
+      description: |
+        Aumentar o mínimo **não invalida reserva já emitida** — a validação
+        acontece na emissão, e a reserva antiga continua válida com as noites que
+        tinha.
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MinimoDeNoitesAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MinimoDeNoites" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Tarifário]
+      summary: Remove a regra de estadia mínima
+      description: Sem regra para o tipo de data, o mínimo daquele tipo é 1 noite.
+      x-rbac: { recurso: settings, acao: excluir }
+      responses:
+        "204": { description: Removida }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+
+  /policies/commercial:
+    get:
+      tags: [Tarifário]
+      summary: Política comercial vigente
+      description: |
+        Sem `version`, devolve a **vigente**: maior `version` com
+        `valid_from <= hoje`. Com `version`, devolve aquela versão exata — é como
+        a tela de uma reserva antiga mostra a política que ela congelou em
+        `reservations.policy_version`.
+      x-rbac: { recurso: settings, acao: ver }
+      parameters:
+        - name: version
+          in: query
+          schema: { type: integer, minimum: 1 }
+          description: Lê uma versão específica em vez da vigente.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PoliticaComercial" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Tarifário]
+      summary: Publica uma nova versão da política comercial
+      description: |
+        **`PUT` cria versão nova; nunca edita a vigente.** O servidor atribui
+        `version = max(version) + 1` e ignora qualquer `version` que venha no
+        corpo. Editar a linha vigente reescreveria a regra sob os pés das
+        reservas que congelaram aquele número — que é justamente o que
+        `reservations.policy_version` existe para impedir.
+
+        Por isso não há `PATCH` nem `DELETE` aqui: política é histórico, não
+        cadastro. Voltar atrás é publicar de novo a versão antiga, que entra como
+        versão nova e deixa rastro.
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PoliticaComercialEntrada" }
+      responses:
+        "201":
+          description: Versão nova publicada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PoliticaComercial" }
+        "409":
+          description: |
+            `POLICY_IMMUTABLE` — o corpo trouxe `version` de uma política já
+            publicada, ou `valid_from` anterior ao da vigente. Versão publicada
+            não se reescreve nem se antedata.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — `discount_approval_pct` menor que `discount_auto_pct`, percentual fora de 0–100 ou `hold_hours` não positivo."
+          $ref: "#/components/responses/Erro"
+
+  /policies/cancellation:
+    get:
+      tags: [Tarifário]
+      summary: Política de cancelamento vigente, com as faixas
+      description: |
+        As faixas vêm ordenadas por `sort_order`, da mais generosa à mais
+        restritiva — é nessa ordem que o motor (`booking.CancellationPolicy`)
+        procura a primeira faixa aplicável.
+      x-rbac: { recurso: settings, acao: ver }
+      parameters:
+        - name: version
+          in: query
+          schema: { type: integer, minimum: 1 }
+          description: Lê uma versão específica — a que a reserva congelou em `cancellation_policy_id`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PoliticaDeCancelamento" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Tarifário]
+      summary: Publica uma nova versão da política de cancelamento
+      description: |
+        **Cria versão nova com as faixas inteiras; nunca edita a vigente.** As
+        faixas vêm no mesmo corpo e substituem integralmente — não existe
+        endpoint de faixa avulsa, porque uma faixa sozinha não é uma política:
+        deixar um buraco entre `days_before_max` de uma e `days_before_min` da
+        seguinte faria o motor cair no caso "sem faixa aplicável" e reter tudo
+        por omissão.
+
+        Reserva já emitida não muda: ela aponta para `cancellation_policy_id`, a
+        versão que estava vigente quando foi criada.
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PoliticaDeCancelamentoEntrada" }
+      responses:
+        "201":
+          description: Versão nova publicada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PoliticaDeCancelamento" }
+        "409":
+          description: "`POLICY_IMMUTABLE` — tentativa de reescrever versão já publicada."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — lista de faixas vazia, `sort_order` repetido
+            (chave natural `UNIQUE (policy_id, sort_order)`), `refund_pct` fora
+            de 0–100 ou faixas que se sobrepõem.
+          $ref: "#/components/responses/Erro"
+
+  # ════════════════════════════════════════════════════════════════════
+  # Disponibilidade e orçamento — módulo `disponibilidade`.
+  # ════════════════════════════════════════════════════════════════════
+
+  /availability:
+    get:
+      tags: [Disponibilidade]
+      summary: Por produto, quantas unidades vendáveis em cada dia
+      description: |
+        A visão comercial: "dá para vender?". E a resposta tem de ser a mesma que
+        a venda daria.
+
+        ## `available` conta o que a venda aceita
+
+        Um dia entra na conta quando a unidade está **livre e vendável**: sem
+        `stay_block` de status `hold` ou `confirmed` naquele dia, unidade ativa,
+        e com tarifa cadastrada para o tipo de data na tabela vigente. Faltando
+        qualquer uma das três, `available` é 0 e `unavailable_reason` diz qual.
+
+        **`completed` NÃO entra neste predicado**, e a versão anterior deste
+        texto errava duas vezes ao dizer que entrava. Primeiro porque o estado
+        terminal do bloco se chama `completed` no banco (o CHECK da migration
+        `20260826120000` é `hold|confirmed|completed|cancelled|expired`), e
+        `checked_out` é o nome de um estado da RESERVA. Segundo, e mais grave,
+        porque somar o estado terminal ao predicado de VENDA fecharia para sempre
+        a noite de uma estadia já cumprida: depois do check-out a data volta ao
+        estoque, que é a razão de `completed` estar fora do `WHERE` da constraint
+        `stay_no_overlap`. Este predicado é o da venda; o do MAPA é outro
+        (`hold, confirmed, completed`) e está em `GET /availability/units`.
+
+        A terceira condição é correção medida, não zelo: em 26/08/2026, com a
+        tarifa da Cobertura apagada, esta rota devolvia `available: 1` com
+        `price_cents: null` para 20, 21 e 22/09 enquanto `POST /quotes` nas
+        mesmas datas respondia `422 RATE_NOT_FOUND`. A tela oferecia o que a
+        venda recusava — e quem descobre isso é o hóspede ao telefone.
+
+        **A White House Completa só é livre quando TODAS as unidades estão** —
+        `available` é 0 ou 1, nunca um número intermediário, porque ela consome
+        as oito (`consumes = all_members`). Vender apartamento hoje é fechar a
+        Completa nessa data, e o mapa precisa dizer isso antes de a gestão
+        prometer a casa a um evento. Composição incompleta (unidade membro
+        inativa) zera a Completa em **todos** os dias, com
+        `unavailable_reason: composicao_incompleta` — a mesma condição que a
+        venda recusa com `422 COMPOSITION_INCOMPLETE`.
+
+        O intervalo é half-open: `from` entra, `to` **não**. Pedir `from=2026-12-20`
+        e `to=2026-12-23` devolve as noites 20, 21 e 22 — as mesmas três que
+        seriam cobradas.
+
+        Esta rota **não bloqueia nada**. Entre a consulta e a gravação a data
+        pode ser tomada; a defesa contra isso é a constraint do banco, não esta
+        resposta.
+      x-rbac: { recurso: calendar, acao: ver }
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to,   in: query, required: true, schema: { type: string, format: date }, description: "Exclusivo." }
+        - name: unit_type_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: Ausente traz todos os produtos ativos.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/DisponibilidadeDoProduto" }
+        "422":
+          description: "`VALIDATION_ERROR` — `to` não é posterior a `from`, ou a janela excede 366 dias."
+          $ref: "#/components/responses/Erro"
+
+  /availability/units:
+    get:
+      tags: [Disponibilidade]
+      summary: Matriz unidade × dia — a fonte do mapa de ocupação
+      description: |
+        A visão operacional: "quem está onde?". Uma linha por unidade física,
+        uma célula por dia, na ordem de `units.code`.
+
+        A célula não traz preço: preço é do **produto**, não da unidade — a mesma
+        `AP-01` custa uma coisa vendida como Apartamento 2 Suítes e outra dentro
+        da White House Completa. Quem quer valor consulta `/availability` ou
+        `POST /quotes`.
+      x-rbac: { recurso: calendar, acao: ver }
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to,   in: query, required: true, schema: { type: string, format: date }, description: "Exclusivo." }
+        - name: unit_id
+          in: query
+          schema: { type: string, format: uuid }
+          description: Ausente traz todas as unidades ativas.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/LinhaDoMapa" }
+        "422": { $ref: "#/components/responses/Erro" }
 
   /quotes:
     post:
       tags: [Disponibilidade]
       summary: Calcula o orçamento — não bloqueia data
+      description: |
+        Roda o motor puro `internal/domain/booking` sobre a tabela de tarifas e a
+        política **vigentes na data de hoje**, e devolve o cálculo inteiro aberto:
+        cada noite com seu tipo e preço, as linhas agrupadas por tipo de tarifa,
+        subtotal, desconto, limpeza, total, sinal, saldo, mínimo de noites e a
+        alçada do desconto.
+
+        Três regras que a resposta materializa:
+
+        - **O desconto incide só sobre as diárias**, nunca sobre a limpeza nem
+          sobre a caução de evento.
+        - **`total = subtotal − desconto + limpeza + caução`**, e o
+          arredondamento acontece no total, nunca noite a noite.
+        - **`deposit_cents` é o sinal** (`total × deposit_pct` da política) e
+          `balance_cents` é o resto, vencendo `balance_due_days` antes do
+          check-in.
+
+        Não grava nada e **não segura a data** — só a pré-reserva
+        (`POST /reservations`) insere em `stay_blocks`. Por isso um orçamento
+        pode virar `409 DATE_CONFLICT` na hora de virar reserva, e isso é
+        correto, não um defeito.
+
+        O corpo aceita `rate_table_id` e `policy_version` explícitos para
+        reproduzir um orçamento antigo centavo a centavo; ausentes, valem os
+        vigentes.
+      x-rbac: { recurso: quotes, acao: criar }
       requestBody:
         required: true
         content:
@@ -710,20 +2264,76 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Orcamento" }
-        "422":
+        "404":
+          description: "`NOT_FOUND` — produto, tabela de tarifas ou política inexistente."
           $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            Vem do motor, com o código estável do `booking.RuleError`:
+
+            - `VALIDATION_ERROR` — `check_out` não é posterior a `check_in`, `guests_count < 1`, ou campo desconhecido no corpo.
+            - `CAPACITY_EXCEEDED` — hóspedes acima da capacidade do produto (`details.capacity`, `details.requested`).
+            - `MIN_STAY_NOT_MET` — noites abaixo do mínimo do período (`details.required`, `details.requested`).
+            - `DISCOUNT_ABOVE_LIMIT` — desconto acima da alçada (`details.requested_pct`, `details.max_pct`).
+            - `RATE_NOT_FOUND` — a tabela vigente não tem tarifa para algum tipo de data da estadia (`details.date`, `details.date_type`).
+            - `COMPOSITION_INCOMPLETE` — a composição do produto não pode ser entregue (veja `POST /reservations`). Orçar o que não se pode vender é prometer.
+          $ref: "#/components/responses/Erro"
+
+  # ════════════════════════════════════════════════════════════════════
+  # Reservas — módulo `reservas`.
+  #
+  # MÁQUINA DE ESTADOS
+  #
+  #   quote → hold → confirmed → checked_in → checked_out → closed
+  #             │        │            │
+  #             │        │            └─────────────► no_show
+  #             ├────────┴──────────────────────────► cancelled
+  #             └── 48 h sem sinal (job) ───────────► expired
+  #
+  # | estado       | como se chega                      | bloqueia calendário |
+  # |--------------|------------------------------------|---------------------|
+  # | quote        | orçamento salvo, sem data segurada  | não                 |
+  # | hold         | POST /reservations                  | SIM                 |
+  # | confirmed    | POST /confirm (sinal registrado)    | SIM                 |
+  # | checked_in   | POST /check-in                      | SIM                 |
+  # | checked_out  | POST /check-out                     | não                 |
+  # | closed       | acerto financeiro (fora da Fase 1)  | não                 |
+  # | cancelled    | POST /cancel                        | não                 |
+  # | expired      | job de expiração do hold            | não                 |
+  # | no_show      | POST /cancel com reason=no_show     | não                 |
+  #
+  # "Bloqueia o calendário" NÃO é um campo da reserva: é o status das linhas de
+  # `stay_blocks` (`hold`/`confirmed`), que é o que a constraint parcial
+  # `stay_no_overlap` enxerga. Cancelar leva essas linhas a `cancelled`, o job de
+  # expiração a `expired` e o check-out a `checked_out` — os três liberam a data,
+  # e os três preservam a linha. O check-out tem estado próprio porque estadia
+  # cumprida continua no mapa, e ocupação desfeita não.
+  #
+  # Transição fora do desenho é `409 INVALID_STATE_TRANSITION`, com o estado
+  # atual e os permitidos em `details`.
+  # ════════════════════════════════════════════════════════════════════
 
   /reservations:
     get:
       tags: [Reservas]
       summary: Lista reservas
+      x-rbac: { recurso: reservations, acao: ver }
       parameters:
         - { name: page,     in: query, schema: { type: integer, default: 1 } }
         - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
-        - { name: status,   in: query, schema: { type: string } }
-        - { name: from,     in: query, schema: { type: string, format: date } }
-        - { name: to,       in: query, schema: { type: string, format: date } }
-        - { name: q,        in: query, schema: { type: string } }
+        - name: status
+          in: query
+          schema: { type: string, example: "hold,confirmed" }
+          description: Um ou mais estados separados por vírgula. Ausente traz todos.
+        - { name: from, in: query, schema: { type: string, format: date }, description: "Reservas que tocam o intervalo `[from, to)`." }
+        - { name: to,   in: query, schema: { type: string, format: date } }
+        - { name: q,    in: query, schema: { type: string }, description: "Busca por `code` da reserva ou nome do contato." }
+        - { name: unit_type_id, in: query, schema: { type: string, format: uuid } }
+        - { name: contact_id,   in: query, schema: { type: string, format: uuid } }
+        - { name: broker_id,    in: query, schema: { type: string, format: uuid } }
+        - name: sort
+          in: query
+          schema: { type: string, default: -created_at, enum: [check_in, -check_in, created_at, -created_at, code, -code] }
       responses:
         "200":
           description: OK
@@ -737,79 +2347,811 @@ paths:
                         type: array
                         items: { $ref: "#/components/schemas/Reserva" }
                   - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
     post:
       tags: [Reservas]
-      summary: Cria a reserva como pré-reserva (hold) e aloca a(s) unidade(s)
+      summary: Cria a pré-reserva (hold) e aloca a(s) unidade(s)
+      description: |
+        Recalcula o orçamento do zero — o corpo manda o pedido, nunca os valores.
+        Preço que chega do cliente é preço que o cliente escolheu.
+
+        O que a criação congela, e por isso nunca mais muda:
+
+        - `reservation_nights` — uma linha por noite com `date_type` e
+          `price_cents` aplicados;
+        - `rate_table_id`, `policy_version` e `cancellation_policy_id` na reserva;
+        - `subtotal_cents`, `discount_cents`, `cleaning_cents`,
+          `event_deposit_cents`, `total_cents` e `deposit_cents`.
+
+        A alocação da unidade é automática: entre as unidades livres da
+        composição, vence a que **menos fragmenta o calendário** (menor sobra
+        entre as reservas vizinhas), com desempate pelo `code`. Produto
+        `all_members` não escolhe — insere as oito.
+
+        ## Exclusividade da Completa: a composição inteira, ou nada
+
+        Vender um produto `all_members` exige **todas** as unidades da composição
+        (`unit_type_members`), sem exceção. Se qualquer unidade membro estiver
+        **inativa**, a venda é recusada com `422 COMPOSITION_INCOMPLETE` — não se
+        entrega 7 de 8 cobrando a casa cheia.
+
+        Sem esta regra o defeito não é "hóspede recebe menos": é **estranho
+        dentro da casa alugada inteira**. Medido em 26/08/2026, com `AP-03`
+        inativa: `WH-2026-0002` vendeu a White House Completa (capacidade 24,
+        R$ 5.500/noite) alocando 7 unidades, e `AP-03` — que não recebeu
+        `stay_block` nenhum — foi vendida logo em seguida como Apartamento 2
+        Suítes a outro hóspede (`WH-2026-0003`), na mesma noite, dentro da mesma
+        casa. A constraint do banco não pega isso: ela impede duas linhas
+        sobrepostas na mesma unidade, e aqui a oitava linha simplesmente nunca
+        foi inserida.
+
+        Por isso o código é `422` e não `409`: a data não está em disputa, e
+        nenhuma outra data resolve. O produto está mal configurado, e quem
+        precisa agir é a gestão do inventário, não o hóspede.
+
+        `details` traz `unit_type_code`, `expected_units` (o tamanho da
+        composição), `active_units` e `missing_unit_codes` — a tela mostra
+        exatamente qual unidade reativar.
+
+        A mesma recusa vale para produto `one_member` cuja composição não tem
+        **nenhuma** unidade ativa. Aí também não há o que entregar, e devolver
+        `409 DATE_CONFLICT` mandaria o operador tentar outra data para sempre.
+
+        As linhas de `stay_blocks` são inseridas **em ordem de `units.code`**.
+        Não é preferência de estilo: duas transações inserindo subconjuntos em
+        ordens opostas se travam mutuamente (deadlock).
+
+        Não há `SELECT` de disponibilidade antes do `INSERT`. Quem decide se a
+        data está livre é a constraint `stay_no_overlap`; a violação `23P01`
+        vira `409 DATE_CONFLICT` — nunca `500`, nunca retry automático.
+
+        O `hold` nasce com `hold_expires_at = now() + hold_hours` da política
+        (48 h por padrão). Um job expira o que vencer, libera as unidades e
+        registra o evento.
+      x-rbac: { recurso: reservations, acao: criar }
       parameters:
         - name: Idempotency-Key
           in: header
           required: true
-          schema: { type: string }
-          description: Obrigatório em toda criação de reserva ou movimento financeiro.
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: |
+            Obrigatório: criar reserva é ato irreversível sob concorrência. A
+            mesma chave, **do mesmo ator**, com o mesmo corpo devolve a resposta
+            original (mesmo `201`, mesma reserva); com corpo diferente devolve
+            `409 IDEMPOTENCY_MISMATCH`.
+
+            **A chave é escopada pelo ator.** O registro de idempotência é
+            `(usuário autenticado, rota, chave)`, nunca `(rota, chave)`: a chave
+            é escolhida pelo cliente, e "reserva-1" é escolha óbvia de dois
+            operadores no mesmo dia. Chave repetida por **outro** usuário é
+            requisição nova — não é replay, não é `IDEMPOTENCY_MISMATCH`, e
+            jamais devolve a resposta guardada do primeiro.
+
+            Sem o escopo, a idempotência vira desvio de autorização de leitura.
+            Medido em 26/08/2026: o admin criou `WH-2026-0004` com
+            `Idempotency-Key: reserva-1`; o corretor mandou a mesma chave e
+            recebeu `200` com a reserva **do admin** por inteiro — id, código,
+            unidades e bloco — a mesma reserva que `GET /reservations/{id}`
+            devolve a ele como `404`, porque o escopo `own` do perfil dele não
+            alcança reserva de outro dono. O cache de idempotência entregou pelo
+            `POST` o que o `GET` protege.
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              allOf:
-                - $ref: "#/components/schemas/PedidoDeOrcamento"
-                - type: object
-                  required: [contact_id]
-                  properties:
-                    contact_id: { type: string, format: uuid }
-                    broker_id:  { type: string, format: uuid }
-                    notes:      { type: string }
+            schema: { $ref: "#/components/schemas/ReservaCriar" }
       responses:
         "201":
           description: Pré-reserva criada
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string, example: /api/v1/reservations/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
         "409":
           description: |
             `DATE_CONFLICT` — alguma unidade do produto ficou ocupada entre a
-            consulta e a gravação. Vem da constraint de exclusão do banco, que é
-            o que torna overbooking impossível mesmo sob concorrência.
+            consulta e a gravação; `details.unit_code` e `details.period` dizem
+            qual e quando. Vem da constraint de exclusão do banco, que é o que
+            torna overbooking impossível mesmo sob concorrência.
+
+            `IDEMPOTENCY_MISMATCH` — a chave já foi usada com outro corpo.
           $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR`, `CAPACITY_EXCEEDED`, `MIN_STAY_NOT_MET`,
+            `DISCOUNT_ABOVE_LIMIT` ou `RATE_NOT_FOUND` — as mesmas regras de
+            `POST /quotes`, aplicadas pelo mesmo motor.
+
+            `COMPOSITION_INCOMPLETE` — a composição do produto não pode ser
+            entregue inteira: produto `all_members` com unidade membro inativa,
+            ou produto sem nenhuma unidade ativa. `details`: `unit_type_code`,
+            `expected_units`, `active_units`, `missing_unit_codes`.
+          $ref: "#/components/responses/Erro"
+
+  /reservations/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Reservas]
+      summary: Detalhe da reserva
+      x-rbac: { recurso: reservations, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Reservas]
+      summary: Substitui os dados editáveis da reserva
+      description: |
+        Substituição integral do **cadastro** da reserva: campo opcional ausente
+        volta ao padrão.
+
+        `PUT` e `PATCH` **não** mexem em datas, produto nem preço. Mudar estadia
+        é `POST /reservations/{id}/reschedule`, que recalcula, cobra a diferença
+        e preserva o histórico; mudar unidade é `reassign-unit`; mudar estado é a
+        ação correspondente. Deixar datas editáveis aqui seria um caminho para
+        alterar `stay_blocks` sem passar pela constraint — e sem gravar a
+        remarcação em lugar nenhum.
+      x-rbac: { recurso: reservations, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReservaAtualizar" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: "`VALIDATION_ERROR` — inclusive `guests_count` acima da capacidade do produto (`CAPACITY_EXCEEDED`)."
+          $ref: "#/components/responses/Erro"
+    patch:
+      tags: [Reservas]
+      summary: Atualiza a reserva
+      description: Campo ausente não muda nada; campo com `null` limpa. Mesmas restrições do `PUT`.
+      x-rbac: { recurso: reservations, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReservaAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
         "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Reservas]
+      summary: Descarta a reserva ainda em `quote`
+      description: |
+        Só apaga o que nunca existiu comercialmente: reserva em `quote`, que não
+        tem `stay_block`, não tem sinal e não entrou no razão.
+
+        A partir de `hold` a resposta é `409 INVALID_STATE_TRANSITION` apontando
+        `/cancel`: apagar reserva quebra o razão e some com a prova de quem
+        segurou a data (db.md §Convenções — soft delete só onde há histórico).
+      x-rbac: { recurso: reservations, acao: excluir }
+      responses:
+        "204": { description: Descartada }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`INVALID_STATE_TRANSITION` — a reserva já saiu de `quote`; use `POST /reservations/{id}/cancel`."
+          $ref: "#/components/responses/Erro"
+
+  /reservations/{id}/full:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Reservas]
+      summary: Monta a tela da reserva numa chamada
+      description: |
+        Reserva + noites + unidades + hóspedes + linha do tempo. Existe pelo
+        mesmo motivo do `/full` do CRM: a tela precisa de cinco consultas, e cinco
+        chamadas encadeadas do navegador significam cinco chances de mostrar
+        meia tela — além de um estado intermediário em que as noites já vieram e
+        os totais ainda não.
+
+        A `timeline` é `reservation_events`, que é **append-only**: criação,
+        confirmação, extensão de hold, realocação de unidade, remarcação,
+        check-in, check-out e cancelamento entram como linhas, ninguém edita.
+      x-rbac: { recurso: reservations, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ReservaCompleta" }
+        "404": { $ref: "#/components/responses/Erro" }
 
   /reservations/{id}/confirm:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     post:
       tags: [Reservas]
       summary: Registra o sinal e confirma a reserva
+      description: |
+        `hold → confirmed`. Numa transação: grava o evento do sinal, marca
+        `confirmed_at`, zera `hold_expires_at` e promove as linhas de
+        `stay_blocks` de `hold` para `confirmed`. A data continua bloqueada — o
+        que muda é que ela deixa de ter prazo de validade.
+
+        ## `deposit_paid_cents` é validado contra o total da reserva
+
+        Ausente significa "recebeu o sinal cheio" e assume `deposit_cents`.
+        Presente, tem de estar em **`1 ≤ deposit_paid_cents ≤ total_cents`** —
+        fora disso é `422 VALIDATION_ERROR`, com `details.field`,
+        `details.total_cents` e `details.max_cents`.
+
+        O teto é o **total**, e não o sinal: hóspede que paga a estadia inteira
+        adiantada é caso comum, e recusar isso obrigaria a gestão a mentir o
+        valor. O piso é 1: confirmar com zero é dizer "recebi nada e a data está
+        vendida", que é precisamente o que `hold` já faz, com prazo.
+
+        Não é validação decorativa. O valor recebido é a **base da devolução** na
+        política de cancelamento, e sem teto ele vira dinheiro inventado. Medido
+        em 26/08/2026: `WH-2026-0001`, total R$ 1.880,00, aceitou
+        `deposit_paid_cents: 9999999999` (R$ 99.999.999,99) e respondeu `200`;
+        `POST /cancel?dry_run=1` na sequência prometeu ao hóspede
+        `refund_cents: 5000000000` — **R$ 50.000.000,00 de reembolso** sobre uma
+        diária de fim de semana, com a retenção de 50% calculada certinho sobre a
+        base errada.
+
+        **Fase 1 não gera recebível nem comissão**: `receivables`, `payables` e
+        `commissions` entram com o módulo financeiro. Até lá o pagamento vive em
+        `reservation_events`, e é dali que `/cancel` lê o sinal pago.
+
+        Hold vencido responde `409 HOLD_EXPIRED` — as unidades já foram
+        liberadas, e confirmar por cima seria vender uma data que talvez já tenha
+        outro dono.
+      x-rbac: { recurso: reservations, acao: editar }
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: |
+            Obrigatório — confirma dinheiro recebido (CLAUDE.md §Convenções de
+            API). Escopada pelo ator, como em `POST /reservations`: o registro é
+            `(usuário autenticado, rota, chave)`. Repetir a chave de outro
+            usuário é requisição nova, nunca o replay da confirmação alheia.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfirmacaoDeReserva" }
       responses:
-        "200": { description: Confirmada }
-        "409": { $ref: "#/components/responses/Erro" }
+        "200":
+          description: Confirmada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `HOLD_EXPIRED` — a pré-reserva venceu antes do sinal.
+            `INVALID_STATE_TRANSITION` — a reserva não está em `hold`.
+            `DATE_CONFLICT` — a data foi tomada enquanto o hold estava vencido.
+            `IDEMPOTENCY_MISMATCH` — chave reutilizada com outro corpo.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — `deposit_paid_cents` fora de
+            `[1, total_cents]` (`details.total_cents`, `details.max_cents`),
+            `method` fora do vocabulário, ou campo desconhecido no corpo.
+          $ref: "#/components/responses/Erro"
 
   /reservations/{id}/cancel:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
     post:
       tags: [Reservas]
       summary: Cancela aplicando a política congelada na reserva
+      description: |
+        Aplica a faixa da **política que a reserva congelou**
+        (`cancellation_policy_id`), calculada sobre o sinal efetivamente pago e a
+        antecedência em dias até o `check_in`, no fuso `America/Fortaleza`.
+        Publicar uma política nova amanhã não altera o cancelamento de hoje.
+
+        `?dry_run=1` calcula e devolve o mesmo corpo **sem executar nada** — é o
+        que a tela mostra antes de a gestão confirmar. `dry_run` na resposta diz
+        qual dos dois aconteceu.
+
+        Executando: a reserva vai para `cancelled`, as linhas de `stay_blocks`
+        vão para `cancelled` (a data libera, o histórico fica) e o evento entra
+        na timeline com o motivo.
+
+        `reason: "no_show"` é o caso especial: a reserva termina em **`no_show`**,
+        não em `cancelled`, e a faixa aplicada é a de menor antecedência
+        (retenção integral). O estado é diferente porque a diferença importa no
+        BI — hóspede que avisou e hóspede que não apareceu não são a mesma linha.
+
+        Cancelar reserva já em `cancelled`, `expired`, `no_show`, `checked_out`
+        ou `closed` é `409 RESERVATION_NOT_CANCELLABLE`.
+      x-rbac: { recurso: reservations, acao: editar }
       parameters:
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - name: dry_run
           in: query
-          schema: { type: boolean }
+          schema: { type: boolean, default: false }
           description: Simula e devolve o valor de devolução sem executar.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeCancelamento" }
       responses:
         "200":
-          description: Resultado do cancelamento
+          description: Resultado do cancelamento (simulado ou executado)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeCancelamento" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`RESERVATION_NOT_CANCELLABLE` — estado atual em `details.status`, estados canceláveis em `details.allowed`."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /reservations/{id}/reschedule:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Reservas]
+      summary: Remarca a estadia preservando o histórico
+      description: |
+        Remarcar **não edita** a reserva: numa transação, a original vai para
+        `cancelled` com `cancel_reason = "remarcacao"` e nasce uma reserva nova
+        com `rebooked_from_id` apontando para ela. O código antigo continua
+        existindo, o cliente continua rastreável, e o BI não perde a venda
+        original.
+
+        A nova é recalculada do zero pelo motor, com a tabela e a política
+        **vigentes hoje** — e `meta.difference_cents` diz quanto falta cobrar
+        (positivo) ou devolver (negativo) em relação ao total antigo.
+
+        A nova reserva herda o estado comercial: original em `confirmed` gera
+        nova em `confirmed` (o sinal acompanha); original em `hold` gera nova em
+        `hold` com prazo recontado.
+
+        As duas coisas acontecem na mesma transação, e por isso o
+        `DATE_CONFLICT` da nova data não deixa a reserva antiga cancelada: ou as
+        duas mudanças valem, ou nenhuma vale.
+      x-rbac: { recurso: reservations, acao: editar }
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: |
+            Obrigatório — cria reserva e move dinheiro. Escopada pelo ator, como
+            em `POST /reservations`: o registro é `(usuário autenticado, rota,
+            chave)`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeRemarcacao" }
+      responses:
+        "201":
+          description: Reserva nova criada; a anterior foi cancelada com motivo `remarcacao`
+          headers:
+            Location:
+              description: URI da reserva nova.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+                  meta: { $ref: "#/components/schemas/MetaDaRemarcacao" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `DATE_CONFLICT` — a data nova não está livre (nada foi alterado).
+            `INVALID_STATE_TRANSITION` — só `hold` e `confirmed` remarcam.
+            `IDEMPOTENCY_MISMATCH` — chave reutilizada com outro corpo.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "As mesmas regras do orçamento: `MIN_STAY_NOT_MET`, `CAPACITY_EXCEEDED`, `DISCOUNT_ABOVE_LIMIT`, `RATE_NOT_FOUND`, `COMPOSITION_INCOMPLETE`, `VALIDATION_ERROR`. Remarcar para um produto que a casa não consegue entregar é o mesmo erro de vendê-lo pela primeira vez."
+          $ref: "#/components/responses/Erro"
+
+  /reservations/{id}/check-in:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Reservas]
+      summary: Registra a entrada do hóspede
+      description: |
+        `confirmed → checked_in`. As linhas de `stay_blocks` **continuam**
+        `confirmed`: o hóspede está dentro, a data segue bloqueada. O que muda é
+        o estado comercial, e a operação passa a enxergar a estadia como em
+        curso.
+
+        O instante entra em `reservation_events` (o `at` do evento), não numa
+        coluna nova de `reservations` — a tabela já nasceu acima do teto de
+        colunas de `db.md`, e um evento append-only registra melhor o "quando"
+        do que uma coluna que alguém pode sobrescrever.
+
+        ## `at` é validado contra o período da reserva
+
+        A data de `at`, resolvida no fuso da propriedade (`America/Fortaleza`),
+        tem de cair em **`[check_in, check_out)`** — a mesma janela half-open das
+        noites vendidas. Fora dela é `422 VALIDATION_ERROR`, com
+        `details.field: at`, `details.check_in`, `details.check_out` e
+        `details.at_date`.
+
+        O limite inferior existe porque entrar antes do `check_in` é ocupar noite
+        que ninguém vendeu — a unidade pode estar com outro hóspede na véspera. O
+        superior é estrito porque a noite do `check_out` não pertence a esta
+        reserva: quem chega nela está fazendo check-in da reserva **seguinte**.
+
+        Sem a validação o registro aceita qualquer coisa e a timeline deixa de
+        ser prova. Medido em 26/08/2026: `WH-2026-0001`, estadia de 14 a
+        16/09/2026, aceitou `at: 2019-01-01T10:00:00-03:00` com `200` e gravou o
+        evento `checked_in` sete anos antes da reserva existir.
+      x-rbac: { recurso: reservations, acao: editar }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegistroDeEstadia" }
+      responses:
+        "200":
+          description: Check-in registrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`INVALID_STATE_TRANSITION` — só reserva `confirmed` faz check-in."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — a data de `at` (fuso da propriedade) está fora de `[check_in, check_out)`. `details`: `field`, `at_date`, `check_in`, `check_out`."
+          $ref: "#/components/responses/Erro"
+
+  /reservations/{id}/check-out:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Reservas]
+      summary: Registra a saída do hóspede e libera as unidades
+      description: |
+        `checked_in → checked_out`. **Aqui o calendário libera**: as linhas de
+        `stay_blocks` da reserva deixam de contar para a constraint. É a
+        transição em que a unidade volta ao estoque vendável.
+
+        Como o intervalo é half-open, a noite do check-out nunca foi vendida a
+        este hóspede: a data já estava livre para um back-to-back, e nada precisa
+        ser "devolvido" ao calendário além do fechamento do bloco.
+
+        ## O bloco vai para `completed`, não para `cancelled`
+
+        As linhas de `stay_blocks` da reserva passam ao estado **terminal
+        `completed`**: fora da cláusula `WHERE status IN ('hold','confirmed')`
+        da constraint (a data libera na hora) e **visível no mapa** (a estadia
+        que aconteceu continua lá).
+
+        `completed` é o nome no banco e em `Bloqueio.status`. Na célula do mapa
+        o mesmo bloco aparece como `checked_out`, que é vocabulário de
+        apresentação — ver `LinhaDoMapa.days[].status`. A reserva, essa, vai para
+        o estado `checked_out`.
+
+        `cancelled` seria mentira e apagaria a prova. Estadia cumprida não é
+        estadia cancelada, e o mapa esconde bloco `cancelled` de propósito —
+        então marcar assim faz a hospedagem sumir do calendário. Medido em
+        26/08/2026: depois do check-out de `WH-2026-0001` (14 a 16/09, `AP-01`),
+        os blocos ficaram `cancelled` e `GET /availability/units` passou a
+        devolver 14 e 15/09 como `livre`, com `reservation_code: null` — quatro
+        noites de receita real desapareceram do mapa de ocupação, que é a fonte
+        de ocupação, ADR e RevPAR.
+
+        No mapa, o bloco `completed` **nunca esconde uma ocupação viva**: se o
+        mesmo dia tem também bloco `hold` ou `confirmed` (back-to-back, ou
+        realocação), vence o ativo. O histórico aparece onde não há mais nada por
+        cima.
+
+        `completed` é terminal: bloco nesse estado não volta a `confirmed`, e
+        `DELETE /blocks/{id}` continua recusando bloco de reserva.
+
+        `closed` (acerto financeiro final e devolução de caução) é passo do
+        módulo financeiro e **não** tem endpoint na Fase 1.
+      x-rbac: { recurso: reservations, acao: editar }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RegistroDeEstadia" }
+      responses:
+        "200":
+          description: Check-out registrado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`INVALID_STATE_TRANSITION` — só reserva `checked_in` faz check-out."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — a data de `at` (fuso da propriedade) está fora
+            de `[check_in, check_out]` ou é anterior ao `at` do evento
+            `checked_in`. O teto é **inclusivo** aqui, ao contrário do check-in:
+            a noite do `check_out` não é vendida, mas é a manhã em que o hóspede
+            sai — half-open conta noites, não pessoas na porta.
+
+  /reservations/{id}/reassign-unit:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Reservas]
+      summary: Troca a unidade física alocada e, se pedido, trava a escolha
+      description: |
+        As unidades são nominais, então trocar `AP-02` por `AP-01` sem mexer em
+        datas nem em preço é operação legítima — e é o que salva um conflito de
+        canal sem cancelar ninguém.
+
+        Numa transação: fecha o `stay_block` da unidade antiga (`cancelled`) e
+        insere o da nova no mesmo período. Se a nova estiver ocupada, a constraint
+        recusa (`23P01`) e **nada muda** — a reserva continua na unidade antiga.
+        Esse caso vira `409 UNIT_NOT_AVAILABLE`, e não `DATE_CONFLICT`, porque a
+        estadia não está em disputa: só a unidade está.
+
+        `locked = true` grava `reservation_units.locked` e tira a reserva da
+        realocação automática — é o hóspede que pediu aquele apartamento.
+
+        Produto `all_members` (a White House Completa) não realoca: ele já ocupa
+        todas as unidades, não há para onde mover.
+      x-rbac: { recurso: reservations, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeRealocacao" }
+      responses:
+        "200":
+          description: Unidade trocada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Reserva" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `UNIT_NOT_AVAILABLE` — a unidade de destino está ocupada no período
+            (`details.unit_code`, `details.period`).
+            `INVALID_STATE_TRANSITION` — reserva sem calendário bloqueado
+            (`quote`, `cancelled`, `expired`, `no_show`, `checked_out`,
+            `closed`), ou produto `all_members`.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — a unidade de destino não compõe o produto da reserva."
+          $ref: "#/components/responses/Erro"
+
+  /reservations/{id}/extend-hold:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Reservas]
+      summary: Estende o prazo da pré-reserva
+      description: |
+        Ação **explícita e auditada** (spec §5), nunca automática: cada extensão
+        entra em `reservation_events` com autor e prazo novo. Pré-reserva que se
+        renova sozinha é data morta no calendário.
+
+        `hours` ausente usa `hold_hours` da política congelada na reserva. O novo
+        prazo é contado a partir de `now()`, não do vencimento antigo — hold
+        vencido não se "conserta" para trás.
+
+        O limite de extensões é configurável; estourá-lo é
+        `409 HOLD_LIMIT_REACHED`, com `details.max_extensions` e
+        `details.extensions_count`. A decisão passa a ser humana: confirmar com
+        sinal ou soltar a data.
+      x-rbac: { recurso: reservations, acao: editar }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeExtensaoDeHold" }
+      responses:
+        "200":
+          description: Prazo estendido
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeExtensaoDeHold" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `INVALID_STATE_TRANSITION` — a reserva não está em `hold`.
+            `HOLD_EXPIRED` — o prazo já venceu e as unidades foram liberadas; crie outra pré-reserva.
+            `HOLD_LIMIT_REACHED` — limite de extensões atingido.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /blocks:
+    post:
+      tags: [Reservas]
+      summary: Bloqueio operacional — manutenção ou uso do proprietário
+      description: |
+        Ocupação sem reserva. Vive na **mesma** tabela `stay_blocks` que as
+        reservas, e não num calendário paralelo: é o que garante que uma
+        manutenção impeça uma venda pela mesma constraint que impede duas vendas.
+
+        Uma linha por unidade, inseridas **em ordem de `units.code`** pelo mesmo
+        motivo de sempre (deadlock). Qualquer unidade ocupada faz a transação
+        inteira falhar com `409 DATE_CONFLICT` — bloqueio parcial não existe: a
+        equipe de manutenção não pode achar que reservou a casa e receber metade.
+
+        `period` é half-open: bloquear `[2026-05-10, 2026-05-12)` ocupa 10 e 11, e
+        deixa 12 livre para check-in.
+
+        `source` aceita `maintenance` e `owner_hold`. `ota` é criado pelo
+        importador de canais (Fase 4), não por esta rota, e `reservation` nasce
+        com a reserva.
+
+        ## O bloqueio tem janela máxima
+
+        Dois tetos, os dois em `422 VALIDATION_ERROR`:
+
+        - **Duração ≤ 365 noites**, com o erro em `to` (a data que o operador
+          encurta). Manutenção e uso do proprietário se medem em dias ou
+          semanas; um ano é folgado para a temporada mais longa que a casa
+          consegue justificar.
+        - **`from` ≤ hoje + 3 anos**, no fuso da PROPRIEDADE e não do processo,
+          com o erro em `from`.
+
+        Medido em 26/08/2026, antes dos tetos: `POST /blocks` de 01/01/2040 a
+        01/01/2050 sobre as 8 unidades respondeu `201` — 29.224 noites-unidade a
+        catorze anos de distância, onde nem o tarifário nem a política comercial
+        alcançam, e tudo isso com uma tecla errada. Com os tetos, o pior caso é
+        8 × 365 dentro do horizonte de venda.
+
+        **Não é permissão maior**: a permissão já é simétrica, e exigir `admin`
+        só mudaria quem erra de dedo — o administrador digita `2050` tão fácil
+        quanto o corretor. Por isso o teto de duração mora no DTO e vale para
+        todos.
+
+        `from` **no passado continua livre**: registrar manutenção que já
+        aconteceu é legítimo. E quem precisa de mais tem dois caminhos, nenhum
+        deles esta rota: reforma de temporada inteira se parte em bloqueios de
+        até um ano (cada linha vira decisão revisável e liberável sozinha, que é
+        exatamente o que uma linha de dez anos impede), e unidade que sai do
+        catálogo é `active = false` no inventário — retirada permanente é decisão
+        de inventário, não de calendário.
+
+        ## Quem bloqueia, desbloqueia
+
+        `POST /blocks` (`calendar:criar`) e `DELETE /blocks/{id}`
+        (`calendar:excluir`) são um par **simétrico**: a matriz de um perfil
+        concede as duas ou nenhuma. Conceder só a criação entrega ao perfil o
+        poder de tirar data do estoque sem o poder de devolvê-la, e a única saída
+        vira chamar um administrador.
+
+        Não é hipótese. Medido em 26/08/2026 com a matriz semeada, em que
+        `corretor` tem `calendar` em `ver+criar` e escopo `own`: o corretor
+        bloqueou a `COB-01` de 02/01 a 01/03/2027 — dois meses de alta temporada
+        na Cobertura — recebeu `201`, e o `DELETE` do bloco que ele mesmo acabou
+        de criar respondeu `403 FORBIDDEN`. A tela dele oferece o cadeado e
+        esconde a chave.
+
+        A simetria é regra do **catálogo e da matriz** (`cmd/seed/acesso.go`),
+        não do handler: `calendar` já declara as quatro ações, e é o seed que
+        precisa parar de conceder `criar` sem `excluir`.
+
+        ## Escopo `own`: o bloqueio tem dono
+
+        `stay_blocks.created_by` é o dono do bloqueio operacional. Com escopo
+        `own`, esta rota grava `created_by = ator` (e não aceita gravar em nome
+        de outro), e `DELETE` só alcança o que o ator criou. Com escopo `all`, a
+        gestão libera qualquer um — que é o que a operação precisa quando o
+        autor está de folga.
+      x-rbac: { recurso: calendar, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BloqueioCriar" }
+      responses:
+        "201":
+          description: Bloqueio criado (uma linha por unidade)
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data:
-                    type: object
-                    properties:
-                      label:           { type: string, example: Retenção de 50% do sinal }
-                      refund_cents:    { type: integer, format: int64 }
-                      retained_cents:  { type: integer, format: int64 }
+                    type: array
+                    items: { $ref: "#/components/schemas/Bloqueio" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`DATE_CONFLICT` — alguma unidade já está ocupada no período (`details.unit_code`, `details.period`). Nenhuma linha foi criada."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR`. `details.to` — `to` não é posterior a `from`, ou a
+            janela passa de 365 noites. `details.from` — o início cai além de
+            hoje + 3 anos, no fuso da propriedade. `details.source` — fora de
+            `maintenance`/`owner_hold`. `details.unit_ids` — mais de 100 unidades.
+          $ref: "#/components/responses/Erro"
+
+  /blocks/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [Reservas]
+      summary: Libera um bloqueio operacional
+      description: |
+        Marca o bloqueio como `cancelled` — a data volta a ser vendável e o
+        registro fica. Uma linha por chamada: liberar só um dos dias/unidades de
+        uma manutenção é caso real.
+
+        Bloqueio com `reservation_id` (`source = reservation`) responde
+        `409 INVALID_STATE_TRANSITION`: quem solta a data de uma reserva é
+        `/cancel`, `/check-out` ou o job de expiração. Apagar o bloco por fora
+        deixaria a reserva `confirmed` sem calendário, e ninguém veria.
+
+        **Par simétrico de `POST /blocks`** — a matriz concede `calendar:criar` e
+        `calendar:excluir` juntas ou nenhuma. O motivo está escrito na criação:
+        quem pode tirar a data do estoque tem de poder devolvê-la.
+
+        **Escopo `own`**: o filtro é `created_by = ator`, aplicado no SQL. Bloco
+        de outro dono responde `404 NOT_FOUND`, não `403` — pela mesma razão que
+        uma reserva de outro dono responde `404` ao corretor: `403` confirmaria a
+        existência do registro para quem não pode enxergá-lo.
+      x-rbac: { recurso: calendar, acao: excluir }
+      responses:
+        "204": { description: Liberado }
+        "404":
+          description: "`NOT_FOUND` — bloqueio inexistente nesta propriedade, ou de outro dono quando o escopo do ator é `own`."
+          $ref: "#/components/responses/Erro"
+        "409":
+          description: "`INVALID_STATE_TRANSITION` — bloqueio de reserva não se libera por aqui, e bloqueio já em estado terminal (`cancelled`, `expired`, `completed`) não se libera duas vezes."
+          $ref: "#/components/responses/Erro"
 
 components:
   securitySchemes:
@@ -828,10 +3170,19 @@ components:
                 properties:
                   code:
                     type: string
+                    description: |
+                      Vocabulário fechado e estável — o front reage ao `code`,
+                      nunca ao texto de `message`. Espelhado em
+                      `internal/platform/apperr`: acrescentar código aqui obriga
+                      a acrescentar lá, e o contrário também.
                     enum: [VALIDATION_ERROR, UNAUTHORIZED, FORBIDDEN, NOT_FOUND, DATE_CONFLICT,
                            MIN_STAY_NOT_MET, CAPACITY_EXCEEDED, DISCOUNT_ABOVE_LIMIT, HOLD_EXPIRED,
                            IDEMPOTENCY_MISMATCH, RATE_LIMITED, INVALID_CREDENTIALS, TOKEN_INVALID,
-                           TOKEN_REUSED, EMAIL_IN_USE, ROLE_IMMUTABLE, ROLE_IN_USE, INTERNAL]
+                           TOKEN_REUSED, EMAIL_IN_USE, ROLE_IMMUTABLE, ROLE_IN_USE,
+                           RATE_NOT_FOUND, POLICY_IMMUTABLE, CODE_IN_USE, RESOURCE_IN_USE,
+                           INVALID_STATE_TRANSITION, RESERVATION_NOT_CANCELLABLE,
+                           UNIT_NOT_AVAILABLE, COMPOSITION_INCOMPLETE, HOLD_LIMIT_REACHED,
+                           INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
 
@@ -939,72 +3290,1061 @@ components:
         phone:    { type: [string, "null"] }
         active:   { type: boolean, description: "`false` bloqueia o login e revoga as sessões — mesmo efeito do `DELETE`." }
 
+
+    # ─────────────────────────── Inventário ───────────────────────────
+
+    Propriedade:
+      type: object
+      properties:
+        id:       { type: string, format: uuid }
+        name:     { type: string, example: White House Village }
+        slug:     { type: string, example: white-house-village, description: "Estável: chave natural do seed." }
+        timezone: { type: string, example: America/Fortaleza, description: "Define o \"hoje\" do sistema inteiro — antecedência de cancelamento, expiração de hold e classificação de noite saem daqui." }
+        address:  { type: [string, "null"] }
+        city:     { type: [string, "null"] }
+        state:    { type: [string, "null"] }
+        active:   { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    PropriedadeAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional. Campo ausente não muda nada; `null` limpa.
+      properties:
+        name:     { type: string, minLength: 2 }
+        timezone: { type: string, example: America/Fortaleza }
+        address:  { type: [string, "null"] }
+        city:     { type: [string, "null"] }
+        state:    { type: [string, "null"] }
+        active:   { type: boolean }
+
+    Consumo:
+      type: string
+      enum: [one_member, all_members]
+      description: |
+        Quantas unidades da composição uma venda deste produto ocupa.
+
+        `one_member` — uma unidade, escolhida pelo alocador (apto 2 suítes,
+        suíte da piscina, cobertura).
+
+        `all_members` — **todas** (a White House Completa). A venda insere uma
+        linha de `stay_blocks` por unidade, e é daí que a exclusividade vem de
+        graça: qualquer unidade ocupada estoura a constraint.
+
+    Produto:
+      type: object
+      description: O que se vende (`unit_types`). Não confundir com `Unidade`, que é o que se ocupa e se limpa.
+      properties:
+        id:   { type: string, format: uuid }
+        code: { type: string, example: COMPLETA, description: "Estável dentro da propriedade — é por ele que seed, filtros e testes referenciam o produto." }
+        name: { type: string, example: White House Completa }
+        capacity:
+          type: integer
+          minimum: 1
+          example: 24
+          description: |
+            Limite operacional **declarado**, não somado. A Completa acomoda 24
+            embora a soma das unidades dê 40: é decisão dos proprietários sobre
+            evento, e o sistema não a recalcula.
+        consumes: { $ref: "#/components/schemas/Consumo" }
+        cleaning_fee_cents:
+          type: integer
+          format: int64
+          minimum: 0
+          example: 90000
+          description: Cobrada **uma vez por estadia**, nunca por noite, e o desconto nunca incide sobre ela.
+        description: { type: [string, "null"] }
+        sort_order:  { type: integer, description: "Ordem do catálogo comercial na tela. É dado, não alfabética." }
+        active:      { type: boolean }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    ProdutoCriar:
+      type: object
+      description: Corpo do `POST` e do `PUT` (substituição integral).
+      required: [code, name, capacity, consumes]
+      properties:
+        code:     { type: string, minLength: 2, example: AP2S }
+        name:     { type: string, minLength: 2 }
+        capacity: { type: integer, minimum: 1 }
+        consumes: { $ref: "#/components/schemas/Consumo" }
+        cleaning_fee_cents: { type: integer, format: int64, minimum: 0, default: 0 }
+        description: { type: [string, "null"] }
+        sort_order:  { type: integer, default: 0 }
+        active:      { type: boolean, default: true }
+
+    ProdutoAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional. Campo ausente não muda nada; `null` limpa.
+      properties:
+        code:     { type: string, minLength: 2 }
+        name:     { type: string, minLength: 2 }
+        capacity: { type: integer, minimum: 1 }
+        consumes: { $ref: "#/components/schemas/Consumo" }
+        cleaning_fee_cents: { type: integer, format: int64, minimum: 0 }
+        description: { type: [string, "null"] }
+        sort_order:  { type: integer }
+        active:      { type: boolean }
+
+    Unidade:
+      type: object
+      description: |
+        A unidade física (`units`) — o que é efetivamente ocupado e limpo, e o
+        que a constraint `stay_no_overlap` protege.
+
+        Não carrega produto: o vínculo é a composição (`unit_type_members`), e é
+        muitos-para-muitos de propósito — `AP-01` pertence ao Apartamento 2
+        Suítes **e** à White House Completa.
+      properties:
+        id:   { type: string, format: uuid }
+        code: { type: string, example: AP-01, description: "Identidade operacional e chave de ordenação. Toda inserção em lote ordena por ele — ordens divergentes causam deadlock." }
+        name: { type: string, example: Apartamento 01 }
+        floor: { type: [string, "null"], example: Térreo }
+        notes: { type: [string, "null"] }
+        sort_order: { type: integer }
+        active:     { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    UnidadeCriar:
+      type: object
+      description: Corpo do `POST` e do `PUT` (substituição integral).
+      required: [code, name]
+      properties:
+        code:  { type: string, minLength: 2, example: AP-01 }
+        name:  { type: string, minLength: 2 }
+        floor: { type: [string, "null"] }
+        notes: { type: [string, "null"] }
+        sort_order: { type: integer, default: 0 }
+        active:     { type: boolean, default: true }
+
+    UnidadeAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional.
+      properties:
+        code:  { type: string, minLength: 2 }
+        name:  { type: string, minLength: 2 }
+        floor: { type: [string, "null"] }
+        notes: { type: [string, "null"] }
+        sort_order: { type: integer }
+        active:     { type: boolean }
+
+    UnidadeDaComposicao:
+      type: object
+      description: Item de `unit_type_members`, sempre ordenado por `code`.
+      properties:
+        unit_id:   { type: string, format: uuid }
+        unit_code: { type: string, example: AP-01 }
+        unit_name: { type: string }
+        active:    { type: boolean, description: "Unidade inativa continua na composição, mas não é alocada nem contada como livre." }
+
+    # ─────────────────────── Tarifário e política ─────────────────────
+
+    TabelaDeTarifas:
+      type: object
+      properties:
+        id:   { type: string, format: uuid }
+        name: { type: string, example: Tabela Comercial V1, description: "Chave natural `UNIQUE (property_id, name)` — é por ela que o seed reencontra a própria linha." }
+        valid_from: { type: string, format: date }
+        valid_to:   { type: [string, "null"], format: date, description: "`null` = sem fim." }
+        active:     { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    TabelaDeTarifasEntrada:
+      type: object
+      required: [name, valid_from]
+      properties:
+        name:       { type: string, minLength: 2 }
+        valid_from: { type: string, format: date }
+        valid_to:   { type: [string, "null"], format: date }
+        active:     { type: boolean, default: true }
+
+    TabelaDeTarifasAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional.
+      properties:
+        name:       { type: string, minLength: 2 }
+        valid_from: { type: string, format: date }
+        valid_to:   { type: [string, "null"], format: date }
+        active:     { type: boolean }
+
+    Tarifa:
+      type: object
+      description: Uma célula da grade produto × tipo de data. Chave `UNIQUE (rate_table_id, unit_type_id, date_type)`.
+      properties:
+        id:            { type: string, format: uuid }
+        rate_table_id: { type: string, format: uuid }
+        unit_type_id:  { type: string, format: uuid }
+        unit_type_code: { type: string, example: AP2S, description: "Só leitura, para a grade não precisar de outra consulta." }
+        date_type:     { $ref: "#/components/schemas/TipoDeData" }
+        amount_cents:  { type: integer, format: int64, minimum: 1, example: 85000, description: "Valor da diária, em centavos. Nunca float." }
+
+    TarifaEntrada:
+      type: object
+      required: [rate_table_id, unit_type_id, date_type, amount_cents]
+      properties:
+        rate_table_id: { type: string, format: uuid }
+        unit_type_id:  { type: string, format: uuid }
+        date_type:     { $ref: "#/components/schemas/TipoDeData" }
+        amount_cents:  { type: integer, format: int64, minimum: 1 }
+
+    TarifaAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional.
+      properties:
+        amount_cents: { type: integer, format: int64, minimum: 1 }
+        date_type:    { $ref: "#/components/schemas/TipoDeData" }
+        unit_type_id: { type: string, format: uuid }
+
+    TarifaDaGrade:
+      type: object
+      description: Célula no corpo de `POST /rates/bulk`. A tabela vem uma vez só, no nível de cima.
+      required: [unit_type_id, date_type, amount_cents]
+      properties:
+        unit_type_id: { type: string, format: uuid }
+        date_type:    { $ref: "#/components/schemas/TipoDeData" }
+        amount_cents: { type: integer, format: int64, minimum: 1 }
+
+    GradeParaSalvar:
+      type: object
+      description: |
+        Corpo do `POST /rates/bulk`. Duas coisas, e a distinção é o coração da
+        rota: **`unit_type_ids` é o escopo** (quais produtos esta chamada
+        reescreve) e **`rates` é o conteúdo** (as células que ficam).
+      required: [rate_table_id]
+      properties:
+        rate_table_id: { type: string, format: uuid }
+        unit_type_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: |
+            Os produtos que esta chamada substitui. Ausente, vale o conjunto de
+            `unit_type_id` distintos que aparecem em `rates` — o caminho comum da
+            tela.
+
+            Presente, é o **escopo declarado**: todo produto da lista tem a grade
+            reescrita, e produto da lista **sem nenhuma célula em `rates` é
+            zerado**. É por isso que a lista existe separada: apagar tarifa passa
+            a exigir nomear o produto, em vez de acontecer por omissão.
+
+            Vazia (`[]`) com `rates` vazio não faz nada e responde `200` com
+            `meta` zerado — chamada sem efeito não é erro, é a tela salvando um
+            formulário que ninguém alterou.
+        rates:
+          type: array
+          default: []
+          description: |
+            As células que ficam, para os produtos do escopo. Um produto pode
+            aparecer com todas as suas células, com algumas (as ausentes são
+            removidas) ou com nenhuma (é zerado).
+          items: { $ref: "#/components/schemas/TarifaDaGrade" }
+
+    MetaDaGrade:
+      type: object
+      description: |
+        O que a chamada fez, em números. A tela mostra "18 células mantidas, 6
+        atualizadas, 0 removidas" — e é assim que um `removed` inesperado aparece
+        para quem salvou, em vez de ser descoberto quando a venda falha.
+      properties:
+        unit_type_ids:
+          type: array
+          items: { type: string, format: uuid }
+          description: O escopo efetivamente aplicado — útil quando o cliente não mandou a lista e quer conferir o que a API deduziu de `rates`.
+        created: { type: integer, description: Células que não existiam e passaram a existir. }
+        updated: { type: integer, description: "Células que existiam e mudaram de `amount_cents`. Célula reenviada com o mesmo valor não conta aqui — ela é `unchanged`." }
+        unchanged: { type: integer, description: Células reenviadas idênticas ao que já estava gravado. }
+        removed:  { type: integer, description: "Células que existiam nos produtos do escopo e não vieram no corpo. **Só produto do escopo entra nesta conta** — é este número que a semântica antiga inflava com as células de quem nem foi citado." }
+
+    Feriado:
+      type: object
+      properties:
+        id:     { type: string, format: uuid }
+        date:   { type: string, format: date, description: "Chave natural `UNIQUE (property_id, date)`." }
+        name:   { type: string, example: Independência }
+        active: { type: boolean, description: Feriado inativo deixa de classificar a noite como `feriado` nos cálculos seguintes. }
+
+    FeriadoEntrada:
+      type: object
+      required: [date, name]
+      properties:
+        date:   { type: string, format: date }
+        name:   { type: string, minLength: 2 }
+        active: { type: boolean, default: true }
+
+    FeriadoAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional.
+      properties:
+        date:   { type: string, format: date }
+        name:   { type: string, minLength: 2 }
+        active: { type: boolean }
+
+    PeriodoEspecial:
+      type: object
+      description: |
+        Faixa do calendário comercial, **inclusiva nas duas pontas**
+        (`starts_on`..`ends_on`) — ao contrário da estadia, que é half-open.
+        Períodos podem se sobrepor; a precedência resolve.
+      properties:
+        id:   { type: string, format: uuid }
+        name: { type: string, example: Réveillon 2026/2027, description: "Chave natural `UNIQUE (property_id, name)` — por isso carrega o ano: o Réveillon do ano seguinte é linha nova, não edição desta." }
+        kind: { type: string, enum: [reveillon, carnaval, alta, evento] }
+        starts_on: { type: string, format: date }
+        ends_on:   { type: string, format: date, description: "Inclusivo." }
+        active:    { type: boolean }
+
+    PeriodoEspecialEntrada:
+      type: object
+      required: [name, kind, starts_on, ends_on]
+      properties:
+        name: { type: string, minLength: 2 }
+        kind: { type: string, enum: [reveillon, carnaval, alta, evento] }
+        starts_on: { type: string, format: date }
+        ends_on:   { type: string, format: date }
+        active:    { type: boolean, default: true }
+
+    PeriodoEspecialAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional.
+      properties:
+        name: { type: string, minLength: 2 }
+        kind: { type: string, enum: [reveillon, carnaval, alta, evento] }
+        starts_on: { type: string, format: date }
+        ends_on:   { type: string, format: date }
+        active:    { type: boolean }
+
+    MinimoDeNoites:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        rate_table_id: { type: string, format: uuid }
+        date_type:     { $ref: "#/components/schemas/TipoDeData" }
+        nights:        { type: integer, minimum: 1, example: 4, description: "Vale o **maior** mínimo entre as noites da estadia." }
+
+    MinimoDeNoitesEntrada:
+      type: object
+      required: [rate_table_id, date_type, nights]
+      properties:
+        rate_table_id: { type: string, format: uuid }
+        date_type:     { $ref: "#/components/schemas/TipoDeData" }
+        nights:        { type: integer, minimum: 1 }
+
+    MinimoDeNoitesAtualizar:
+      type: object
+      description: Corpo do `PATCH` — tudo opcional.
+      properties:
+        date_type: { $ref: "#/components/schemas/TipoDeData" }
+        nights:    { type: integer, minimum: 1 }
+
+    PoliticaComercial:
+      type: object
+      description: |
+        Versionada. A reserva grava `policy_version` na criação, e é essa versão
+        que vale para ela até o fim — publicar uma política nova não reprecifica
+        nem re-arbitra nada que já foi emitido.
+      properties:
+        id:      { type: string, format: uuid }
+        version: { type: integer, description: "Só leitura. O servidor atribui `max(version) + 1` em cada `PUT`." }
+        deposit_pct:      { type: number, example: 50, description: "Sinal para confirmar, em % do total." }
+        balance_due_days: { type: integer, example: 7, description: "Saldo vence N dias antes do check-in." }
+        hold_hours:       { type: integer, example: 48, description: "Validade da pré-reserva sem pagamento." }
+        discount_auto_pct:     { type: number, example: 5,  description: "Até aqui a gestão fecha sozinha (`discount_authority = gestao`)." }
+        discount_approval_pct: { type: number, example: 10, description: "Até aqui, com aprovação do proprietário (`proprietario`). Acima, `negado` — e o orçamento não sai." }
+        event_deposit_cents:   { type: integer, format: int64, example: 200000, description: "Caução de evento, cobrada como recebível reembolsável." }
+        valid_from: { type: string, format: date }
+        created_at: { type: string, format: date-time }
+
+    PoliticaComercialEntrada:
+      type: object
+      description: |
+        Corpo do `PUT`. `version` **não** é aceito: quem numera é o servidor.
+      required: [deposit_pct, balance_due_days, hold_hours, discount_auto_pct, discount_approval_pct, valid_from]
+      properties:
+        deposit_pct:      { type: number, minimum: 0, maximum: 100 }
+        balance_due_days: { type: integer, minimum: 0 }
+        hold_hours:       { type: integer, minimum: 1 }
+        discount_auto_pct:     { type: number, minimum: 0, maximum: 100 }
+        discount_approval_pct: { type: number, minimum: 0, maximum: 100, description: "Precisa ser `>= discount_auto_pct` — a faixa de aprovação não pode ser menor que a automática." }
+        event_deposit_cents:   { type: integer, format: int64, minimum: 0, default: 0 }
+        valid_from: { type: string, format: date, description: "Não pode ser anterior ao `valid_from` da vigente." }
+
+    FaixaDeCancelamento:
+      type: object
+      description: |
+        Faixa por antecedência, em dias até o `check_in`. `null` nos limites é
+        "sem piso" / "sem teto" — é o `-1` do `booking.Tier` traduzido para SQL.
+      properties:
+        days_before_min: { type: [integer, "null"], example: 7,  description: "Inclusivo. `null` = sem piso." }
+        days_before_max: { type: [integer, "null"], example: 29, description: "Inclusivo. `null` = sem teto." }
+        refund_pct:      { type: number, example: 50, description: "Percentual **do sinal** devolvido." }
+        label:           { type: string, example: Retenção de 50% do sinal, description: É este texto que a tela mostra e que volta em `/cancel`. }
+        sort_order:      { type: integer, description: "Ordem de avaliação, da mais generosa à mais restritiva. Chave natural `UNIQUE (policy_id, sort_order)`." }
+
+    PoliticaDeCancelamento:
+      type: object
+      properties:
+        id:      { type: string, format: uuid }
+        version: { type: integer, description: Só leitura — atribuída pelo servidor. }
+        name:    { type: string, example: Padrão White House }
+        valid_from: { type: string, format: date }
+        tiers:
+          type: array
+          description: Ordenadas por `sort_order`.
+          items: { $ref: "#/components/schemas/FaixaDeCancelamento" }
+
+    PoliticaDeCancelamentoEntrada:
+      type: object
+      description: Corpo do `PUT`. Cria versão nova com as faixas inteiras; `version` é do servidor.
+      required: [name, valid_from, tiers]
+      properties:
+        name:       { type: string, minLength: 2 }
+        valid_from: { type: string, format: date }
+        tiers:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/FaixaDeCancelamento" }
+
+    # ────────────────── Disponibilidade e orçamento ───────────────────
+
     PedidoDeOrcamento:
       type: object
-      required: [unit_type_id, check_in, check_out, guests]
+      description: |
+        O pedido. Nenhum valor entra por aqui: o servidor recalcula tudo pelo
+        motor `internal/domain/booking`.
+      required: [unit_type_id, check_in, check_out, guests_count]
       properties:
         unit_type_id: { type: string, format: uuid }
         check_in:     { type: string, format: date }
         check_out:    { type: string, format: date, description: "Exclusivo: a noite do check-out não é cobrada." }
-        guests:       { type: integer, minimum: 1 }
-        discount_pct: { type: number, default: 0 }
-        is_event:     { type: boolean, default: false }
+        guests_count:
+          type: integer
+          minimum: 1
+          description: |
+            Número de hóspedes. **Era `guests` até 26/08/2026** — o mesmo dado
+            tinha dois nomes, `guests` na criação e `guests_count` na edição e em
+            toda resposta. Quem escrevia o cliente acertava a criação e errava a
+            edição sem receber erro nenhum: medido, `PATCH` com `{"guests": 6}`
+            respondia `200` e mantinha 4.
+        discount_pct: { type: number, default: 0, minimum: 0, maximum: 100 }
+        is_event:     { type: boolean, default: false, description: "`true` acrescenta a caução de evento da política ao total." }
+        rate_table_id:
+          type: string
+          format: uuid
+          description: |
+            Força uma tabela específica em vez da vigente. Existe para reproduzir
+            um orçamento antigo centavo a centavo — não para escolher preço na
+            venda.
+        policy_version:
+          type: integer
+          description: Idem, para a política comercial.
+
+    LinhaDoOrcamento:
+      type: object
+      description: As noites agrupadas por tipo de tarifa, na ordem em que o hóspede vive a estadia.
+      properties:
+        date_type: { $ref: "#/components/schemas/TipoDeData" }
+        label:     { type: string, example: Fim de semana }
+        nights:    { type: integer, example: 2 }
+        unit_price_cents: { type: integer, format: int64 }
+        subtotal_cents:   { type: integer, format: int64 }
+
+    NoiteDoOrcamento:
+      type: object
+      properties:
+        date:        { type: string, format: date }
+        date_type:   { $ref: "#/components/schemas/TipoDeData" }
+        label:       { type: string, example: Réveillon }
+        price_cents: { type: integer, format: int64 }
 
     Orcamento:
       type: object
+      description: |
+        Saída de `booking.Build`. O cálculo vem aberto de propósito: a gestão
+        precisa explicar o número ao hóspede, e o front nunca recalcula nada.
+
+        `total = subtotal − desconto + limpeza + caução`. O arredondamento
+        acontece **no total**, nunca noite a noite.
       properties:
-        night_count:  { type: integer }
-        subtotal_cents: { type: integer, format: int64 }
-        discount_pct: { type: number }
-        discount_cents: { type: integer, format: int64, description: "Incide só sobre as diárias." }
-        cleaning_cents: { type: integer, format: int64 }
-        event_deposit_cents: { type: integer, format: int64 }
-        total_cents:  { type: integer, format: int64 }
-        deposit_cents: { type: integer, format: int64, description: "Sinal para confirmar." }
-        balance_cents: { type: integer, format: int64 }
-        min_nights:   { type: integer }
-        discount_authority: { type: string, enum: [gestao, proprietario, negado] }
+        night_count:    { type: integer }
+        subtotal_cents: { type: integer, format: int64, description: Soma das noites. }
+        discount_pct:   { type: number }
+        discount_cents: { type: integer, format: int64, description: "Incide **só** sobre as diárias — nunca sobre limpeza nem sobre caução." }
+        cleaning_cents: { type: integer, format: int64, description: Cobrada uma vez por estadia. }
+        event_deposit_cents: { type: integer, format: int64, description: "Caução de evento, reembolsável. Zero quando `is_event = false`." }
+        total_cents:    { type: integer, format: int64 }
+        deposit_cents:  { type: integer, format: int64, description: "Sinal para confirmar (`total × deposit_pct`)." }
+        balance_cents:  { type: integer, format: int64, description: "`total − sinal`, vencendo `balance_due_days` antes do check-in." }
+        avg_nightly_cents: { type: integer, format: int64, description: "`total / noites` — a diária média que a tela mostra." }
+        min_nights:     { type: integer, description: "O **maior** mínimo entre as noites da estadia." }
+        discount_authority:
+          type: string
+          enum: [gestao, proprietario, negado]
+          description: |
+            Alçada do desconto pedido, pela política vigente: `gestao` fecha
+            agora, `proprietario` exige aprovação, `negado` não sai (a resposta
+            é `422 DISCOUNT_ABOVE_LIMIT`).
+        policy_version: { type: integer, description: A versão que este cálculo usou — a mesma que a reserva congelaria. }
+        rate_table_id:  { type: string, format: uuid, description: A tabela de tarifas usada. }
         lines:
           type: array
-          items:
-            type: object
-            properties:
-              date_type:  { $ref: "#/components/schemas/TipoDeData" }
-              label:      { type: string }
-              nights:     { type: integer }
-              unit_price_cents: { type: integer, format: int64 }
-              subtotal_cents:   { type: integer, format: int64 }
+          items: { $ref: "#/components/schemas/LinhaDoOrcamento" }
         nights:
+          type: array
+          description: Noite a noite — é exatamente o que vira `reservation_nights` se o orçamento virar reserva.
+          items: { $ref: "#/components/schemas/NoiteDoOrcamento" }
+
+    DisponibilidadeDoProduto:
+      type: object
+      properties:
+        unit_type_id:   { type: string, format: uuid }
+        unit_type_code: { type: string, example: AP2S }
+        name:           { type: string, example: Apartamento 2 Suítes }
+        consumes:       { $ref: "#/components/schemas/Consumo" }
+        total_units:
+          type: integer
+          example: 3
+          description: |
+            Unidades na composição (`unit_type_members`), ativas ou não. É o
+            tamanho **declarado** do produto, e não muda porque alguém desativou
+            uma unidade.
+        active_units:
+          type: integer
+          example: 3
+          description: |
+            Quantas dessas unidades estão ativas. Para `all_members`,
+            `active_units < total_units` significa produto que **não pode ser
+            entregue**: a Completa é a casa inteira, e 7 de 8 não é a casa
+            inteira. Nesse caso `available` é 0 em todos os dias.
+        days:
           type: array
           items:
             type: object
             properties:
-              date:        { type: string, format: date }
+              date: { type: string, format: date }
+              available:
+                type: integer
+                description: |
+                  Quantas unidades da composição estão livres **e vendáveis**
+                  nesse dia — unidade ativa, sem bloqueio que conte, e com tarifa
+                  na tabela vigente. É o número que a venda honra: `available > 0`
+                  e `POST /quotes` recusando a mesma data é defeito, não
+                  concorrência.
+
+                  Para `all_members` é **0 ou 1**: a White House Completa só é
+                  livre quando todas estão.
+              unavailable_reason:
+                type: [string, "null"]
+                enum: [ocupado, sem_tarifa, composicao_incompleta, unidade_inativa, null]
+                description: |
+                  Por que `available` é 0 — `null` quando é maior que zero. A
+                  tela usa no tooltip da célula cinza, e é o que separa "já
+                  vendido" (avisar o hóspede) de "sem tarifa cadastrada"
+                  (avisar a gestão, que tem uma configuração pela metade).
+
+                  Quando mais de um motivo se aplica, vale o que a gestão precisa
+                  agir primeiro: `composicao_incompleta` > `sem_tarifa` >
+                  `unidade_inativa` > `ocupado`.
               date_type:   { $ref: "#/components/schemas/TipoDeData" }
-              price_cents: { type: integer, format: int64 }
+              price_cents: { type: integer, format: int64, description: "Tarifa da noite na tabela vigente. `null` quando não há tarifa cadastrada — e então `available` é 0 com `unavailable_reason: sem_tarifa`, porque é a mesma condição que geraria `RATE_NOT_FOUND` no orçamento." }
+              min_nights:  { type: integer, description: "Mínimo do tipo de data dessa noite, na tabela vigente." }
+
+    LinhaDoMapa:
+      type: object
+      description: Uma unidade física e seus dias, na ordem de `units.code`.
+      properties:
+        unit_id:   { type: string, format: uuid }
+        unit_code: { type: string, example: COB-01 }
+        unit_name: { type: string }
+        days:
+          type: array
+          items:
+            type: object
+            properties:
+              date: { type: string, format: date }
+              status:
+                type: string
+                enum: [livre, hold, confirmed, checked_out, maintenance, owner_hold, ota]
+                description: |
+                  **Vocabulário de APRESENTAÇÃO, e não o de `stay_blocks`.** A
+                  metade dele nem existe como status de bloco: `livre` é ausência
+                  de linha, e `maintenance`, `owner_hold` e `ota` vêm do `source`,
+                  não do `status`. A célula `checked_out` é o nome de tela do
+                  bloco **`completed`** — o mesmo dado que `Bloqueio.status`
+                  publica pelo nome do banco.
+
+                  A tradução, escrita por inteiro para ninguém precisar deduzi-la:
+                  bloco `hold` → `hold`; bloco `confirmed` → `confirmed`; bloco
+                  `completed` → **`checked_out`**; bloco `cancelled` ou `expired`
+                  → a célula some e o dia volta a `livre`, sem que o histórico
+                  desapareça da tabela.
+
+                  `checked_out` é estadia **cumprida**: não conta para a
+                  constraint, a data é vendável de novo, e mesmo assim a célula
+                  continua nomeando a reserva e o hóspede. É o que impede a
+                  ocupação realizada de evaporar do mapa depois do check-out.
+
+                  Quando o mesmo dia tem um bloco ativo e um `completed`
+                  (back-to-back, realocação), **vence o ativo**: o mapa mostra
+                  quem está na casa, nunca quem já saiu. É um dia com DUAS linhas
+                  em `stay_blocks` — legítimo, porque `completed` está fora da
+                  `EXCLUDE` — e a rota devolve UMA célula por (unidade, dia).
+                  Sem esse desempate a grade da tela recebia 91 células para uma
+                  janela de 90 dias e saía desalinhada.
+              date_type:        { $ref: "#/components/schemas/TipoDeData" }
+              stay_block_id:    { type: [string, "null"], format: uuid }
+              reservation_id:   { type: [string, "null"], format: uuid }
+              reservation_code: { type: [string, "null"], example: WH-2026-0001 }
+              guest_name:       { type: [string, "null"], description: "Nome do hóspede titular, para o mapa não precisar de outra consulta." }
+
+    # ─────────────────────────── Reservas ─────────────────────────────
+
+    EstadoDaReserva:
+      type: string
+      enum: [quote, hold, confirmed, checked_in, checked_out, closed, cancelled, expired, no_show]
+      description: |
+        `quote → hold → confirmed → checked_in → checked_out → closed`, com
+        `cancelled`, `expired` e `no_show` como saídas.
+
+        Bloqueiam o calendário: `hold`, `confirmed` e `checked_in`. Não bloqueiam:
+        `quote`, `checked_out`, `closed`, `cancelled`, `expired` e `no_show`.
+
+        O bloqueio em si não é este campo — é o status das linhas de
+        `stay_blocks`, que é o que a constraint `stay_no_overlap` enxerga. O
+        mapeamento é: `hold` → bloco `hold`; `confirmed` e `checked_in` → bloco
+        `confirmed`; `checked_out` e `closed` → bloco **`completed`**; `cancelled`
+        e `no_show` → bloco `cancelled`; `expired` → bloco `expired`.
+
+        **Os dois vocabulários não são o mesmo, e a diferença de nome é
+        deliberada.** Este enum é o estado COMERCIAL da venda; `Bloqueio.status`
+        é o estado da linha de calendário. `checked_out` (a venda) e `completed`
+        (o bloco) são a mesma estadia vista de dois lados, e o contrato dizia
+        `checked_out` nos dois lugares enquanto o banco gravava `completed` —
+        contradição corrigida em 26/08/2026, na direção do banco, que é quem
+        recusa o valor errado.
 
     Reserva:
       type: object
       properties:
-        id:            { type: string, format: uuid }
-        code:          { type: string, example: WH-2026-0001 }
-        status:        { type: string, enum: [quote, hold, confirmed, checked_in, checked_out, closed, cancelled, expired, no_show] }
-        unit_type_id:  { type: string, format: uuid }
-        contact_id:    { type: string, format: uuid }
-        check_in:      { type: string, format: date }
-        check_out:     { type: string, format: date }
-        guests_count:  { type: integer }
+        id:     { type: string, format: uuid }
+        code:   { type: string, example: WH-2026-0001, description: "Legível, sequencial por ano e **imutável** — é por ele que a gestão fala da reserva ao telefone." }
+        status: { $ref: "#/components/schemas/EstadoDaReserva" }
+        unit_type_id:   { type: string, format: uuid }
+        unit_type_name: { type: string, example: White House Completa }
+        contact_id:     { type: string, format: uuid }
+        contact_name:   { type: string }
+        broker_id:      { type: [string, "null"], format: uuid }
+        source:         { type: string, default: direto, example: direto }
+        check_in:  { type: string, format: date }
+        check_out: { type: string, format: date, description: "Exclusivo: a noite do check-out não é cobrada e a data já fica livre para outro hóspede (back-to-back)." }
+        night_count:   { type: integer, description: "`check_out − check_in`, o número de linhas em `reservation_nights`." }
+        guests_count:  { type: integer, minimum: 1 }
+        is_event:      { type: boolean }
+        event_type:    { type: [string, "null"] }
+        subtotal_cents:      { type: integer, format: int64, description: "Soma das noites, como foram congeladas." }
+        discount_pct:        { type: number }
+        discount_cents:      { type: integer, format: int64, description: Incide só sobre as diárias. }
+        cleaning_cents:      { type: integer, format: int64, description: Uma vez por estadia. }
+        event_deposit_cents: { type: integer, format: int64 }
         total_cents:   { type: integer, format: int64 }
-        deposit_cents: { type: integer, format: int64 }
-        hold_expires_at: { type: [string, "null"], format: date-time }
+        deposit_cents: { type: integer, format: int64, description: Sinal para confirmar. }
+        balance_cents: { type: integer, format: int64, description: "`total − sinal`, vencendo `balance_due_days` antes do check-in." }
+        rate_table_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            **Snapshot.** A tabela de tarifas usada no cálculo. Congelada aqui
+            para que mudar o tarifário amanhã não reescreva esta reserva.
+        policy_version:
+          type: [integer, "null"]
+          description: "**Snapshot** da política comercial (sinal, prazo de saldo, hold, alçada) vigente na criação."
+        cancellation_policy_id:
+          type: [string, "null"]
+          format: uuid
+          description: "**Snapshot** da política de cancelamento. É a versão que `/cancel` aplica, não a vigente hoje."
+        hold_expires_at: { type: [string, "null"], format: date-time, description: "Preenchido só em `hold`. Vencido, o job libera as unidades." }
+        confirmed_at:    { type: [string, "null"], format: date-time }
+        cancelled_at:    { type: [string, "null"], format: date-time }
+        cancel_reason:   { type: [string, "null"], example: remarcacao }
+        rebooked_from_id: { type: [string, "null"], format: uuid, description: Preenchido quando a reserva nasceu de uma remarcação. }
+        notes:      { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
         units:
           type: array
-          description: Unidades físicas alocadas. A White House Completa aloca todas.
-          items:
-            type: object
-            properties:
-              unit_id:   { type: string, format: uuid }
-              unit_code: { type: string }
+          description: Unidades físicas alocadas, na ordem de `code`. A White House Completa aloca todas as oito.
+          items: { $ref: "#/components/schemas/UnidadeAlocada" }
+
+    UnidadeAlocada:
+      type: object
+      description: Linha de `reservation_units`.
+      properties:
+        unit_id:       { type: string, format: uuid }
+        unit_code:     { type: string, example: AP-02 }
+        unit_name:     { type: string }
+        stay_block_id: { type: [string, "null"], format: uuid, description: A linha de `stay_blocks` que segura a data desta unidade. }
+        locked:
+          type: boolean
+          description: |
+            `true` quando a escolha foi travada pela gestão (o hóspede pediu
+            aquele apartamento). Unidade travada sai da realocação automática.
+
+    NoiteDaReserva:
+      type: object
+      description: |
+        Linha de `reservation_nights` — o snapshot que faz auditoria, financeiro
+        e BI funcionarem. É o preço que **foi** aplicado, não o que a tabela diz
+        hoje.
+      properties:
+        night:       { type: string, format: date }
+        date_type:   { $ref: "#/components/schemas/TipoDeData" }
+        price_cents: { type: integer, format: int64 }
+
+    HospedeDaReserva:
+      type: object
+      description: Rooming list — titular e acompanhantes (`reservation_guests`).
+      properties:
+        contact_id:    { type: string, format: uuid }
+        name:          { type: string }
+        phone_e164:    { type: [string, "null"], example: "+5585999990000" }
+        is_lead_guest: { type: boolean, description: O titular da estadia. }
+
+    EventoDaReserva:
+      type: object
+      description: |
+        Linha de `reservation_events` — **append-only**. Nada aqui é editado nem
+        apagado: é a prova de quem fez o quê e quando.
+      properties:
+        id:   { type: string, format: uuid }
+        type:
+          type: string
+          example: confirmed
+          description: |
+            Vocabulário aberto, gravado pelo módulo: `created`, `confirmed`,
+            `hold_extended`, `unit_reassigned`, `rescheduled`, `credit_issued`,
+            `checked_in`, `checked_out`, `cancelled`, `expired`, `no_show`.
+
+            `credit_issued` é o dinheiro do hóspede que a reserva nova não
+            consumiu numa remarcação para estadia mais barata. `payload`:
+            `credit_cents`, `paid_cents`, `applied_cents`, `reason` e
+            `from_reservation_id`. É append-only e é o único registro que a
+            Fase 1 tem desse saldo — `payables`/`receivables` são de outra fase.
+
+            O evento `confirmed` de uma reserva herdada carrega, além de
+            `deposit_paid_cents`, os campos `inherited: true`,
+            `inherited_from_cents` (o valor BRUTO, sem o qual a trilha não
+            permite refazer a conta) e `credit_cents`.
+        payload:  { type: [object, "null"], additionalProperties: true, description: "Dados do evento — valor pago, prazo novo, unidade anterior, motivo." }
+        actor_id: { type: [string, "null"], format: uuid, description: "`null` quando o autor é o job de expiração, não uma pessoa." }
+        at:       { type: string, format: date-time }
+
+    ReservaCompleta:
+      type: object
+      description: |
+        Tudo o que a tela da reserva precisa, numa chamada. Os totais e as
+        noites vêm do snapshot da reserva — não são recalculados na leitura,
+        senão a tela mostraria o preço de hoje para uma venda de ontem.
+      properties:
+        reservation: { $ref: "#/components/schemas/Reserva" }
+        nights:
+          type: array
+          items: { $ref: "#/components/schemas/NoiteDaReserva" }
+        lines:
+          type: array
+          description: As noites agrupadas por tipo de tarifa, como no orçamento ("Fim de semana 2× R$ 4.800").
+          items: { $ref: "#/components/schemas/LinhaDoOrcamento" }
+        units:
+          type: array
+          items: { $ref: "#/components/schemas/UnidadeAlocada" }
+        guests:
+          type: array
+          description: |
+            A rooming list — as **pessoas**. Não confundir com
+            `reservation.guests_count`, que é **quantas** foram vendidas. Os dois
+            podem divergir de propósito: a reserva é de 6 hóspedes e só 2 nomes
+            foram informados até agora.
+          items: { $ref: "#/components/schemas/HospedeDaReserva" }
+        timeline:
+          type: array
+          description: Ordenada do mais recente para o mais antigo.
+          items: { $ref: "#/components/schemas/EventoDaReserva" }
+        cancellation_preview:
+          description: |
+            O que aconteceria se a reserva fosse cancelada agora, pela política
+            congelada nela — o mesmo cálculo do `?dry_run=1`. `null` quando a
+            reserva não é mais cancelável.
+          oneOf:
+            - { $ref: "#/components/schemas/ResultadoDeCancelamento" }
+            - { type: "null" }
+
+    ReservaCriar:
+      type: object
+      description: |
+        Corpo do `POST /reservations`. É o pedido de orçamento mais o cliente —
+        os valores **não** vêm daqui: o servidor recalcula tudo pelo motor e
+        congela o resultado.
+      required: [unit_type_id, check_in, check_out, guests_count, contact_id]
+      properties:
+        unit_type_id: { type: string, format: uuid }
+        check_in:     { type: string, format: date }
+        check_out:    { type: string, format: date, description: "Exclusivo." }
+        guests_count:
+          type: integer
+          minimum: 1
+          description: |
+            Número de hóspedes. **Era `guests` até 26/08/2026** — o mesmo dado
+            tinha dois nomes, `guests` na criação e `guests_count` na edição e em
+            toda resposta. Quem escrevia o cliente acertava a criação e errava a
+            edição sem receber erro nenhum: medido, `PATCH` com `{"guests": 6}`
+            respondia `200` e mantinha 4.
+        discount_pct: { type: number, default: 0, description: "Sujeito à alçada da política: acima de `discount_approval_pct` a criação é recusada." }
+        is_event:     { type: boolean, default: false }
+        event_type:   { type: [string, "null"] }
+        contact_id:   { type: string, format: uuid, description: "Obrigatório: reserva sem contato não tem a quem cobrar." }
+        broker_id:    { type: [string, "null"], format: uuid }
+        source:       { type: string, default: direto }
+        notes:        { type: [string, "null"] }
+
+    ReservaAtualizar:
+      type: object
+      description: |
+        Corpo do `PUT` (substituição integral dos campos editáveis) e do `PATCH`
+        (tudo opcional; ausente não muda, `null` limpa).
+
+        Datas, produto e preço **não** estão aqui de propósito: quem muda estadia
+        é `/reschedule`, quem muda unidade é `/reassign-unit`, quem muda estado é
+        a ação correspondente.
+      properties:
+        contact_id:   { type: string, format: uuid }
+        broker_id:    { type: [string, "null"], format: uuid }
+        guests_count: { type: integer, minimum: 1, description: "Validado contra a capacidade do produto — acima dela, `CAPACITY_EXCEEDED`." }
+        is_event:     { type: boolean }
+        event_type:   { type: [string, "null"] }
+        source:       { type: string }
+        notes:        { type: [string, "null"] }
+
+    ConfirmacaoDeReserva:
+      type: object
+      description: Corpo opcional do `POST /confirm`. Sem corpo, assume sinal cheio.
+      properties:
+        deposit_paid_cents:
+          type: integer
+          format: int64
+          minimum: 1
+          description: |
+            Sinal efetivamente recebido, em centavos. Ausente assume
+            `deposit_cents` da reserva.
+
+            **Validado contra o total**: `1 ≤ deposit_paid_cents ≤ total_cents`.
+            O teto é o total (e não o sinal) porque pagar a estadia inteira
+            adiantado é legítimo; o piso é 1 porque confirmar sem dinheiro é o
+            que `hold` já faz.
+
+            É esta a base que a política de cancelamento usa depois — sem teto,
+            um dígito a mais aqui vira reembolso inventado lá.
+        method:       { type: string, enum: [pix, cartao, transferencia, dinheiro] }
+        paid_at:      { type: string, format: date-time }
+        external_ref: { type: [string, "null"], description: Identificador do pagamento no meio usado. }
+        note:         { type: [string, "null"] }
+
+    PedidoDeCancelamento:
+      type: object
+      description: Corpo opcional do `POST /cancel`.
+      properties:
+        reason:
+          type: string
+          example: desistencia
+          description: |
+            Texto livre, gravado em `reservations.cancel_reason` e na timeline.
+            Dois valores têm significado no sistema: `no_show` leva a reserva ao
+            estado `no_show` (e não a `cancelled`), e `remarcacao` é o que a
+            própria API grava ao remarcar.
+
+    ResultadoDeCancelamento:
+      type: object
+      description: Saída do motor `booking.CancellationPolicy.Simulate`, com o contexto que a tela precisa mostrar.
+      properties:
+        label:  { type: string, example: Retenção de 50% do sinal, description: "O texto da faixa aplicada, vindo da política congelada." }
+        refund_cents:   { type: integer, format: int64 }
+        retained_cents: { type: integer, format: int64 }
+        deposit_paid_cents: { type: integer, format: int64, description: Base do cálculo — o sinal efetivamente recebido. }
+        days_before:    { type: integer, description: "Antecedência em dias até o `check_in`, no fuso da propriedade. Pode ser negativa se o check-in já passou." }
+        policy_version: { type: integer, description: "A versão congelada na reserva, não a vigente hoje." }
+        credit_cents:
+          type: integer
+          format: int64
+          description: |
+            Dinheiro do hóspede que este cancelamento **não liquida**: os
+            créditos já registrados na timeline (evento `credit_issued`, do
+            excedente de uma remarcação para estadia mais barata) somados ao que
+            uma confirmação antiga gravou acima do total e que a base do cálculo
+            teve de truncar. **Zero é o caso normal.**
+
+            Existe porque sem ele a tela lê `refund` + `retained` como "conta
+            encerrada". Medido em 26/08/2026: reserva paga integralmente por
+            R$ 3.580,00, remarcada para R$ 1.030,00, cancelada — a resposta dizia
+            `refund_cents: 103000, retained_cents: 0, deposit_paid_cents: 103000`
+            e R$ 2.550,00 sumiam sem nenhum registro os cobrando, com o próprio
+            documento afirmando um valor pago que não foi o que entrou.
+
+            A invariante que a soma fecha:
+            `refund_cents + retained_cents + credit_cents == o que o hóspede pagou`.
+        dry_run:        { type: boolean, description: "`true` quando nada foi executado." }
+        status:         { $ref: "#/components/schemas/EstadoDaReserva" }
+
+    PedidoDeRemarcacao:
+      type: object
+      description: |
+        Corpo do `POST /reschedule`. O que não vier é herdado da reserva
+        original — remarcar normalmente só muda datas.
+      required: [check_in, check_out]
+      properties:
+        check_in:     { type: string, format: date }
+        check_out:    { type: string, format: date, description: "Exclusivo." }
+        unit_type_id: { type: string, format: uuid, description: "Permite remarcar trocando de produto. Ausente, mantém o da original." }
+        guests_count: { type: integer, minimum: 1, description: "Ausente, mantém o da original. Mesmo nome da criação, da edição e da resposta." }
+        discount_pct: { type: number, description: "Ausente, mantém o desconto da original — e a alçada é reavaliada de qualquer forma." }
+        reason:       { type: [string, "null"] }
+
+    MetaDaRemarcacao:
+      type: object
+      properties:
+        previous_reservation_id: { type: string, format: uuid }
+        previous_code:           { type: string, example: WH-2026-0001 }
+        previous_total_cents:    { type: integer, format: int64 }
+        difference_cents:
+          type: integer
+          format: int64
+          description: |
+            `total novo − total antigo`. Positivo é o que falta cobrar; negativo
+            é o que há a devolver. Fase 1 apenas informa o valor — gerar o
+            recebível ou o pagável é do módulo financeiro.
+        credit_cents:
+          type: integer
+          format: int64
+          description: |
+            Sinal já pago que **não coube** na reserva nova, virado crédito a
+            favor do hóspede. Zero na esmagadora maioria das remarcações: só
+            aparece quando a estadia nova custa menos do que o hóspede já tinha
+            adiantado.
+
+            O sinal herdado é aplicado com o mesmo teto que o `POST /confirm`
+            exige (`min(pago, total_novo)`) — sem ele a reserva nova nascia num
+            estado que a própria API recusaria com `422`. O excedente vira o
+            evento `credit_issued` na timeline da reserva NOVA, e `credit_cents`
+            também aparece no evento `rescheduled` das **duas** reservas: quem
+            abre a antiga para entender a reclamação do hóspede precisa ver ali
+            que sobrou dinheiro dele.
+
+            O crédito **acompanha a cadeia**: o que uma remarcação seguinte
+            herda é o saldo do hóspede com a casa (sinal aplicado + crédito em
+            aberto), e não só o sinal aplicado — senão em `A → B → C` o crédito
+            gerado em `B` ficaria órfão numa reserva cancelada.
+
+    RegistroDeEstadia:
+      type: object
+      description: Corpo opcional de `/check-in` e `/check-out`.
+      properties:
+        at:
+          type: string
+          format: date-time
+          description: |
+            Instante do registro. Ausente, `now()`. Vai para a timeline, não para
+            uma coluna de `reservations`.
+
+            **Validado contra o período da reserva**, com a data resolvida no
+            fuso da propriedade: no check-in, `[check_in, check_out)`; no
+            check-out, `[check_in, check_out]` e nunca antes do `at` do
+            `checked_in`. Fora disso, `422 VALIDATION_ERROR`.
+
+            O registro é prova de quando a estadia aconteceu; sem faixa, aceita
+            qualquer data e deixa de ser prova.
+        note: { type: [string, "null"] }
+
+    PedidoDeRealocacao:
+      type: object
+      required: [to_unit_id]
+      properties:
+        from_unit_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            Qual unidade sai. Pode ser omitido quando a reserva ocupa uma só
+            unidade — que é o caso de todo produto `one_member`.
+        to_unit_id: { type: string, format: uuid, description: Precisa compor o produto da reserva. }
+        locked:     { type: boolean, default: true, description: "Trava a escolha (`reservation_units.locked`): a realocação automática deixa de mexer nesta reserva." }
+        reason:     { type: [string, "null"] }
+
+    PedidoDeExtensaoDeHold:
+      type: object
+      description: Corpo opcional do `POST /extend-hold`.
+      properties:
+        hours:  { type: integer, minimum: 1, description: "Ausente usa `hold_hours` da política congelada na reserva. Contado a partir de agora, não do vencimento antigo." }
+        reason: { type: [string, "null"] }
+
+    ResultadoDeExtensaoDeHold:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        hold_expires_at: { type: string, format: date-time }
+        extensions_count: { type: integer, description: Quantas vezes esta pré-reserva já foi estendida. }
+        max_extensions:   { type: integer, description: "Limite configurável; atingido, a resposta é `409 HOLD_LIMIT_REACHED`." }
+
+    BloqueioCriar:
+      type: object
+      description: |
+        Corpo do `POST /blocks`. Uma linha de `stay_blocks` por unidade, todas na
+        mesma transação e inseridas em ordem de `units.code`.
+      required: [unit_ids, from, to, source]
+      properties:
+        unit_ids:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+        from:   { type: string, format: date }
+        to:     { type: string, format: date, description: "Exclusivo — `[from, to)`, como toda estadia." }
+        source: { type: string, enum: [maintenance, owner_hold], description: "`ota` é do importador de canais e `reservation` nasce com a reserva; nenhum dos dois se cria por aqui." }
+        note:   { type: [string, "null"] }
+
+    Bloqueio:
+      type: object
+      description: Linha de `stay_blocks`.
+      properties:
+        id:      { type: string, format: uuid }
+        unit_id:   { type: string, format: uuid }
+        unit_code: { type: string, example: SP-02 }
+        source:  { type: string, enum: [reservation, maintenance, owner_hold, ota] }
+        status:
+          type: string
+          enum: [hold, confirmed, completed, cancelled, expired]
+          description: |
+            Estes cinco valores são, palavra por palavra, o `CHECK` de
+            `stay_blocks.status` na migration `20260826120000`. Até 26/08/2026 o
+            contrato declarava `checked_out` no lugar de `completed`: o banco e o
+            código escrevem `completed`, então a API devolveria valor **fora do
+            enum publicado** assim que a rota expusesse um bloco encerrado. O
+            enum foi alinhado ao banco, e não o contrário, porque é o banco quem
+            recusa o valor errado.
+
+            `checked_out` continua existindo — como estado da RESERVA
+            (`EstadoDaReserva`) e como nome de célula em `LinhaDoMapa`, que é
+            vocabulário de apresentação. Aqui, que é a linha de calendário, o
+            nome é `completed`.
+
+            Só `hold` e `confirmed` contam para a constraint — é a cláusula
+            `WHERE` dela. Os outros três são terminais e liberam a data:
+            `completed` (a estadia aconteceu e terminou), `cancelled` (a
+            ocupação foi desfeita) e `expired` (o hold venceu sem sinal).
+
+            A diferença entre `completed` e `cancelled` é o que o mapa mostra:
+            estadia cumprida continua desenhada no calendário, ocupação desfeita
+            não. Somar as duas em `cancelled` apagaria a receita realizada do
+            mapa de ocupação, e com ela ADR e RevPAR.
+        from:    { type: string, format: date, description: "`lower(period)`." }
+        to:      { type: string, format: date, description: "`upper(period)`, exclusivo." }
+        reservation_id: { type: [string, "null"], format: uuid }
+        expires_at:     { type: [string, "null"], format: date-time }
+        note:       { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
 
 security:
   - bearerAuth: []

@@ -193,7 +193,10 @@ func (a *ambiente) criarPerfil(t *testing.T, apelido string, permissoes []auth.P
 	t.Cleanup(func() {
 		limpeza, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_, _ = a.pool.Exec(limpeza, `DELETE FROM roles WHERE id = $1`, id)
+		if _, err := a.pool.Exec(limpeza, `DELETE FROM roles WHERE id = $1`, id); err != nil {
+			t.Logf("LIMPEZA INCOMPLETA: o perfil de teste %s ficou no banco (%v) — normalmente porque um "+
+				"usuário que aponta para ele também não saiu.", id, err)
+		}
 	})
 
 	for _, p := range permissoes {
@@ -238,7 +241,23 @@ func (a *ambiente) criarUsuario(t *testing.T, apelido string, perfil uuid.UUID) 
 	t.Cleanup(func() {
 		limpeza, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_, _ = a.pool.Exec(limpeza, `DELETE FROM users WHERE id = $1`, id)
+
+		// `audit_log.actor_id` referencia `users` SEM `ON DELETE` — e está
+		// certo assim: apagar a pessoa não pode apagar a prova do que ela fez.
+		// A consequência para o teste é que, desde que a Fase 1 passou a
+		// auditar, o `DELETE` do usuário estoura `23503` e a conta descartável
+		// FICA no banco. Medido nesta árvore antes do conserto: 7 usuários e 9
+		// perfis órfãos depois de uma passada da suíte.
+		//
+		// A trilha de um usuário de teste é descartável junto com ele.
+		_, _ = a.pool.Exec(limpeza, `DELETE FROM audit_log WHERE actor_id = $1`, id)
+
+		// O erro deixou de ser engolido: limpeza que falha em silêncio é como a
+		// suíte passa a depender do lixo que ela mesma deixou.
+		if _, err := a.pool.Exec(limpeza, `DELETE FROM users WHERE id = $1`, id); err != nil {
+			t.Logf("LIMPEZA INCOMPLETA: o usuário de teste %s ficou no banco (%v) — alguma linha ainda o "+
+				"referencia. Cada execução da suíte deixa mais um.", id, err)
+		}
 	})
 
 	u := usuarioDeTeste{ID: id, RoleID: perfil, Email: email}

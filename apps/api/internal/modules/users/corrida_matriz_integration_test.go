@@ -21,9 +21,7 @@ import (
 func TestMatrizEDesativacaoSimultaneasNaoDeixamAInstalacaoSemAdministrador(t *testing.T) {
 	a := subir(t)
 
-	if _, err := a.pool.Exec(a.ctx, `UPDATE users SET active = false`); err != nil {
-		t.Fatalf("zerando a população de usuários: %v", err)
-	}
+	silenciarPopulacao(t, a)
 
 	papelX := a.criarPerfilComCatalogoInteiro(t, "admin_x")
 	papelY := a.criarPerfilComCatalogoInteiro(t, "admin_y")

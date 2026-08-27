@@ -17,7 +17,7 @@ TESTES_CONCORRENCIA     ?= Overbooking|Concorren|Simultane|Corrida|Disputa
 # verde com o defeito presente), (2/3)^10 ~ 2% de chance de a falha atravessar.
 REPETICOES_CONCORRENCIA ?= 10
 
-.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed check lint test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
+.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed check lint fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
 
 help: ## Lista os alvos
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -51,9 +51,31 @@ seed: ## Popula produtos, unidades, tarifas, perfis e usuários de teste
 
 check: lint test ## Lint + typecheck + testes (rode antes de reportar qualquer entrega)
 
-lint: ## golangci-lint + eslint + tsc
+lint: fmt-check vet ## gofmt + vet (com e sem tags) + golangci-lint + eslint + tsc
+	@command -v golangci-lint >/dev/null 2>&1 || { \
+		echo "golangci-lint não está instalado — \`make check\` não consegue se completar."; \
+		echo "instale com: brew install golangci-lint   (ou veja golangci-lint.run/welcome/install)"; \
+		exit 1; \
+	}
 	cd apps/api && golangci-lint run ./...
 	cd apps/admin && pnpm lint && pnpm exec tsc --noEmit
+
+fmt-check: ## Falha se algum .go está fora do gofmt (mesmo comando do CI)
+	@cd apps/api && saida=$$(gofmt -l .); \
+	if [ -n "$$saida" ]; then echo "fora do gofmt:"; echo "$$saida"; exit 1; fi
+
+# vet roda DUAS vezes, e a segunda é a que importa.
+#
+# Arquivo com `//go:build integration` é invisível para `go vet ./...`, para
+# `go build ./...` e para `go test ./...` — as três coisas que `make check`
+# executava. Resultado: uma suíte de integração que nem COMPILA passava por
+# `make check` verde, e o erro só aparecia no job `integration` do CI, ou na mão
+# de quem tivesse lembrado de digitar a tag. Cada agente desta rodada rodou o
+# vet com a tag por conta própria, e isso é a definição de passo que depende de
+# alguém lembrar.
+vet: ## go vet com e sem a tag integration
+	cd apps/api && go vet ./...
+	cd apps/api && go vet -tags=integration ./...
 
 test: test-api test-admin ## Todos os testes
 

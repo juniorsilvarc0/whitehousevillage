@@ -139,3 +139,89 @@ func TestDecodeAceitaArrayNoTopo(t *testing.T) {
 		t.Fatal("o gancho Validador deveria ter reprovado o array vazio")
 	}
 }
+
+// ───────────── Campo desconhecido no corpo é 422, nunca silêncio ─────────────
+//
+// A regra está escrita no `info.description` da OpenAPI desde a Fase 1, e não
+// tinha uma linha de implementação: `grep DisallowUnknownFields` devolvia zero
+// ocorrências. O efeito medido na API real, antes desta correção:
+//
+//	PATCH /units/{id}       {"ativa":false,"xpto":1}  → 200, `active` intacto
+//	POST  /quotes           {..., "campo_inventado":true} → 200, campo ignorado
+//	PATCH /reservations/{id} {"guests":6}             → 200, `guests_count` intacto
+//
+// 200 sem efeito é a pior resposta possível: o cliente acha que gravou e não há
+// erro em lugar nenhum para alguém investigar.
+
+func TestDecodeRecusaCampoDesconhecido(t *testing.T) {
+	_, err := Decode[criarDeTeste](post(`{"name":"Ana","email":"ana@wh.com","password":"12345678","xpto":1}`))
+	if err == nil {
+		t.Fatal("campo desconhecido foi aceito em silêncio")
+	}
+	d := detalhes(t, err)
+	// O NOME do campo recusado precisa chegar em `details`: sem ele o painel não
+	// consegue grudar o erro no input, e a mensagem vira "algo está errado".
+	if _, ok := d["xpto"]; !ok {
+		t.Fatalf("details não nomeia o campo recusado: %v", d)
+	}
+}
+
+// O nome PARECIDO é o caso que importa: quem digita `guests` no lugar de
+// `guests_count` não recebe nada de volta hoje, e é assim que um rename
+// atravessa uma revisão inteira sem ninguém ver.
+func TestDecodeRecusaONomeParecidoDoCampoCerto(t *testing.T) {
+	_, err := Decode[criarDeTeste](post(`{"name":"Ana","email":"ana@wh.com","password":"12345678","e-mail":"outro@wh.com"}`))
+	if err == nil {
+		t.Fatal(`"e-mail" (com hífen) foi aceito como se fosse "email"`)
+	}
+	if _, ok := detalhes(t, err)["e-mail"]; !ok {
+		t.Fatalf("details não nomeia o campo parecido: %v", detalhes(t, err))
+	}
+}
+
+// DecodeOpcional aceita corpo VAZIO — isso não pode virar "aceita qualquer
+// corpo". A rota de refresh/logout continua sendo escrita, e um campo inventado
+// ali merece a mesma recusa.
+func TestDecodeOpcionalTambemRecusaCampoDesconhecido(t *testing.T) {
+	_, err := DecodeOpcional[criarDeTeste](post(`{"nome":"Ana"}`))
+	if err == nil {
+		t.Fatal("DecodeOpcional aceitou campo desconhecido")
+	}
+	if _, ok := detalhes(t, err)["nome"]; !ok {
+		t.Fatalf("details não nomeia o campo recusado: %v", detalhes(t, err))
+	}
+}
+
+// Controle positivo: a recusa não pode alcançar o corpo legítimo, nem o campo
+// Opt ausente (que é silêncio combinado), nem o `null` explícito.
+func TestCampoAusenteENullContinuamValidos(t *testing.T) {
+	if _, err := Decode[criarDeTeste](post(`{"name":"Ana","email":"ana@wh.com","password":"12345678"}`)); err != nil {
+		t.Fatalf("corpo legítimo sem o campo Opt foi recusado: %v", err)
+	}
+	got, err := Decode[criarDeTeste](post(`{"name":"Ana","email":"ana@wh.com","password":"12345678","extra":"x"}`))
+	if err != nil {
+		t.Fatalf("corpo legítimo COM o campo Opt foi recusado: %v", err)
+	}
+	if v, ok := got.Extra.Definido(); !ok || v != "x" {
+		t.Fatalf("Opt declarado não chegou: %+v", got.Extra)
+	}
+}
+
+// campoDesconhecido lê a mensagem do encoding/json por falta de tipo exportado
+// (golang/go#29035). Este teste trava o formato: se o Go mudar o texto, ele
+// falha aqui, e não em produção com o painel recebendo details vazio.
+func TestFormatoDaMensagemDeCampoDesconhecidoDoGoNaoMudou(t *testing.T) {
+	err := json.Unmarshal([]byte(`{"xpto":1}`), &struct{}{})
+	if err != nil {
+		t.Fatalf("json.Unmarshal sem DisallowUnknownFields não deveria errar: %v", err)
+	}
+	dec := json.NewDecoder(strings.NewReader(`{"xpto":1}`))
+	dec.DisallowUnknownFields()
+	err = dec.Decode(&struct{}{})
+	if err == nil {
+		t.Fatal("DisallowUnknownFields não recusou")
+	}
+	if nome := campoDesconhecido(err); nome != "xpto" {
+		t.Fatalf("campoDesconhecido = %q, esperado \"xpto\" — a mensagem do Go mudou: %q", nome, err.Error())
+	}
+}

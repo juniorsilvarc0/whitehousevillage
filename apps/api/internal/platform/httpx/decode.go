@@ -43,6 +43,14 @@ var validate = sync.OnceValue(func() *validator.Validate {
 // Decode lê o corpo JSON, valida e devolve o DTO tipado. Qualquer falha vira
 // apperr.Validation com details no formato {campo: mensagem} em português — é o
 // contrato que o painel consome para grudar o erro no input certo.
+//
+// Campo que o DTO não declara é RECUSADO (`DisallowUnknownFields`), conforme o
+// `info.description` da OpenAPI. Sem isso, todo erro de digitação do cliente
+// vira sucesso silencioso: medido nesta árvore, `PATCH /units/{id}`
+// {"ativa":false,"xpto":1} respondia 200 com `active` intacto, e
+// `PATCH /reservations/{id}` {"guests":6} respondia 200 com `guests_count`
+// intacto. O par 200-sem-efeito é a pior resposta possível — não há erro em
+// lugar nenhum para alguém investigar.
 func Decode[T any](r *http.Request) (T, error) {
 	var alvo T
 
@@ -51,6 +59,7 @@ func Decode[T any](r *http.Request) (T, error) {
 	}
 
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, tamanhoMaximoCorpo))
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(&alvo); err != nil {
 		return alvo, erroDeJSON(err)
 	}
@@ -71,6 +80,7 @@ func DecodeOpcional[T any](r *http.Request) (T, error) {
 		return alvo, nil
 	}
 	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, tamanhoMaximoCorpo))
+	dec.DisallowUnknownFields()
 	if err := dec.Decode(&alvo); err != nil {
 		if errors.Is(err, io.EOF) {
 			return alvo, nil
@@ -151,9 +161,38 @@ func erroDeJSON(err error) error {
 		return apperr.Validation(map[string]string{"body": "corpo da requisição excede o limite de 1 MB."})
 	case errors.Is(err, io.EOF):
 		return apperr.Validation(map[string]string{"body": "corpo da requisição é obrigatório."})
+	case campoDesconhecido(err) != "":
+		// O encoding/json não expõe tipo para este erro (proposta golang/go#29035
+		// segue aberta), só a mensagem. Por isso o nome sai por extração de
+		// string, com fallback para "body" quando o formato mudar numa versão
+		// futura do Go — a recusa continua acontecendo, só perde a precisão do
+		// campo. O teste `TestDecodeRecusaCampoDesconhecido` trava o formato.
+		return apperr.Validation(map[string]string{campoDesconhecido(err): "campo desconhecido no corpo da requisição."})
 	default:
 		return apperr.Validation(map[string]string{"body": "não foi possível ler o corpo da requisição."}).WithCause(err)
 	}
+}
+
+// prefixoCampoDesconhecido é a mensagem que o encoding/json monta em
+// DisallowUnknownFields. Extraímos o nome entre aspas para o painel conseguir
+// grudar o erro no input certo.
+const prefixoCampoDesconhecido = "json: unknown field "
+
+// campoDesconhecido devolve o nome do campo recusado, ou "" quando o erro é de
+// outra natureza. Devolve "body" quando reconhece o prefixo mas não consegue
+// isolar o nome — recusar sem nomear ainda é melhor que aceitar em silêncio.
+func campoDesconhecido(err error) string {
+	msg := err.Error()
+	i := strings.Index(msg, prefixoCampoDesconhecido)
+	if i < 0 {
+		return ""
+	}
+	resto := msg[i+len(prefixoCampoDesconhecido):]
+	nome := strings.Trim(strings.TrimSpace(resto), `"`)
+	if nome == "" {
+		return "body"
+	}
+	return nome
 }
 
 // caminhoDoCampo devolve o campo em notação de JSON aninhado, sem o nome da
