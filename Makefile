@@ -49,6 +49,12 @@ migrate-version: ## Versão aplicada do schema e estado dirty
 seed: ## Popula produtos, unidades, tarifas, perfis e usuários de teste
 	$(COMPOSE) run --rm seed
 
+smoke: ## Fumaça de aplicação: sobe o navegador, faz login e percorre as telas
+	# Existe porque a suíte inteira ficou verde enquanto o stack NÃO SUBIA:
+	# a imagem do painel morria no boot, o BFF respondia 502 e /crm/pipelines
+	# devolvia 500. Teste roda contra código; isto roda contra a aplicação servida.
+	cd apps/admin && node e2e/fumaca.mjs $(SMOKE_URL)
+
 check: lint test ## Lint + typecheck + testes (rode antes de reportar qualquer entrega)
 
 lint: fmt-check vet ## gofmt + vet (com e sem tags) + golangci-lint + eslint + tsc

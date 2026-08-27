@@ -20,7 +20,10 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"          # só em desenvolvimento; em produção não é publicado
+      # Porta do HOST configurável: 5432 costuma já estar tomada por outro
+      # Postgres na máquina do desenvolvedor, e o stack não deve disputar a
+      # porta padrão com projeto vizinho. Dentro da rede do compose continua 5432.
+      - "${POSTGRES_PORT:-5433}:5432"          # só em desenvolvimento; em produção não é publicado
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -115,7 +118,9 @@ services:
       NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-White House Village}
       TZ: ${TZ:-America/Fortaleza}
     ports:
-      - "3000:3000"
+      # Mesma razão da porta do Postgres: 3000 é a porta padrão de todo projeto
+      # Next da máquina, e o stack não deve disputá-la.
+      - "${ADMIN_PORT:-3100}:3000"
     depends_on:
       - api
     restart: unless-stopped

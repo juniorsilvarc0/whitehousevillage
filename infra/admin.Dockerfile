@@ -2,7 +2,16 @@ FROM node:22-alpine AS deps
 WORKDIR /app
 RUN corepack enable
 COPY apps/admin/package.json apps/admin/pnpm-lock.yam[l] ./
-RUN pnpm install --frozen-lockfile || pnpm install
+# `node-linker=hoisted` é obrigatório aqui, não preferência.
+#
+# O `output: standalone` do Next copia só as dependências que o rastreamento
+# encontra. Com o layout padrão do pnpm (symlinks para `.pnpm/`), o rastreador
+# não atravessa os links e transitivas ficam de fora — a imagem CONSTRÓI e o
+# contêiner morre no boot com `Cannot find module '@swc/helpers/...'`.
+# Descoberto rodando o stack: o job de CI só faz `docker build`, nunca executa a
+# imagem, então o defeito passou verde.
+RUN pnpm install --config.node-linker=hoisted --frozen-lockfile \
+ || pnpm install --config.node-linker=hoisted
 
 FROM node:22-alpine AS build
 WORKDIR /app

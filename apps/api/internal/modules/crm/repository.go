@@ -85,12 +85,21 @@ func (r *Repository) existe(ctx context.Context, q string, id, propriedade uuid.
 // `open_opportunity_count` respeita o ESCOPO do requisitante: sem o
 // `($2::uuid IS NULL OR o.owner_id = $2)`, o corretor leria no seletor de funil
 // a contagem da casa inteira — um vazamento silencioso pelo lado do número.
-const colunasDoFunil = `
+// A posição do parâmetro do dono é PARÂMETRO da projeção, não fixa: a listagem
+// e a busca por id têm listas de argumentos diferentes, e fixar `$2` obrigava a
+// consulta de contagem — que não usa a projeção — a receber um argumento que
+// não aparece em lugar nenhum. O Postgres então recusava com
+// `could not determine data type of parameter $2` (42P18), e `GET /crm/pipelines`
+// devolvia 500. Descoberto rodando o painel: a tela do funil abria com o aviso
+// vermelho "não foi possível carregar os funis".
+func colunasDoFunil(paramDono int) string {
+	return fmt.Sprintf(`
 	    p.id, p.name, p.is_default, p.active,
 	    (SELECT count(*) FROM crm_stages s WHERE s.pipeline_id = p.id),
 	    (SELECT count(*) FROM crm_opportunities o
 	      WHERE o.pipeline_id = p.id AND o.status = 'aberto'
-	        AND ($2::uuid IS NULL OR o.owner_id = $2))`
+	        AND ($%d::uuid IS NULL OR o.owner_id = $%d))`, paramDono, paramDono)
+}
 
 func lerFunil(linha pgx.Row) (Funil, error) {
 	var f Funil
@@ -102,21 +111,25 @@ func lerFunil(linha pgx.Row) (Funil, error) {
 func (r *Repository) ListarFunis(ctx context.Context, propriedade uuid.UUID, dono *uuid.UUID,
 	ativo *bool, busca string, pagina, porPagina int) ([]Funil, int64, error) {
 
+	// `crm_pipelines` não tem dono: funil é configuração compartilhada. O dono
+	// só entra na CONTAGEM de oportunidades abertas, dentro da projeção — por
+	// isso a consulta de count(*) não o recebe.
 	const base = `FROM crm_pipelines p
 	              WHERE p.property_id = $1
-	                AND ($3::boolean IS NULL OR p.active = $3)
-	                AND ($4::text = '' OR p.name ILIKE '%%' || $4 || '%%')`
+	                AND ($2::boolean IS NULL OR p.active = $2)
+	                AND ($3::text = '' OR p.name ILIKE '%%' || $3 || '%%')`
+	filtro := strings.ReplaceAll(base, "%%", "%")
 
 	var total int64
-	if err := r.exec(ctx).QueryRow(ctx, `SELECT count(*) `+strings.ReplaceAll(base, "%%", "%"),
-		propriedade, dono, ativo, busca).Scan(&total); err != nil {
+	if err := r.exec(ctx).QueryRow(ctx, `SELECT count(*) `+filtro,
+		propriedade, ativo, busca).Scan(&total); err != nil {
 		return nil, 0, db.MapError(err)
 	}
 
-	q := `SELECT ` + colunasDoFunil + ` ` + strings.ReplaceAll(base, "%%", "%") +
+	q := `SELECT ` + colunasDoFunil(4) + ` ` + filtro +
 		` ORDER BY p.is_default DESC, p.name ASC LIMIT $5 OFFSET $6`
 
-	linhas, err := r.exec(ctx).Query(ctx, q, propriedade, dono, ativo, busca, porPagina, (pagina-1)*porPagina)
+	linhas, err := r.exec(ctx).Query(ctx, q, propriedade, ativo, busca, dono, porPagina, (pagina-1)*porPagina)
 	if err != nil {
 		return nil, 0, db.MapError(err)
 	}
@@ -135,7 +148,7 @@ func (r *Repository) ListarFunis(ctx context.Context, propriedade uuid.UUID, don
 
 // BuscarFunil devolve um funil pelo id.
 func (r *Repository) BuscarFunil(ctx context.Context, propriedade uuid.UUID, dono *uuid.UUID, id uuid.UUID) (Funil, error) {
-	q := `SELECT ` + colunasDoFunil + ` FROM crm_pipelines p WHERE p.property_id = $1 AND p.id = $3`
+	q := `SELECT ` + colunasDoFunil(2) + ` FROM crm_pipelines p WHERE p.property_id = $1 AND p.id = $3`
 	f, err := lerFunil(r.exec(ctx).QueryRow(ctx, q, propriedade, dono, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Funil{}, apperr.NotFound("Funil")
