@@ -46,6 +46,18 @@ tags:
     description: Mapa de ocupação e orçamento. Não bloqueia data.
   - name: Reservas
     description: O ciclo de vida da venda e o bloqueio operacional do calendário.
+  - name: CRM
+    description: |
+      Funis, leads, oportunidades e atividades. Duas regras atravessam o módulo
+      inteiro: **escopo `own`** — o corretor enxerga só as próprias oportunidades,
+      leads e atividades, e o filtro é `AND owner_id = $usuario` no SQL, nunca
+      peneira em memória — e **estado só muda por ação nomeada**, porque cada
+      transição carrega efeito colateral obrigatório (histórico de etapa, tarefa
+      automática, motivo de perda, reserva).
+  - name: Tempo real
+    description: |
+      O barramento de eventos que faz o mapa de ocupação e o kanban se atualizarem
+      sozinhos. O evento diz **que** algo mudou, nunca **o que** mudou.
 
 paths:
   /healthz:
@@ -3153,6 +3165,1462 @@ paths:
           description: "`INVALID_STATE_TRANSITION` — bloqueio de reserva não se libera por aqui, e bloqueio já em estado terminal (`cancelled`, `expired`, `completed`) não se libera duas vezes."
           $ref: "#/components/responses/Erro"
 
+  /stream:
+    get:
+      tags: [Tempo real]
+      summary: Barramento de eventos (SSE) — "algo mudou", nunca o que mudou
+      description: |
+        Conexão longa `text/event-stream`. É o que faz o mapa de ocupação e o
+        kanban se atualizarem sozinhos, sem *polling*.
+
+        ## O evento é magro de propósito
+
+        ```
+        event: calendar
+        id: 8412
+        data: {"entity":"stay_block","id":"3f1c…","unit_id":"a07b…","v":7}
+        ```
+
+        O corpo **não** carrega o dado: carrega a notícia de que ele mudou. O
+        cliente recebe o aviso e **refaz o fetch autenticado** da faixa que está
+        na tela (`GET /availability/units?from&to`,
+        `GET /crm/opportunities/kanban`…).
+
+        São duas consequências, e as duas são o motivo da forma:
+
+        1. **Nada sensível trafega pelo barramento.** Nome de hóspede, valor,
+           telefone e desconto continuam saindo só por rota REST.
+        2. **O RBAC continua sendo aplicado num lugar só.** Quem decide o que
+           cada papel enxerga é o `GET` de sempre, com o mesmo `WHERE` e o mesmo
+           escopo. Um segundo caminho de leitura seria uma segunda chance de
+           errar a permissão — e a que ninguém testa.
+
+        Por isso também não há verbo de operação (`created`/`deleted`) no
+        envelope: refazer o fetch da faixa visível resolve criação, alteração e
+        remoção com o mesmo código de cliente.
+
+        ## `id:` e `v` são dois números diferentes
+
+        - **`id:`** é o cursor do barramento — monotônico, global, e é ele que
+          volta em `Last-Event-ID`.
+        - **`v`** é a versão da **entidade**, incrementada a cada escrita. O
+          cliente descarta evento com `v` menor ou igual ao que já desenhou;
+          é assim que uma reentrega (reconexão com replay) não faz a tela
+          piscar duas vezes.
+
+        ## Tópicos e permissão
+
+        `topics` é a lista, separada por vírgula, do que se quer ouvir. Cada
+        tópico é conferido contra a matriz **na abertura**:
+
+        | Tópico | Exige | Entidades |
+        |---|---|---|
+        | `calendar` | `calendar:ver` | `stay_block`, `reservation` |
+        | `crm` | `crm.opportunities:ver` | `opportunity`, `lead`, `activity` |
+
+        Tópico que o requisitante não alcança é **descartado da assinatura**, e a
+        conexão abre com o que sobrou. Se não sobrar nada, a resposta é
+        `403 FORBIDDEN` — abrir uma conexão muda que nunca entrega nada é o pior
+        dos mundos: o cliente fica esperando para sempre um evento que não vem.
+
+        O primeiro evento é sempre `ready`, com os tópicos **efetivamente**
+        aceitos, justamente para o cliente saber o que não conseguiu.
+
+        Escopo `own` vale aqui igual: o servidor só publica para a conexão o
+        evento que o `GET` correspondente devolveria àquele usuário. O corretor
+        não recebe aviso de oportunidade alheia — nem o `id` dela.
+
+        ## Reconexão: `Last-Event-ID` e o `resync` honesto
+
+        Na queda, o navegador reconecta sozinho (o servidor manda `retry: 5000`)
+        enviando `Last-Event-ID` com o último `id:` recebido. O servidor
+        **repõe** o que passou desde ali, a partir de um buffer limitado
+        (últimos 5 min por tópico).
+
+        Cursor mais antigo que o buffer não é reposto com silêncio: o servidor
+        manda `event: resync` e o cliente refaz o fetch inteiro. Fingir que nada
+        se perdeu é como o mapa de ocupação fica errado sem ninguém perceber.
+
+        ## Token que expira no meio da conexão
+
+        O access token vale 15 min; a conexão vive mais que isso. Não dá para
+        responder `401` no meio — o `200` e os cabeçalhos já foram enviados, e
+        `EventSource` não deixa o cliente ler status depois disso.
+
+        A regra, então, é explícita:
+
+        1. o token é validado **no handshake** e a conexão herda o `exp` dele;
+        2. faltando 60 s para o `exp`, o servidor manda `event: expiring`
+           (`data: {"expires_at":"…"}`) — a deixa para o cliente chamar
+           `POST /auth/refresh` **antes** de perder o fio;
+        3. no `exp`, o servidor manda `event: expired` e **fecha** a conexão
+           normalmente (fim de stream, sem erro de transporte);
+        4. o cliente reconecta com o token novo e o mesmo `Last-Event-ID`, e o
+           replay cobre o intervalo.
+
+        Nada de renovar autorização por dentro do stream: sessão se renova no
+        `/auth/refresh`, num lugar só.
+
+        ## Autenticação
+
+        A mesma do resto da API: `Authorization: Bearer <jwt>` ou o cookie
+        `httpOnly` pelo BFF do painel. O `EventSource` do navegador **não**
+        permite cabeçalho customizado — o caminho do painel é o cookie, servido
+        pelo BFF em mesma origem. Token em *query string* não é aceito: ele
+        pararia no log de acesso do proxy.
+
+        ## Higiene da conexão
+
+        `: keep-alive` a cada 20 s (comentário SSE, ignorado pelo cliente) para
+        proxy nenhum matar a conexão ociosa. Resposta com `Cache-Control:
+        no-store` e `X-Accel-Buffering: no` — sem isso o buffer do proxy segura
+        os eventos e entrega tudo junto, no fim.
+      x-rbac-topicos:
+        calendar: { recurso: calendar, acao: ver }
+        crm: { recurso: crm.opportunities, acao: ver }
+      parameters:
+        - name: topics
+          in: query
+          required: true
+          schema: { type: string, example: "calendar,crm" }
+          description: |
+            Tópicos separados por vírgula. Valores conhecidos hoje: `calendar` e
+            `crm`. Nome desconhecido é `422 VALIDATION_ERROR` com a lista em
+            `details.topics` — errar o nome do tópico e receber uma conexão
+            silenciosa é indistinguível de "não aconteceu nada ainda".
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema: { type: string }
+          description: |
+            Enviado automaticamente pelo `EventSource` na reconexão. Também
+            aceito como query param `last_event_id`, para cliente que não é
+            navegador.
+      responses:
+        "200":
+          description: |
+            Stream aberto. O corpo é uma sequência SSE que só termina quando o
+            cliente desconecta ou o token expira — uma conexão completa se parece
+            com isto:
+
+            ```
+            retry: 5000
+            event: ready
+            data: {"topics":["calendar","crm"],"server_time":"2026-08-27T10:00:00-03:00"}
+
+            : keep-alive
+
+            event: calendar
+            id: 8412
+            data: {"entity":"stay_block","id":"3f1c…","unit_id":"a07b…","v":7}
+
+            event: crm
+            id: 8413
+            data: {"entity":"opportunity","id":"9d2e…","v":3}
+
+            event: expiring
+            data: {"expires_at":"2026-08-27T10:15:00-03:00"}
+            ```
+
+            Quatro nomes de evento não são mudança de dado e por isso **não têm**
+            `id:` (não voltam no replay): `ready` (abertura, com os tópicos
+            aceitos), `resync` (o cursor pedido é mais antigo que o buffer — refaça
+            o fetch inteiro), `expiring` e `expired` (o token está para vencer /
+            venceu). Os eventos de dado são `calendar` e `crm`, e o `data:` deles é
+            o `EventoDoStream` abaixo.
+          headers:
+            Cache-Control: { schema: { type: string, example: no-store } }
+            X-Accel-Buffering:
+              schema: { type: string, example: "no" }
+              description: Desliga o buffer do proxy reverso; com ele ligado o tempo real deixa de ser real.
+          content:
+            text/event-stream:
+              schema: { $ref: "#/components/schemas/EventoDoStream" }
+        "403":
+          description: "`FORBIDDEN` — nenhum dos tópicos pedidos é alcançável pela matriz do requisitante."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — `topics` ausente ou com nome desconhecido."
+          $ref: "#/components/responses/Erro"
+
+  /crm/pipelines:
+    get:
+      tags: [CRM]
+      summary: Lista os funis
+      description: |
+        Configuração do funil, não carteira: aqui não há escopo `own`. O corretor
+        lê (`crm.pipelines` em `ver`/`all` no seed) porque **sem isto o kanban
+        dele não sabe desenhar as colunas**; escrever, não pode.
+      x-rbac: { recurso: crm.pipelines, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean }, description: Ausente traz ativos e inativos. }
+        - { name: q,        in: query, schema: { type: string }, description: Busca por nome. }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Funil" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [CRM]
+      summary: Cria um funil
+      description: |
+        Nasce **sem etapas**. Um funil vazio não recebe oportunidade: mover card
+        exige etapa, e etapa se cria em `/crm/stages`.
+
+        `is_default: true` desmarca o default anterior na mesma transação — dois
+        funis default fariam a criação de oportunidade sem `pipeline_id` escolher
+        um dos dois por sorteio da ordenação.
+      x-rbac: { recurso: crm.pipelines, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FunilEntrada" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location: { description: URI do recurso criado., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Funil" }
+        "409": { description: "`CODE_IN_USE` — já existe funil com esse nome na propriedade.", $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /crm/pipelines/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [CRM]
+      summary: Detalhe do funil, com as etapas na ordem
+      x-rbac: { recurso: crm.pipelines, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/FunilComEtapas" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [CRM]
+      summary: Substitui o funil
+      x-rbac: { recurso: crm.pipelines, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FunilEntrada" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Funil" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: "`CODE_IN_USE` ou `DEFAULT_PIPELINE_REQUIRED` — ver o `PATCH`.", $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [CRM]
+      summary: Atualiza o funil
+      description: |
+        Tirar o `is_default` do último funil default é `409
+        DEFAULT_PIPELINE_REQUIRED`: sem default, `POST /crm/opportunities` sem
+        `pipeline_id` não tem onde cair, e o erro apareceria longe daqui, na
+        criação da oportunidade. O caminho é marcar outro funil como default —
+        a troca desmarca este sozinha.
+      x-rbac: { recurso: crm.pipelines, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FunilAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Funil" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [CRM]
+      summary: Desativa o funil
+      description: |
+        **Soft delete** (`active = false`). Funil é histórico: as oportunidades
+        ganhas e perdidas apontam para as etapas dele, e é delas que sai a
+        conversão por etapa do BI. Apagar de verdade apagaria o passado.
+
+        Funil inativo some do seletor de criação e continua abrindo o card
+        antigo. Com oportunidade **aberta** ainda dentro, a desativação é
+        recusada (`409 RESOURCE_IN_USE`, com a contagem em `details`): esconder o
+        funil deixaria esses cards sem coluna em que aparecer.
+      x-rbac: { recurso: crm.pipelines, acao: excluir }
+      responses:
+        "204": { description: Desativado }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: "`RESOURCE_IN_USE` — há oportunidade aberta no funil. `DEFAULT_PIPELINE_REQUIRED` — é o único default.", $ref: "#/components/responses/Erro" }
+
+  /crm/stages:
+    get:
+      tags: [CRM]
+      summary: Lista as etapas
+      x-rbac: { recurso: crm.pipelines, acao: ver }
+      parameters:
+        - { name: page,        in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page,    in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: pipeline_id, in: query, schema: { type: string, format: uuid }, description: Ausente traz as etapas de todos os funis. }
+        - { name: type,        in: query, schema: { type: string, enum: [aberto, ganho, perdido] } }
+      responses:
+        "200":
+          description: Ordenadas por `pipeline_id` e `position`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/EtapaDoFunil" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [CRM]
+      summary: Cria uma etapa
+      description: |
+        `position` ausente coloca a etapa no fim do funil. Posição repetida é
+        normalizada na gravação — a ordem canônica se estabelece com
+        `POST /crm/stages/reorder`, que reescreve as posições de uma vez.
+
+        Um funil aceita **no máximo uma** etapa de cada tipo terminal (`ganho` e
+        `perdido`): são elas que `/win` e `/lose` procuram, e duas candidatas
+        transformariam "ganhar" numa escolha ambígua do servidor.
+      x-rbac: { recurso: crm.pipelines, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EtapaEntrada" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location: { description: URI do recurso criado., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/EtapaDoFunil" }
+        "404": { description: "`NOT_FOUND` — `pipeline_id` inexistente.", $ref: "#/components/responses/Erro" }
+        "409": { description: "`CODE_IN_USE` — nome repetido no funil, ou segunda etapa de tipo `ganho`/`perdido`.", $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /crm/stages/reorder:
+    post:
+      tags: [CRM]
+      summary: Reescreve a ordem das etapas de um funil
+      description: |
+        Recebe o funil e **a lista inteira** das etapas dele, na ordem desejada;
+        `position` passa a ser o índice no array, numa transação só.
+
+        A lista tem de ser completa. Reordenar mandando só as duas etapas que se
+        moveram deixaria as demais com posição de antes, e o kanban desenharia
+        duas colunas na mesma casa — `422 STAGE_ORDER_INCOMPLETE`, com
+        `details.missing_stage_ids`. Etapa de outro funil na lista é
+        `422 STAGE_NOT_IN_PIPELINE`, com `details.stage_id`.
+
+        Não é o `PATCH` de cada etapa em sequência de propósito: reordenar é um
+        ato só, e uma sequência de `PATCH` deixa o funil visivelmente errado
+        entre uma chamada e outra.
+      x-rbac: { recurso: crm.pipelines, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeReordenacao" }
+      responses:
+        "200":
+          description: Ordem gravada — devolve as etapas já reordenadas.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/EtapaDoFunil" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { description: "`STAGE_ORDER_INCOMPLETE` ou `STAGE_NOT_IN_PIPELINE`.", $ref: "#/components/responses/Erro" }
+
+  /crm/stages/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [CRM]
+      summary: Detalhe da etapa
+      x-rbac: { recurso: crm.pipelines, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/EtapaDoFunil" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [CRM]
+      summary: Substitui a etapa
+      x-rbac: { recurso: crm.pipelines, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EtapaEntrada" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/EtapaDoFunil" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { description: "`STAGE_NOT_IN_PIPELINE` — o corpo tenta mudar a etapa de funil, o que moveria as oportunidades dela junto.", $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [CRM]
+      summary: Atualiza a etapa
+      description: |
+        Mudar `sla_days` ou a tarefa automática **não** mexe em tarefa já criada:
+        a tarefa que existe tem prazo próprio, e reescrevê-lo à distância moveria
+        o compromisso de alguém sem aviso. O ajuste vale da próxima entrada na
+        etapa em diante.
+      x-rbac: { recurso: crm.pipelines, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EtapaAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/EtapaDoFunil" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [CRM]
+      summary: Remove a etapa
+      description: |
+        Remoção física, e só quando a etapa está vazia. Com oportunidade dentro
+        (aberta ou fechada) ou com linha em `crm_stage_history` apontando para
+        ela, a resposta é `409 RESOURCE_IN_USE`: `stage_history` é insert-only e
+        é a matéria-prima da conversão por etapa — apagar a etapa deixaria o
+        histórico apontando para o nada.
+
+        As demais etapas do funil são recompactadas (`position` sem buracos).
+      x-rbac: { recurso: crm.pipelines, acao: excluir }
+      responses:
+        "204": { description: Removida }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: "`RESOURCE_IN_USE` — `details` traz `opportunity_count` e `history_count`.", $ref: "#/components/responses/Erro" }
+
+  /crm/lost-reasons:
+    get:
+      tags: [CRM]
+      summary: Lista os motivos de perda
+      description: |
+        Catálogo fechado, e é o que faz o "motivos de perda" do BI (§15) existir.
+        Motivo em texto livre daria 200 grafias de "preço" e nenhum gráfico.
+      x-rbac: { recurso: crm.pipelines, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/MotivoDePerda" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [CRM]
+      summary: Cria um motivo de perda
+      x-rbac: { recurso: crm.pipelines, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MotivoDePerdaEntrada" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location: { description: URI do recurso criado., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MotivoDePerda" }
+        "409": { description: "`CODE_IN_USE` — rótulo repetido.", $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /crm/lost-reasons/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [CRM]
+      summary: Detalhe do motivo de perda
+      x-rbac: { recurso: crm.pipelines, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MotivoDePerda" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [CRM]
+      summary: Substitui o motivo de perda
+      x-rbac: { recurso: crm.pipelines, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MotivoDePerdaEntrada" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MotivoDePerda" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [CRM]
+      summary: Atualiza o motivo de perda
+      x-rbac: { recurso: crm.pipelines, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MotivoDePerdaAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MotivoDePerda" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [CRM]
+      summary: Desativa o motivo de perda
+      description: |
+        **Soft delete** (`active = false`): oportunidades perdidas continuam
+        apontando para ele, e é isso que o relatório de motivos de perda lê.
+        Inativo some do seletor do `/lose` e continua legível no card antigo.
+      x-rbac: { recurso: crm.pipelines, acao: excluir }
+      responses:
+        "204": { description: Desativado }
+        "404": { $ref: "#/components/responses/Erro" }
+  /crm/leads:
+    get:
+      tags: [CRM]
+      summary: Lista os leads
+      description: |
+        **Escopo `own`**: o corretor lista só os leads de que é dono
+        (`AND owner_id = $usuario` no SQL, nunca peneira em memória). Lead sem
+        dono — o que entra por WhatsApp antes de alguém assumir — não aparece
+        para quem tem escopo `own`, e é assim que tem de ser: é fila da gestão
+        até ser distribuído.
+      x-rbac: { recurso: crm.leads, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: status,   in: query, schema: { type: string, example: "novo,em_atendimento" }, description: Um ou mais estados separados por vírgula. }
+        - { name: source,   in: query, schema: { type: string, example: whatsapp } }
+        - { name: owner_id, in: query, schema: { type: string, format: uuid }, description: "Ignorado (na prática, sobreposto) para quem tem escopo `own`." }
+        - { name: contact_id, in: query, schema: { type: string, format: uuid } }
+        - { name: q,        in: query, schema: { type: string }, description: "Busca por nome, e-mail ou telefone do contato." }
+        - { name: from,     in: query, schema: { type: string, format: date }, description: "Recorte por `created_at`." }
+        - { name: to,       in: query, schema: { type: string, format: date } }
+        - { name: sort,     in: query, schema: { type: string, default: -created_at, enum: [created_at, -created_at, score, -score] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Lead" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [CRM]
+      summary: Cria um lead
+      description: |
+        `contact_id` é obrigatório — uma pessoa, um registro (§6). Lead não
+        guarda nome nem telefone: guarda o interesse. Duplicar a pessoa aqui é
+        como se perde a deduplicação por telefone que o WhatsApp depende.
+
+        `owner_id` ausente assume o usuário autenticado quando ele tem escopo
+        `own` (criar lead órfão seria criar lead que o próprio autor não
+        enxerga); com escopo `all`, ausente significa **sem dono**, na fila da
+        gestão.
+      x-rbac: { recurso: crm.leads, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LeadCriar" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location: { description: URI do recurso criado., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Lead" }
+        "404": { description: "`NOT_FOUND` — `contact_id` inexistente.", $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /crm/leads/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [CRM]
+      summary: Detalhe do lead
+      description: "Fora do escopo do requisitante devolve `404`, nunca `403` — responder `403` confirmaria que o lead existe (docs/api.md §1)."
+      x-rbac: { recurso: crm.leads, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Lead" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [CRM]
+      summary: Substitui o lead
+      x-rbac: { recurso: crm.leads, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LeadAtualizar" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Lead" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [CRM]
+      summary: Atualiza o lead
+      description: |
+        `status` **não** vira `convertido` por aqui: quem converte é
+        `POST /crm/leads/{id}/convert`, que cria a oportunidade na mesma
+        transação. Marcar convertido na mão deixaria o lead dizendo que virou
+        negócio sem negócio nenhum do outro lado — `422 VALIDATION_ERROR`.
+      x-rbac: { recurso: crm.leads, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LeadAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Lead" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [CRM]
+      summary: Remove o lead
+      description: |
+        Remoção física, e só do lead que **não** virou oportunidade. Convertido
+        responde `409 RESOURCE_IN_USE`: a oportunidade guarda `lead_id` como
+        origem, e é dela que sai a conversão por origem no BI.
+
+        Para descartar sem apagar, o caminho é `status: descartado` — é o que
+        alimenta o funil de perdas antes mesmo de existir oportunidade.
+      x-rbac: { recurso: crm.leads, acao: excluir }
+      responses:
+        "204": { description: Removido }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+
+  /crm/leads/{id}/convert:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [CRM]
+      summary: Converte o lead em oportunidade
+      description: |
+        Numa transação: cria a oportunidade com o contato, o interesse e as datas
+        pretendidas do lead, marca o lead como `convertido` com `converted_at`, e
+        aciona a entrada na primeira etapa — inclusive a **tarefa automática**
+        dela, se houver SLA.
+
+        O que o corpo manda **sobrepõe** o que veio do lead; o que ele omite é
+        herdado. Sem `pipeline_id`, cai no funil `is_default`; sem `stage_id`, na
+        etapa de menor `position` desse funil.
+
+        `owner_id` ausente herda o dono do lead — trocar de dono na conversão é
+        possível, mas explícito.
+
+        Converter duas vezes é `409 LEAD_ALREADY_CONVERTED`, com
+        `details.opportunity_id` apontando a oportunidade que já existe: o
+        segundo clique do operador abre o card certo em vez de criar um card
+        gêmeo no funil.
+      x-rbac: { recurso: crm.leads, acao: editar }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeConversao" }
+      responses:
+        "201":
+          description: Oportunidade criada — devolve as duas pontas.
+          headers:
+            Location: { description: "URI da oportunidade criada (`/crm/opportunities/{id}`).", schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeConversao" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: "`LEAD_ALREADY_CONVERTED`.", $ref: "#/components/responses/Erro" }
+        "422": { description: "`STAGE_NOT_IN_PIPELINE` — `stage_id` não pertence ao `pipeline_id` pedido.", $ref: "#/components/responses/Erro" }
+  /crm/opportunities:
+    get:
+      tags: [CRM]
+      summary: Lista as oportunidades
+      description: |
+        **Escopo `own`**: o corretor lista só as próprias — `AND owner_id =
+        $usuario` no SQL do repositório, provado por teste de integração
+        (spec §1). O filtro `owner_id` da query não amplia nada: quem tem escopo
+        `own` só consegue estreitar o que já é dele.
+      x-rbac: { recurso: crm.opportunities, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: pipeline_id, in: query, schema: { type: string, format: uuid } }
+        - { name: stage_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: status,      in: query, schema: { type: string, example: "aberta" }, description: "Um ou mais de `aberta,ganha,perdida`, separados por vírgula. Ausente traz todos." }
+        - { name: owner_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: contact_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: unit_type_id, in: query, schema: { type: string, format: uuid } }
+        - { name: lost_reason_id, in: query, schema: { type: string, format: uuid } }
+        - { name: q,           in: query, schema: { type: string }, description: Busca por título da oportunidade ou nome do contato. }
+        - { name: expected_close_from, in: query, schema: { type: string, format: date } }
+        - { name: expected_close_to,   in: query, schema: { type: string, format: date } }
+        - name: sla
+          in: query
+          schema: { type: string, enum: [estourado, no_prazo] }
+          description: |
+            Recorte derivado, calculado no servidor: `estourado` traz o que passou
+            de `entered_stage_at + sla_days` sem sair da etapa. É o filtro que o
+            painel do corretor usa; calcular isso no front daria uma resposta
+            diferente por fuso do navegador.
+        - { name: sort, in: query, schema: { type: string, default: -updated_at, enum: [created_at, -created_at, updated_at, -updated_at, amount_cents, -amount_cents, expected_close, -expected_close, entered_stage_at, -entered_stage_at] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Oportunidade" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [CRM]
+      summary: Cria uma oportunidade
+      description: |
+        `contact_id` é obrigatório (§7): oportunidade sem pessoa não tem com quem
+        negociar nem para quem emitir orçamento.
+
+        Sem `pipeline_id`, cai no funil `is_default`; sem `stage_id`, na etapa de
+        menor `position` — e a entrada na etapa **já cria a tarefa automática**
+        dela, como qualquer outra entrada.
+
+        Não exige `Idempotency-Key`: nada de dinheiro nem de calendário nasce
+        aqui. A reserva só aparece em `/win`, e é lá que a chave é obrigatória.
+      x-rbac: { recurso: crm.opportunities, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OportunidadeCriar" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location: { description: URI do recurso criado., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Oportunidade" }
+        "404": { description: "`NOT_FOUND` — contato, funil, etapa ou produto inexistente.", $ref: "#/components/responses/Erro" }
+        "422": { description: "`STAGE_NOT_IN_PIPELINE` · `VALIDATION_ERROR` (`check_out <= check_in`).", $ref: "#/components/responses/Erro" }
+
+  /crm/opportunities/kanban:
+    get:
+      tags: [CRM]
+      summary: O quadro inteiro — colunas, cards e totais numa chamada
+      description: |
+        Uma coluna por etapa do funil, na ordem de `position`, cada uma com os
+        cards e com o **total da coluna** (`count` e `amount_cents`).
+
+        O total vem do servidor, e não da soma dos cards no cliente, porque a
+        coluna é paginada: somar o que veio na tela daria um valor de funil que
+        muda conforme se rola a página.
+
+        **Escopo `own`**: o corretor vê no kanban apenas os próprios cards
+        (critério de aceite do §7) — as colunas continuam todas lá, com os totais
+        já restritos à carteira dele.
+
+        Cada coluna carrega no máximo `per_column` cards, com `has_more` para a
+        tela oferecer "carregar mais". Sem isso, uma etapa com 800 cards
+        derrubaria o quadro inteiro na primeira abertura.
+      x-rbac: { recurso: crm.opportunities, acao: ver }
+      parameters:
+        - { name: pipeline_id, in: query, schema: { type: string, format: uuid }, description: Ausente usa o funil `is_default`. }
+        - { name: per_column,  in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: owner_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: q,           in: query, schema: { type: string } }
+        - { name: unit_type_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date }, description: "Recorte por `check_in` pretendido." }
+        - { name: to,   in: query, schema: { type: string, format: date } }
+        - name: include_closed
+          in: query
+          schema: { type: boolean, default: false }
+          description: |
+            Por padrão as colunas terminais (`ganho` e `perdido`) trazem só o que
+            fechou nos últimos 30 dias. Ligado, trazem tudo — e a coluna "Perdido"
+            de um ano de operação vira a coluna mais pesada do quadro.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/QuadroKanban" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { description: "`NOT_FOUND` — funil inexistente, ou nenhum funil `is_default` configurado.", $ref: "#/components/responses/Erro" }
+
+  /crm/opportunities/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [CRM]
+      summary: Detalhe da oportunidade
+      description: "Fora do escopo do requisitante devolve `404`, nunca `403`."
+      x-rbac: { recurso: crm.opportunities, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Oportunidade" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [CRM]
+      summary: Substitui a oportunidade
+      x-rbac: { recurso: crm.opportunities, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OportunidadeAtualizar" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Oportunidade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [CRM]
+      summary: Atualiza a oportunidade
+      description: |
+        `stage_id`, `status`, `lost_reason_id` e `reservation_id` **não** estão no
+        corpo, e é a mesma regra da reserva: quem muda estado é a ação
+        correspondente (`/stage`, `/win`, `/lose`), porque cada uma tem efeito
+        colateral obrigatório — histórico de etapa, tarefa automática, motivo,
+        reserva. Um `PATCH` que mudasse a etapa moveria o card sem gravar
+        `crm_stage_history`, e a conversão por etapa do BI passaria a mentir.
+
+        Oportunidade já fechada (`ganha`/`perdida`) recusa edição com
+        `409 OPPORTUNITY_ALREADY_CLOSED`: o que está fechado é história.
+      x-rbac: { recurso: crm.opportunities, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OportunidadeAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Oportunidade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: "`OPPORTUNITY_ALREADY_CLOSED`.", $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [CRM]
+      summary: Remove a oportunidade
+      description: |
+        Remoção física, e só do que está **aberto e sem reserva**. Ganha, perdida
+        ou com `reservation_id` responde `409 RESOURCE_IN_USE`: é a origem
+        comercial da venda, e é dela que saem conversão, motivos de perda e
+        desempenho por corretor.
+
+        Apagar leva junto o histórico de etapas e as atividades da oportunidade —
+        é por isso que só se apaga o que ainda não virou história.
+      x-rbac: { recurso: crm.opportunities, acao: excluir }
+      responses:
+        "204": { description: Removida }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+
+  /crm/opportunities/{id}/full:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [CRM]
+      summary: Monta a tela da oportunidade numa chamada
+      description: |
+        Devolve **tudo** que a `OpportunityPage` desenha: a oportunidade, o
+        contato, as etapas do funil (para a trilha), a faixa de SLA, o histórico
+        de etapas, as atividades, as notas, os documentos, os alertas derivados e
+        a linha do tempo unificada.
+
+        É um agregador de propósito, e não uma economia preguiçosa: a tela
+        montada por sete chamadas em paralelo aparece em sete tempos diferentes,
+        e cada uma delas é mais uma chance de um pedaço da tela ficar com o
+        escopo errado. Aqui o recorte de permissão é resolvido uma vez, na
+        entrada.
+
+        `stages` vem do funil da oportunidade, não do funil default: o card
+        antigo tem de desenhar a trilha em que ele realmente andou.
+      x-rbac: { recurso: crm.opportunities, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OportunidadeCompleta" }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  /crm/opportunities/{id}/stage:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [CRM]
+      summary: Move a oportunidade de etapa
+      description: |
+        Numa transação:
+
+        1. grava a linha em `crm_stage_history` (insert-only) com origem, destino,
+           autor e motivo;
+        2. atualiza `stage_id`, `entered_stage_at` e `probability` (herdada da
+           etapa nova, salvo `probability` explícita no corpo);
+        3. **cria a tarefa automática da etapa**, se ela tiver
+           `auto_task_subject`, com `due_at = agora + auto_task_due_days` (ou
+           `sla_days`, se `auto_task_due_days` for nulo) e
+           `owner_id = dono da oportunidade`;
+        4. publica o evento `crm` no barramento (`entity: opportunity`).
+
+        ## A tarefa automática é idempotente
+
+        A criação é condicionada a **não existir tarefa automática pendente da
+        mesma etapa** (`crm_activities` com `opportunity_id`, `stage_id`,
+        `auto = true` e `status = pendente`). Mover o card para fora e de volta no
+        mesmo dia não empilha dois follow-ups do mesmo assunto — e o kanban com
+        arrasto otimista reenvia a mesma transição mais vezes do que se imagina.
+
+        Voltar à etapa depois de a tarefa ter sido **concluída** cria outra: é um
+        novo ciclo de SLA, e não uma duplicata.
+
+        ## Etapa terminal não se alcança por aqui
+
+        Etapa de tipo `ganho` ou `perdido` é recusada com
+        `409 INVALID_STATE_TRANSITION`, e `details` traz o endpoint certo. Não é
+        preciosismo: ganhar cria **reserva** (e por isso exige `Idempotency-Key`)
+        e perder exige **motivo**. Deixar `/stage` fazer isso significaria criar
+        reserva sem chave de idempotência num arrasto de kanban, que é
+        exatamente o gesto que mais se repete por engano.
+
+        No painel, arrastar o card para a coluna "Ganho" abre o diálogo e chama
+        `/win`; para "Perdido", pede o motivo e chama `/lose`.
+      x-rbac: { recurso: crm.opportunities, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeMudancaDeEtapa" }
+      responses:
+        "200":
+          description: Movida — devolve a oportunidade e a tarefa automática, se alguma nasceu.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeMudancaDeEtapa" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `OPPORTUNITY_ALREADY_CLOSED` — já ganha ou perdida.
+            `INVALID_STATE_TRANSITION` — destino terminal (use `/win` ou `/lose`),
+            ou `from_stage_id` diferente da etapa atual: alguém moveu o card antes,
+            e `details.current_stage_id` diz para onde. É a guarda que impede o
+            arrasto otimista de dois corretores sobrescreverem um ao outro.
+          $ref: "#/components/responses/Erro"
+        "422": { description: "`STAGE_NOT_IN_PIPELINE` — a etapa é de outro funil.", $ref: "#/components/responses/Erro" }
+
+  /crm/opportunities/{id}/win:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [CRM]
+      summary: Ganha a oportunidade e cria a reserva a partir do orçamento vigente
+      description: |
+        O ponto do módulo inteiro: **ganhar não redigita nada** (critério de
+        aceite do §7). Numa transação:
+
+        1. lê o **orçamento vigente** da oportunidade (`quote_id`, ou o
+           `quote_id` do corpo, que precisa ser da mesma oportunidade);
+        2. cria a reserva como `hold` pelo mesmo caminho do
+           `POST /reservations` — recalculando pelo motor e congelando
+           `reservation_nights`, `rate_table_id`, `policy_version` e
+           `cancellation_policy_id` — e aloca a(s) unidade(s);
+        3. move a oportunidade para a etapa de tipo `ganho` do funil, gravando
+           `crm_stage_history`;
+        4. grava `status: ganha`, `reservation_id` e `probability: 100`;
+        5. conclui as tarefas automáticas pendentes da oportunidade — cobrar
+           follow-up de negócio fechado é ruído que ensina a ignorar o alerta;
+        6. publica eventos nos tópicos `crm` **e** `calendar`: o mapa de ocupação
+           de quem estiver com a tela aberta ganha o bloco na hora.
+
+        ## Nasce `hold`, não `confirmed`
+
+        Ganhar no CRM é o acordo comercial; `confirmed` é **dinheiro recebido**
+        (§5). A reserva sai daqui segurando a data com `hold_expires_at` da
+        política vigente, e o sinal continua entrando por
+        `POST /reservations/{id}/confirm`. Nascer `confirmed` faria o financeiro
+        gerar recebível quitado de um sinal que ninguém pagou.
+
+        ## Idempotência
+
+        `Idempotency-Key` é **obrigatório**: isto cria reserva. A mesma chave, do
+        mesmo ator, com o mesmo corpo devolve a resposta original; com corpo
+        diferente, `409 IDEMPOTENCY_MISMATCH`.
+
+        ## Se a oportunidade já tem reserva
+
+        Quando ela chegou à etapa "Pré-reserva" o hold já foi criado e
+        `reservation_id` já está preenchido. Aí `/win` **não cria outra**: apenas
+        fecha a oportunidade e devolve a reserva existente, com `200` (e não
+        `201`, porque nada foi criado). Criar uma segunda reserva das mesmas datas
+        seria, na melhor das hipóteses, `409 DATE_CONFLICT` contra a própria
+        primeira.
+
+        ## Quando não dá
+
+        Sem orçamento vigente e sem `quote_id` no corpo, `422
+        QUOTE_REQUIRED_TO_WIN` — sem preço congelado não há o que virar reserva,
+        e inventar o preço na hora é exatamente o que o §3 proíbe. As recusas do
+        motor de reservas valem inteiras aqui: `409 DATE_CONFLICT` (a data foi
+        vendida enquanto se negociava — o caso mais comum e o mais importante de
+        mostrar bem na tela), `422 MIN_STAY_NOT_MET`, `422 CAPACITY_EXCEEDED`,
+        `422 COMPOSITION_INCOMPLETE`.
+
+        Em qualquer recusa **nada muda**: a oportunidade continua aberta, na
+        etapa em que estava. Fechar a oportunidade e falhar a reserva deixaria uma
+        venda ganha sem venda.
+      x-rbac: { recurso: crm.opportunities, acao: editar }
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: "Obrigatório porque cria reserva. Escopada pelo ator — `(usuário, rota, chave)`, nunca `(rota, chave)`."
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeGanho" }
+      responses:
+        "200":
+          description: Oportunidade fechada usando a reserva que ela já tinha.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeGanho" }
+        "201":
+          description: Reserva criada e oportunidade ganha.
+          headers:
+            Location: { description: "URI da reserva criada (`/reservations/{id}`).", schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeGanho" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `OPPORTUNITY_ALREADY_CLOSED` · `DATE_CONFLICT` (com o intervalo em
+            conflito em `details`) · `IDEMPOTENCY_MISMATCH`.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `QUOTE_REQUIRED_TO_WIN` — sem orçamento vigente ·
+            `MIN_STAY_NOT_MET` · `CAPACITY_EXCEEDED` · `COMPOSITION_INCOMPLETE` ·
+            `VALIDATION_ERROR` — o funil não tem etapa de tipo `ganho`.
+          $ref: "#/components/responses/Erro"
+
+  /crm/opportunities/{id}/lose:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [CRM]
+      summary: Perde a oportunidade — com motivo obrigatório
+      description: |
+        `lost_reason_id` é **obrigatório** (§7) e tem de ser um motivo ativo do
+        catálogo. Sem ele, `422 LOSS_REASON_REQUIRED`.
+
+        Não é burocracia: "motivos de perda" é um dos indicadores do §15, e é o
+        único lugar em que a casa descobre que perdeu doze negócios por estadia
+        mínima e não por preço. Motivo em texto livre opcional vira campo vazio
+        em 90% dos cards e relatório nenhum. O `note` existe para o detalhe, ao
+        lado do motivo — nunca no lugar dele.
+
+        Numa transação: move para a etapa de tipo `perdido`, grava
+        `crm_stage_history`, `status: perdida`, `lost_reason_id` e
+        `probability: 0`, e **cancela** as tarefas automáticas pendentes.
+
+        A oportunidade com pré-reserva atrelada **não** cancela a reserva por
+        tabela: perder o negócio e liberar a data são duas decisões, e a segunda
+        tem política de cancelamento e possível reembolso. A resposta traz
+        `reservation` preenchida para a tela oferecer o
+        `POST /reservations/{id}/cancel` logo em seguida.
+      x-rbac: { recurso: crm.opportunities, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDePerda" }
+      responses:
+        "200":
+          description: Perdida
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDePerda" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: "`OPPORTUNITY_ALREADY_CLOSED`.", $ref: "#/components/responses/Erro" }
+        "422": { description: "`LOSS_REASON_REQUIRED` — ausente, desconhecido ou inativo · `VALIDATION_ERROR` — o funil não tem etapa de tipo `perdido`.", $ref: "#/components/responses/Erro" }
+  /crm/activities:
+    get:
+      tags: [CRM]
+      summary: Lista atividades e tarefas
+      description: |
+        Tarefa, ligação, reunião, e-mail, WhatsApp e nota — o mesmo registro,
+        distinguido por `type`. Vínculo com lead, oportunidade ou contato.
+
+        **Escopo `own`**: o corretor lista só as atividades de que é dono.
+        Atividade sem dono não existe: `owner_id` é quem tem de fazer, e tarefa
+        sem responsável é tarefa que ninguém faz.
+      x-rbac: { recurso: crm.activities, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: type,     in: query, schema: { type: string, example: "tarefa,ligacao" }, description: Um ou mais tipos separados por vírgula. }
+        - { name: status,   in: query, schema: { type: string, example: pendente }, description: "Um ou mais de `pendente,concluida,cancelada`." }
+        - { name: owner_id, in: query, schema: { type: string, format: uuid } }
+        - { name: opportunity_id, in: query, schema: { type: string, format: uuid } }
+        - { name: lead_id,        in: query, schema: { type: string, format: uuid } }
+        - { name: contact_id,     in: query, schema: { type: string, format: uuid } }
+        - { name: auto,     in: query, schema: { type: boolean }, description: "Só as automáticas (as que a entrada em etapa criou), ou só as manuais." }
+        - { name: due_from, in: query, schema: { type: string, format: date } }
+        - { name: due_to,   in: query, schema: { type: string, format: date } }
+        - name: overdue
+          in: query
+          schema: { type: boolean }
+          description: |
+            `true` traz o que está `pendente` com `due_at < agora`. Derivado no
+            servidor, com o "agora" de `America/Fortaleza` — o mesmo "hoje" do
+            resto do sistema, e não o do relógio do navegador.
+        - { name: sort, in: query, schema: { type: string, default: due_at, enum: [due_at, -due_at, created_at, -created_at, priority, -priority] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Atividade" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [CRM]
+      summary: Cria uma atividade
+      description: |
+        Pelo menos um vínculo entre `opportunity_id`, `lead_id` e `contact_id` é
+        obrigatório — atividade solta não aparece em tela nenhuma e vira dado
+        órfão. `owner_id` ausente assume o usuário autenticado.
+
+        `auto` não é aceito no corpo: automática é a tarefa que o **servidor**
+        criou ao entrar numa etapa, e deixar o cliente se declarar automática
+        quebraria a idempotência dessa criação.
+      x-rbac: { recurso: crm.activities, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AtividadeCriar" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location: { description: URI do recurso criado., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Atividade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /crm/activities/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [CRM]
+      summary: Detalhe da atividade
+      x-rbac: { recurso: crm.activities, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Atividade" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [CRM]
+      summary: Substitui a atividade
+      x-rbac: { recurso: crm.activities, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AtividadeAtualizar" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Atividade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [CRM]
+      summary: Atualiza a atividade
+      description: |
+        `status` e `done_at` ficam de fora: concluir é `POST /{id}/complete`, que
+        carimba `done_at` no servidor. Deixar o cliente escrever `done_at`
+        entregaria o "tempo médio de resposta" do §15 ao relógio do navegador.
+        Cancelar é `status: cancelada`, e esse é o único valor de `status` aceito
+        aqui.
+      x-rbac: { recurso: crm.activities, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AtividadeAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Atividade" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [CRM]
+      summary: Remove a atividade
+      description: |
+        Remoção física. Apagar a tarefa automática pendente de uma etapa é
+        permitido — o operador que já resolveu por fora não deve ficar com um
+        alerta eterno na tela — e ela **não** renasce sozinha: a criação só
+        acontece numa nova entrada na etapa.
+      x-rbac: { recurso: crm.activities, acao: excluir }
+      responses:
+        "204": { description: Removida }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  /crm/activities/{id}/complete:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [CRM]
+      summary: Conclui a atividade
+      description: |
+        Grava `status: concluida` e `done_at` com o **relógio do servidor**, e
+        publica evento no tópico `crm`.
+
+        É **idempotente**: concluir de novo devolve `200` com o mesmo `done_at`,
+        sem reescrever nada. O duplo clique no botão "Concluir" é o gesto mais
+        comum da tela, e mover `done_at` para a frente falsearia o tempo de
+        resposta do §15.
+
+        Atividade `cancelada` recusa a conclusão com
+        `409 INVALID_STATE_TRANSITION` — o caminho é reabrir com `PATCH`
+        (`status: pendente`) e concluir depois.
+
+        `next_activity` no corpo cria, na mesma transação, a **próxima** ação
+        (o "concluir e agendar o próximo passo" da tela): mesma oportunidade,
+        mesmo dono, novo prazo. Sem isso, a operação conclui e esquece — e o
+        alerta de "cliente parado há N dias" vira o único lembrete.
+      x-rbac: { recurso: crm.activities, acao: editar }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeConclusao" }
+      responses:
+        "200":
+          description: Concluída — devolve a atividade e, se pedida, a próxima.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeConclusao" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { description: "`INVALID_STATE_TRANSITION` — atividade cancelada.", $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -3182,6 +4650,9 @@ components:
                            RATE_NOT_FOUND, POLICY_IMMUTABLE, CODE_IN_USE, RESOURCE_IN_USE,
                            INVALID_STATE_TRANSITION, RESERVATION_NOT_CANCELLABLE,
                            UNIT_NOT_AVAILABLE, COMPOSITION_INCOMPLETE, HOLD_LIMIT_REACHED,
+                           STAGE_NOT_IN_PIPELINE, STAGE_ORDER_INCOMPLETE, DEFAULT_PIPELINE_REQUIRED,
+                           OPPORTUNITY_ALREADY_CLOSED, LOSS_REASON_REQUIRED, QUOTE_REQUIRED_TO_WIN,
+                           LEAD_ALREADY_CONVERTED,
                            INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
@@ -4345,6 +5816,852 @@ components:
         expires_at:     { type: [string, "null"], format: date-time }
         note:       { type: [string, "null"] }
         created_at: { type: string, format: date-time }
+
+    EventoDoStream:
+      type: object
+      description: |
+        O objeto que vai em `data:` de cada evento de `GET /stream`. **Só isto** —
+        quem quiser o dado refaz o fetch autenticado.
+      required: [entity, id, v]
+      properties:
+        entity:
+          type: string
+          enum: [stay_block, reservation, opportunity, lead, activity]
+          description: "Que tipo de coisa mudou. `stay_block` e `reservation` chegam no tópico `calendar`; as outras três, no `crm`."
+        id: { type: string, format: uuid }
+        unit_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            Presente só em `stay_block`. É o que permite ao mapa repintar **uma
+            linha** em vez de recarregar a matriz inteira de 8 unidades × 90 dias.
+        v:
+          type: integer
+          format: int64
+          description: |
+            Versão da entidade, incrementada a cada escrita. O cliente guarda o
+            último `v` visto por `id` e descarta o que vier igual ou menor — é o
+            que faz o replay de uma reconexão não repintar a tela duas vezes.
+
+            Não confundir com o `id:` do envelope SSE, que é o cursor do
+            barramento e é o que volta em `Last-Event-ID`.
+
+    Funil:
+      type: object
+      description: "`crm_pipelines`. Configuração comercial: é dado, e mudar o funil não exige deploy."
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string, example: Funil de temporada }
+        is_default:
+          type: boolean
+          description: "O funil em que cai a oportunidade criada sem `pipeline_id`. Exatamente **um** funil ativo é default."
+        active:     { type: boolean }
+        stage_count: { type: integer, description: Derivado — quantas etapas o funil tem. }
+        open_opportunity_count: { type: integer, description: "Derivado, já restrito ao escopo do requisitante." }
+
+    FunilComEtapas:
+      allOf:
+        - $ref: "#/components/schemas/Funil"
+        - type: object
+          properties:
+            stages:
+              type: array
+              description: Ordenadas por `position`.
+              items: { $ref: "#/components/schemas/EtapaDoFunil" }
+
+    FunilEntrada:
+      type: object
+      description: Corpo do `POST` e do `PUT`.
+      required: [name]
+      properties:
+        name:       { type: string, minLength: 1, maxLength: 120 }
+        is_default: { type: boolean, default: false, description: "`true` desmarca o default anterior na mesma transação." }
+        active:     { type: boolean, default: true }
+
+    FunilAtualizar:
+      type: object
+      description: "Corpo do `PATCH` — ausente não muda, `null` limpa."
+      properties:
+        name:       { type: string, minLength: 1, maxLength: 120 }
+        is_default: { type: boolean }
+        active:     { type: boolean }
+
+    TipoDeEtapa:
+      type: string
+      enum: [aberto, ganho, perdido]
+      description: |
+        `aberto` é etapa de negociação. `ganho` e `perdido` são **terminais**, e
+        cada funil tem no máximo uma de cada: são elas que `/win` e `/lose`
+        procuram. Só se chega nelas por esses dois endpoints, nunca por
+        `/stage`.
+
+    EtapaDoFunil:
+      type: object
+      description: "`crm_stages`. É aqui que moram o SLA e a tarefa automática — a parte do CRM que faz o follow-up acontecer sem ninguém lembrar."
+      properties:
+        id:          { type: string, format: uuid }
+        pipeline_id: { type: string, format: uuid }
+        name:        { type: string, example: Orçamento enviado }
+        position:    { type: integer, description: "Ordem no funil, base 0. Reescrita em bloco por `POST /crm/stages/reorder`." }
+        probability: { type: integer, minimum: 0, maximum: 100, description: "Probabilidade sugerida ao entrar na etapa. Copiada para a oportunidade na transição, e editável nela depois." }
+        color:       { type: string, example: "#8FA36B", description: "Tinge a **coluna** do kanban; o card fica neutro (docs/ui.md §9)." }
+        type:        { $ref: "#/components/schemas/TipoDeEtapa" }
+        sla_days:
+          type: [integer, "null"]
+          minimum: 0
+          description: |
+            Dias que a oportunidade pode ficar nesta etapa antes de virar
+            alerta. `null` desliga o SLA da etapa. O estouro é **derivado**
+            (`entered_stage_at + sla_days < agora`), nunca uma coluna gravada:
+            coluna gravada precisaria de um job para envelhecer sozinha, e
+            envelheceria errado no dia em que o job falhasse.
+        auto_task_subject:
+          type: [string, "null"]
+          description: |
+            Assunto da tarefa criada ao **entrar** nesta etapa. `null` significa
+            etapa sem tarefa automática. É este campo que liga o mecanismo: o
+            resto (`type`, `due_days`) só é lido quando ele existe.
+        auto_task_type:
+          type: [string, "null"]
+          description: "Tipo da tarefa automática — `tarefa`, `ligacao`, `email`, `whatsapp`… Ausente assume `tarefa`."
+        auto_task_due_days:
+          type: [integer, "null"]
+          minimum: 0
+          description: "Prazo da tarefa, em dias a partir da entrada. Ausente usa `sla_days` — o prazo da tarefa e o do SLA são a mesma promessa."
+        auto_notify:
+          type: boolean
+          description: Se o dono da oportunidade é notificado quando a tarefa nasce.
+
+    EtapaEntrada:
+      type: object
+      description: Corpo do `POST` e do `PUT`.
+      required: [pipeline_id, name]
+      properties:
+        pipeline_id: { type: string, format: uuid, description: "No `PUT`, tem de ser o mesmo funil da etapa: mudar de funil por aqui arrastaria as oportunidades dela junto, sem histórico." }
+        name:        { type: string, minLength: 1, maxLength: 120 }
+        position:    { type: integer, minimum: 0, description: Ausente coloca no fim do funil. }
+        probability: { type: integer, minimum: 0, maximum: 100, default: 0 }
+        color:       { type: string, default: "#8FA36B" }
+        type:        { $ref: "#/components/schemas/TipoDeEtapa" }
+        sla_days:           { type: [integer, "null"], minimum: 0 }
+        auto_task_subject:  { type: [string, "null"], maxLength: 200 }
+        auto_task_type:     { type: [string, "null"] }
+        auto_task_due_days: { type: [integer, "null"], minimum: 0 }
+        auto_notify:        { type: boolean, default: true }
+
+    EtapaAtualizar:
+      type: object
+      description: "Corpo do `PATCH`. `pipeline_id` fica de fora: etapa não troca de funil."
+      properties:
+        name:        { type: string, minLength: 1, maxLength: 120 }
+        position:    { type: integer, minimum: 0 }
+        probability: { type: integer, minimum: 0, maximum: 100 }
+        color:       { type: string }
+        type:        { $ref: "#/components/schemas/TipoDeEtapa" }
+        sla_days:           { type: [integer, "null"], minimum: 0 }
+        auto_task_subject:  { type: [string, "null"], maxLength: 200 }
+        auto_task_type:     { type: [string, "null"] }
+        auto_task_due_days: { type: [integer, "null"], minimum: 0 }
+        auto_notify:        { type: boolean }
+
+    PedidoDeReordenacao:
+      type: object
+      description: "Corpo do `POST /crm/stages/reorder`."
+      required: [pipeline_id, stage_ids]
+      properties:
+        pipeline_id: { type: string, format: uuid }
+        stage_ids:
+          type: array
+          minItems: 1
+          items: { type: string, format: uuid }
+          description: |
+            **Todas** as etapas do funil, na ordem desejada. `position` passa a
+            ser o índice no array. Lista incompleta é `422
+            STAGE_ORDER_INCOMPLETE`; etapa de outro funil é `422
+            STAGE_NOT_IN_PIPELINE`.
+
+    MotivoDePerda:
+      type: object
+      description: "`crm_lost_reasons`. Catálogo fechado — é o que faz o relatório de motivos de perda (§15) existir."
+      properties:
+        id:     { type: string, format: uuid }
+        label:  { type: string, example: Preço acima do orçamento do cliente }
+        active: { type: boolean }
+        usage_count: { type: integer, description: "Derivado — quantas oportunidades perdidas apontam para ele." }
+
+    MotivoDePerdaEntrada:
+      type: object
+      required: [label]
+      properties:
+        label:  { type: string, minLength: 1, maxLength: 200 }
+        active: { type: boolean, default: true }
+
+    MotivoDePerdaAtualizar:
+      type: object
+      properties:
+        label:  { type: string, minLength: 1, maxLength: 200 }
+        active: { type: boolean }
+
+    ContatoResumo:
+      type: object
+      description: |
+        O contato como o CRM precisa dele — o suficiente para ligar, escrever e
+        identificar. O cadastro completo é de `/contacts`, de outra fase; expor
+        aqui só o resumo evita que a tela de oportunidade vire uma segunda porta
+        de leitura de dado pessoal.
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        email:      { type: [string, "null"], format: email }
+        phone_e164: { type: [string, "null"], example: "+5585999990000" }
+        city:       { type: [string, "null"] }
+        state:      { type: [string, "null"] }
+
+    EstadoDoLead:
+      type: string
+      enum: [novo, em_atendimento, qualificado, convertido, descartado]
+      description: |
+        `convertido` **não** é escrito pelo cliente: só
+        `POST /crm/leads/{id}/convert` chega nele, e na mesma transação em que a
+        oportunidade nasce. `descartado` é o fim de linha sem oportunidade — e é
+        o que alimenta a perda anterior ao funil.
+
+    Lead:
+      type: object
+      description: |
+        `crm_leads`. Guarda o **interesse**, não a pessoa: nome, telefone e
+        e-mail vivem em `contacts`, um registro por pessoa (§6). É essa separação
+        que deixa o WhatsApp reconhecer quem já existe em vez de criar um segundo
+        cadastro a cada mensagem.
+      properties:
+        id:           { type: string, format: uuid }
+        contact_id:   { type: string, format: uuid }
+        contact_name: { type: string }
+        contact_phone_e164: { type: [string, "null"] }
+        source:       { type: string, example: whatsapp, description: "Vocabulário aberto: `whatsapp`, `site`, `indicacao`, `ota`, `telefone`, `instagram`…" }
+        campaign_id:  { type: [string, "null"], format: uuid }
+        status:       { $ref: "#/components/schemas/EstadoDoLead" }
+        score:        { type: integer, minimum: 0, maximum: 100 }
+        interest_unit_type_id:   { type: [string, "null"], format: uuid }
+        interest_unit_type_name: { type: [string, "null"] }
+        desired_check_in:  { type: [string, "null"], format: date }
+        desired_check_out: { type: [string, "null"], format: date, description: "Exclusivo, como toda data de saída no sistema." }
+        owner_id:     { type: [string, "null"], format: uuid, description: "Nulo é lead na fila da gestão. Quem tem escopo `own` não enxerga lead sem dono — e é o comportamento correto: ainda não é de ninguém." }
+        owner_name:   { type: [string, "null"] }
+        converted_at: { type: [string, "null"], format: date-time }
+        opportunity_id: { type: [string, "null"], format: uuid, description: "Derivado — a oportunidade que nasceu da conversão." }
+        created_at:   { type: string, format: date-time }
+        updated_at:   { type: string, format: date-time }
+
+    LeadCriar:
+      type: object
+      required: [contact_id]
+      properties:
+        contact_id:   { type: string, format: uuid, description: "Obrigatório: uma pessoa, um registro." }
+        source:       { type: string, default: direto }
+        campaign_id:  { type: [string, "null"], format: uuid }
+        status:       { $ref: "#/components/schemas/EstadoDoLead" }
+        score:        { type: integer, minimum: 0, maximum: 100, default: 0 }
+        interest_unit_type_id: { type: [string, "null"], format: uuid }
+        desired_check_in:  { type: [string, "null"], format: date }
+        desired_check_out: { type: [string, "null"], format: date }
+        owner_id:     { type: [string, "null"], format: uuid, description: "Ausente assume o requisitante quando ele tem escopo `own`; com escopo `all`, ausente é sem dono." }
+
+    LeadAtualizar:
+      type: object
+      description: |
+        Corpo do `PUT` (substituição integral dos campos editáveis) e do `PATCH`
+        (ausente não muda, `null` limpa). `status: convertido` é recusado — quem
+        converte é `/convert`.
+      properties:
+        contact_id:   { type: string, format: uuid }
+        source:       { type: string }
+        campaign_id:  { type: [string, "null"], format: uuid }
+        status:       { type: string, enum: [novo, em_atendimento, qualificado, descartado] }
+        score:        { type: integer, minimum: 0, maximum: 100 }
+        interest_unit_type_id: { type: [string, "null"], format: uuid }
+        desired_check_in:  { type: [string, "null"], format: date }
+        desired_check_out: { type: [string, "null"], format: date }
+        owner_id:     { type: [string, "null"], format: uuid }
+
+    PedidoDeConversao:
+      type: object
+      description: |
+        Corpo opcional do `POST /crm/leads/{id}/convert`. O que vier aqui
+        **sobrepõe** o que o lead trazia; o que faltar é herdado dele.
+      properties:
+        pipeline_id:  { type: string, format: uuid, description: Ausente usa o funil `is_default`. }
+        stage_id:     { type: string, format: uuid, description: "Ausente usa a etapa de menor `position` do funil." }
+        unit_type_id: { type: [string, "null"], format: uuid, description: "Ausente herda `interest_unit_type_id` do lead." }
+        check_in:     { type: [string, "null"], format: date, description: "Ausente herda `desired_check_in`." }
+        check_out:    { type: [string, "null"], format: date, description: "Ausente herda `desired_check_out`." }
+        amount_cents: { type: [integer, "null"], format: int64 }
+        expected_close: { type: [string, "null"], format: date }
+        owner_id:     { type: [string, "null"], format: uuid, description: Ausente herda o dono do lead. }
+
+    ResultadoDeConversao:
+      type: object
+      description: As duas pontas da conversão, para a tela seguir direto ao card sem um segundo `GET`.
+      properties:
+        lead:        { $ref: "#/components/schemas/Lead" }
+        opportunity: { $ref: "#/components/schemas/Oportunidade" }
+        auto_task:
+          description: "A tarefa automática da etapa de entrada, se a etapa tiver uma. `null` quando não tem."
+          oneOf:
+            - { $ref: "#/components/schemas/Atividade" }
+            - { type: "null" }
+
+    EstadoDaOportunidade:
+      type: string
+      enum: [aberta, ganha, perdida]
+      description: |
+        Espelha o `type` da etapa em que o card está, e existe como coluna
+        própria porque é por ela que o BI filtra sem ter de passar por
+        `crm_stages` em toda consulta.
+
+        `ganha` e `perdida` são finais: oportunidade fechada não volta a ser
+        editada (`409 OPPORTUNITY_ALREADY_CLOSED`). Negócio que renasce é
+        oportunidade nova, com o mesmo contato — assim a conversão do funil não
+        conta a mesma venda duas vezes.
+
+    Oportunidade:
+      type: object
+      description: |
+        `crm_opportunities`. O negócio em andamento: contato (obrigatório),
+        produto pretendido, datas pretendidas, orçamento vigente e — quando
+        ganha — a reserva.
+
+        **Não existe campo `title`**, de propósito. O card se identifica pelo que
+        a casa vende: contato, produto e datas. Um título livre viraria
+        "Fernanda – dezembro" digitado de vinte maneiras, e mais uma coluna numa
+        tabela cujo antiexemplo declarado tinha 118 (docs/db.md).
+      properties:
+        id:            { type: string, format: uuid }
+        contact_id:    { type: string, format: uuid }
+        contact_name:  { type: string }
+        lead_id:       { type: [string, "null"], format: uuid, description: "A origem, quando nasceu de `/convert`. É por ele que o BI mede conversão por origem." }
+        pipeline_id:   { type: string, format: uuid }
+        pipeline_name: { type: string }
+        stage_id:      { type: string, format: uuid }
+        stage_name:    { type: string }
+        stage_type:    { $ref: "#/components/schemas/TipoDeEtapa" }
+        unit_type_id:   { type: [string, "null"], format: uuid }
+        unit_type_name: { type: [string, "null"] }
+        check_in:      { type: [string, "null"], format: date, description: Data pretendida — ainda não bloqueia nada. }
+        check_out:     { type: [string, "null"], format: date, description: Exclusivo. }
+        quote_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            O **orçamento vigente**: o último emitido para esta oportunidade, e o
+            que `/win` transforma em reserva. Emitir outro substitui este —
+            os anteriores continuam existindo em `/quotes`, mas só um está de pé.
+        reservation_id:   { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0001 }
+        amount_cents:
+          type: integer
+          format: int64
+          description: |
+            Valor esperado do negócio, em centavos. Nasce do orçamento vigente
+            quando existe um, e pode ser estimado à mão antes disso — é o que soma
+            no total da coluna do kanban.
+        probability:   { type: integer, minimum: 0, maximum: 100 }
+        expected_close: { type: [string, "null"], format: date }
+        owner_id:      { type: [string, "null"], format: uuid, description: "O dono comercial. É ele que o escopo `own` compara com o usuário autenticado, no SQL." }
+        owner_name:    { type: [string, "null"] }
+        status:        { $ref: "#/components/schemas/EstadoDaOportunidade" }
+        lost_reason_id:    { type: [string, "null"], format: uuid }
+        lost_reason_label: { type: [string, "null"] }
+        entered_stage_at:  { type: string, format: date-time, description: "Quando entrou na etapa atual. É a base do SLA e do alerta de card parado." }
+        sla_days:    { type: [integer, "null"], description: "Copiado da etapa atual, para a tela não precisar de um segundo `GET`." }
+        sla_due_at:  { type: [string, "null"], format: date-time, description: "`entered_stage_at + sla_days`. `null` quando a etapa não tem SLA." }
+        sla_breached: { type: boolean, description: "Derivado: `sla_due_at < agora` (em `America/Fortaleza`) e a oportunidade ainda aberta." }
+        pending_task_count: { type: integer, description: Tarefas pendentes vinculadas — o número que vira a faixa vermelha no card. }
+        event:
+          description: "Detalhe de evento (`crm_opportunity_event_details`), quando a negociação é de evento. `null` quando é estadia comum — tabela satélite justamente para não engordar a principal."
+          oneOf:
+            - { $ref: "#/components/schemas/DetalheDeEvento" }
+            - { type: "null" }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    DetalheDeEvento:
+      type: object
+      description: "`crm_opportunity_event_details` — satélite de 1:1 com a oportunidade."
+      properties:
+        event_type:      { type: [string, "null"], example: casamento }
+        guests_expected: { type: [integer, "null"], minimum: 0 }
+        needs_catering:  { type: boolean }
+        notes:           { type: [string, "null"] }
+
+    OportunidadeCriar:
+      type: object
+      required: [contact_id]
+      properties:
+        contact_id:   { type: string, format: uuid, description: "Obrigatório (§7): negócio sem pessoa não tem com quem negociar." }
+        lead_id:      { type: [string, "null"], format: uuid }
+        pipeline_id:  { type: string, format: uuid, description: Ausente usa o funil `is_default`. }
+        stage_id:     { type: string, format: uuid, description: "Ausente usa a etapa de menor `position`. A entrada na etapa já dispara a tarefa automática dela." }
+        unit_type_id: { type: [string, "null"], format: uuid }
+        check_in:     { type: [string, "null"], format: date }
+        check_out:    { type: [string, "null"], format: date, description: "Exclusivo. `check_out <= check_in` é `422 VALIDATION_ERROR`." }
+        amount_cents: { type: integer, format: int64, default: 0, minimum: 0 }
+        probability:  { type: integer, minimum: 0, maximum: 100, description: Ausente herda a probabilidade da etapa. }
+        expected_close: { type: [string, "null"], format: date }
+        owner_id:     { type: [string, "null"], format: uuid, description: "Ausente assume o requisitante quando ele tem escopo `own`." }
+        event:
+          description: "Detalhe de evento, opcional."
+          oneOf:
+            - { $ref: "#/components/schemas/DetalheDeEvento" }
+            - { type: "null" }
+
+    OportunidadeAtualizar:
+      type: object
+      description: |
+        Corpo do `PUT` e do `PATCH`.
+
+        `stage_id`, `status`, `lost_reason_id`, `quote_id` e `reservation_id`
+        **não** estão aqui: cada um deles tem uma ação com efeito colateral
+        obrigatório (`/stage`, `/win`, `/lose`, `POST /quotes`). Escrever esses
+        campos por `PATCH` moveria o card sem gravar `crm_stage_history`.
+      properties:
+        contact_id:   { type: string, format: uuid }
+        lead_id:      { type: [string, "null"], format: uuid }
+        unit_type_id: { type: [string, "null"], format: uuid }
+        check_in:     { type: [string, "null"], format: date }
+        check_out:    { type: [string, "null"], format: date }
+        amount_cents: { type: integer, format: int64, minimum: 0 }
+        probability:  { type: integer, minimum: 0, maximum: 100 }
+        expected_close: { type: [string, "null"], format: date }
+        owner_id:     { type: [string, "null"], format: uuid }
+        event:
+          oneOf:
+            - { $ref: "#/components/schemas/DetalheDeEvento" }
+            - { type: "null" }
+
+    QuadroKanban:
+      type: object
+      description: O quadro inteiro numa resposta — funil, colunas, cards e totais.
+      properties:
+        pipeline: { $ref: "#/components/schemas/Funil" }
+        columns:
+          type: array
+          description: Uma por etapa, na ordem de `position`. Etapa vazia vem na lista, com contagem zero — coluna que some quando esvazia faz o quadro mudar de forma sozinho.
+          items: { $ref: "#/components/schemas/ColunaDoKanban" }
+        totals:
+          type: object
+          description: O funil somado, já dentro do escopo do requisitante.
+          properties:
+            count:        { type: integer }
+            amount_cents: { type: integer, format: int64 }
+
+    ColunaDoKanban:
+      type: object
+      properties:
+        stage: { $ref: "#/components/schemas/EtapaDoFunil" }
+        count:
+          type: integer
+          description: "Total de cards **na etapa**, não na página. É o número que a coluna exibe."
+        amount_cents:
+          type: integer
+          format: int64
+          description: "Soma de `amount_cents` de toda a coluna — vinda do servidor, e não da soma dos cards carregados."
+        has_more: { type: boolean, description: Há mais cards do que os que vieram em `cards`. }
+        cards:
+          type: array
+          maxItems: 200
+          items: { $ref: "#/components/schemas/CardDaOportunidade" }
+
+    CardDaOportunidade:
+      type: object
+      description: |
+        O card do kanban — o mínimo para desenhar, arrastar e decidir. Detalhe
+        completo é `GET /crm/opportunities/{id}/full`; mandar tudo aqui faria o
+        quadro carregar oito etapas de dados que ninguém leu.
+      properties:
+        id:            { type: string, format: uuid }
+        contact_id:    { type: string, format: uuid }
+        contact_name:  { type: string }
+        unit_type_name: { type: [string, "null"] }
+        check_in:      { type: [string, "null"], format: date }
+        check_out:     { type: [string, "null"], format: date }
+        amount_cents:  { type: integer, format: int64 }
+        probability:   { type: integer }
+        expected_close: { type: [string, "null"], format: date }
+        owner_id:      { type: [string, "null"], format: uuid }
+        owner_name:    { type: [string, "null"] }
+        status:        { $ref: "#/components/schemas/EstadoDaOportunidade" }
+        entered_stage_at: { type: string, format: date-time }
+        sla_due_at:    { type: [string, "null"], format: date-time }
+        sla_breached:  { type: boolean, description: "A faixa de SLA estourado do card (docs/ui.md §9)." }
+        pending_task_count: { type: integer }
+        next_due_at:   { type: [string, "null"], format: date-time, description: O prazo da próxima tarefa pendente. }
+        reservation_code: { type: [string, "null"], example: WH-2026-0001 }
+
+    FaixaDeSLA:
+      type: object
+      description: |
+        A faixa de SLA da tela da oportunidade. Tudo derivado, calculado no
+        servidor com o "hoje" de `America/Fortaleza` — a mesma conta feita no
+        navegador daria uma resposta por fuso de quem abriu a tela.
+      properties:
+        stage_id:   { type: string, format: uuid }
+        stage_name: { type: string }
+        sla_days:   { type: [integer, "null"] }
+        entered_stage_at: { type: string, format: date-time }
+        due_at:     { type: [string, "null"], format: date-time }
+        days_left:  { type: [integer, "null"], description: "Negativo quando estourou. `null` quando a etapa não tem SLA." }
+        breached:   { type: boolean }
+
+    EventoDeEtapa:
+      type: object
+      description: "Linha de `crm_stage_history` — **insert-only**. É a matéria-prima da conversão por etapa do §15, e por isso nada aqui é editado nem apagado."
+      properties:
+        id:              { type: string, format: uuid }
+        from_stage_id:   { type: [string, "null"], format: uuid, description: "`null` na primeira entrada (a criação da oportunidade)." }
+        from_stage_name: { type: [string, "null"] }
+        to_stage_id:     { type: string, format: uuid }
+        to_stage_name:   { type: string }
+        user_id:         { type: [string, "null"], format: uuid, description: "`null` quando quem moveu foi um job, e não uma pessoa." }
+        user_name:       { type: [string, "null"] }
+        reason:          { type: [string, "null"] }
+        at:              { type: string, format: date-time }
+        days_in_stage:   { type: [number, "null"], description: "Derivado: quanto tempo o card ficou na etapa anterior. É o que mede gargalo de funil." }
+
+    NotaDaOportunidade:
+      type: object
+      description: |
+        Nota é **atividade de tipo `nota`** (`crm_activities`), projetada aqui
+        para a aba de notas da tela. Não há tabela separada nem CRUD próprio:
+        criar nota é `POST /crm/activities` com `type: nota`, e assim ela entra
+        na linha do tempo pelo mesmo caminho de todo o resto.
+      properties:
+        id:          { type: string, format: uuid }
+        body:        { type: string, description: "O `description` da atividade." }
+        author_id:   { type: [string, "null"], format: uuid }
+        author_name: { type: [string, "null"] }
+        created_at:  { type: string, format: date-time }
+
+    DocumentoDaOportunidade:
+      type: object
+      description: |
+        Anexo da oportunidade (`crm_documents`).
+
+        **Vem vazio nesta rodada** e está declarado assim mesmo: o módulo de
+        anexos (com storage próprio e guarda contra SSRF, §8) é de outra fase, e
+        a tela precisa nascer com o formato final. Acrescentar a chave depois
+        obrigaria o painel a tratar `documents` como opcional para sempre.
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        mime:       { type: string }
+        size_bytes: { type: integer, format: int64 }
+        url:        { type: string, description: URL assinada e de vida curta. }
+        uploaded_by:      { type: [string, "null"], format: uuid }
+        uploaded_by_name: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+
+    AlertaDaOportunidade:
+      type: object
+      description: |
+        Alerta **derivado**, calculado na leitura (§7). Não há tabela de alertas:
+        alerta gravado precisa de um job para nascer e de outro para morrer, e
+        erra em silêncio nos dois casos.
+      properties:
+        code:
+          type: string
+          enum: [sla_estourado, tarefa_vencida, parado_ha_n_dias, hold_expirando, saldo_a_vencer]
+        severity: { type: string, enum: [info, atencao, critico] }
+        message:  { type: string, example: "SLA da etapa Orçamento enviado estourou há 2 dias." }
+        due_at:   { type: [string, "null"], format: date-time }
+        entity_id: { type: [string, "null"], format: uuid, description: "A atividade, a reserva ou o recebível a que o alerta se refere." }
+
+    EventoDaOportunidade:
+      type: object
+      description: |
+        Linha da **linha do tempo unificada**: mudança de etapa, atividade,
+        nota, orçamento, reserva e — quando o módulo de chat existir — mensagem
+        de WhatsApp, tudo na mesma ordem cronológica. É o registro que responde
+        "o que já foi falado com essa pessoa" sem trocar de tela.
+      properties:
+        id:   { type: string, format: uuid }
+        type:
+          type: string
+          example: stage_changed
+          description: |
+            Vocabulário aberto, montado na leitura: `created`, `stage_changed`,
+            `activity_created`, `activity_completed`, `note_added`,
+            `quote_issued`, `reservation_created`, `won`, `lost`.
+            `chat_message` entra quando o módulo de chat existir.
+        at:         { type: string, format: date-time }
+        actor_id:   { type: [string, "null"], format: uuid }
+        actor_name: { type: [string, "null"] }
+        title:      { type: string, description: A frase já montada para a tela. }
+        payload:    { type: [object, "null"], additionalProperties: true }
+
+    OportunidadeCompleta:
+      type: object
+      description: |
+        Tudo o que a tela da oportunidade desenha, numa chamada
+        (`GET /crm/opportunities/{id}/full`).
+      properties:
+        opportunity: { $ref: "#/components/schemas/Oportunidade" }
+        contact:     { $ref: "#/components/schemas/ContatoResumo" }
+        stages:
+          type: array
+          description: "As etapas do funil **da oportunidade** — a trilha que a tela desenha, incluindo as que ela ainda não alcançou."
+          items: { $ref: "#/components/schemas/EtapaDoFunil" }
+        sla: { $ref: "#/components/schemas/FaixaDeSLA" }
+        stage_history:
+          type: array
+          description: Do mais recente para o mais antigo.
+          items: { $ref: "#/components/schemas/EventoDeEtapa" }
+        activities:
+          type: array
+          description: "Tudo que **não** é nota — tarefa, ligação, reunião, e-mail e WhatsApp. Pendentes primeiro, por prazo."
+          items: { $ref: "#/components/schemas/Atividade" }
+        notes:
+          type: array
+          description: As atividades de tipo `nota`, separadas porque a tela as mostra numa aba própria.
+          items: { $ref: "#/components/schemas/NotaDaOportunidade" }
+        documents:
+          type: array
+          description: "Vazio nesta rodada — ver `DocumentoDaOportunidade`."
+          items: { $ref: "#/components/schemas/DocumentoDaOportunidade" }
+        alerts:
+          type: array
+          items: { $ref: "#/components/schemas/AlertaDaOportunidade" }
+        timeline:
+          type: array
+          description: Ordenada do mais recente para o mais antigo.
+          items: { $ref: "#/components/schemas/EventoDaOportunidade" }
+        quote:
+          description: "O orçamento vigente, aberto noite a noite — é o que a tela mostra e o que `/win` converteria em reserva. `null` quando ainda não há orçamento."
+          oneOf:
+            - { $ref: "#/components/schemas/Orcamento" }
+            - { type: "null" }
+        reservation:
+          description: "A reserva vinculada, quando existe (pré-reserva criada antes do fechamento, ou a reserva que `/win` criou)."
+          oneOf:
+            - { $ref: "#/components/schemas/Reserva" }
+            - { type: "null" }
+
+    PedidoDeMudancaDeEtapa:
+      type: object
+      description: "Corpo do `POST /crm/opportunities/{id}/stage`."
+      required: [stage_id]
+      properties:
+        stage_id:
+          type: string
+          format: uuid
+          description: "Etapa destino, do **mesmo funil** da oportunidade. Etapa de tipo `ganho` ou `perdido` é recusada aqui — use `/win` ou `/lose`."
+        from_stage_id:
+          type: string
+          format: uuid
+          description: |
+            Guarda de concorrência, opcional mas recomendada no kanban: se
+            informada e diferente da etapa atual, a resposta é
+            `409 INVALID_STATE_TRANSITION` com `details.current_stage_id`.
+
+            É o que impede o arrasto otimista de dois corretores no mesmo card
+            de terminar com o último clique vencendo em silêncio.
+        reason:      { type: [string, "null"], maxLength: 500, description: "Gravado em `crm_stage_history.reason` — o porquê da mudança, que a linha do tempo mostra." }
+        probability: { type: [integer, "null"], minimum: 0, maximum: 100, description: Ausente herda a probabilidade da etapa destino. }
+
+    ResultadoDeMudancaDeEtapa:
+      type: object
+      properties:
+        opportunity: { $ref: "#/components/schemas/Oportunidade" }
+        auto_task:
+          description: |
+            A tarefa automática criada por esta entrada. `null` quando a etapa
+            não tem tarefa configurada **ou** quando já existia uma pendente da
+            mesma etapa — a idempotência não cria a segunda, e devolver `null`
+            diz exatamente isso à tela.
+          oneOf:
+            - { $ref: "#/components/schemas/Atividade" }
+            - { type: "null" }
+        sla: { $ref: "#/components/schemas/FaixaDeSLA" }
+
+    PedidoDeGanho:
+      type: object
+      description: "Corpo opcional do `POST /crm/opportunities/{id}/win`."
+      properties:
+        quote_id:
+          type: string
+          format: uuid
+          description: |
+            Ausente usa o orçamento vigente da oportunidade (`quote_id`).
+            Informado, tem de ser um orçamento **desta** oportunidade — senão
+            `422 VALIDATION_ERROR`. Sem nenhum dos dois,
+            `422 QUOTE_REQUIRED_TO_WIN`.
+        note: { type: [string, "null"], maxLength: 500, description: "Gravado no histórico de etapa e na linha do tempo." }
+
+    ResultadoDeGanho:
+      type: object
+      description: |
+        A oportunidade fechada e a reserva, juntas — é o "sem redigitar nada" do
+        critério de aceite do §7.
+      properties:
+        opportunity: { $ref: "#/components/schemas/Oportunidade" }
+        reservation:
+          $ref: "#/components/schemas/Reserva"
+          description: "Criada como `hold`, com as unidades já alocadas. O sinal continua entrando por `POST /reservations/{id}/confirm`."
+        reservation_created:
+          type: boolean
+          description: |
+            `false` quando a oportunidade já tinha reserva (a pré-reserva feita
+            na etapa anterior) e `/win` apenas a vinculou — a mesma informação
+            que o `200` em vez de `201` carrega, para o cliente que não olha o
+            status.
+
+    PedidoDePerda:
+      type: object
+      description: "Corpo do `POST /crm/opportunities/{id}/lose`."
+      required: [lost_reason_id]
+      properties:
+        lost_reason_id:
+          type: string
+          format: uuid
+          description: |
+            **Obrigatório** (§7), e tem de ser um motivo **ativo** do catálogo.
+            Ausente, desconhecido ou inativo é `422 LOSS_REASON_REQUIRED`.
+        note: { type: [string, "null"], maxLength: 500, description: "O detalhe, ao lado do motivo — nunca no lugar dele." }
+
+    ResultadoDePerda:
+      type: object
+      properties:
+        opportunity: { $ref: "#/components/schemas/Oportunidade" }
+        reservation:
+          description: |
+            A pré-reserva ainda de pé, quando havia uma. Perder o negócio **não**
+            cancela a reserva: liberar a data tem política congelada e possível
+            reembolso, e é decisão separada. Vem preenchida para a tela oferecer
+            `POST /reservations/{id}/cancel` em seguida.
+          oneOf:
+            - { $ref: "#/components/schemas/Reserva" }
+            - { type: "null" }
+
+    TipoDeAtividade:
+      type: string
+      enum: [tarefa, ligacao, reuniao, email, whatsapp, nota]
+      description: "`nota` é o registro sem prazo — não tem `due_at` nem conclusão, e aparece na aba de notas da tela em vez da lista de tarefas."
+
+    EstadoDaAtividade:
+      type: string
+      enum: [pendente, concluida, cancelada]
+
+    Atividade:
+      type: object
+      description: |
+        `crm_activities`. Tarefa, ligação, reunião, e-mail, WhatsApp e nota são o
+        **mesmo** registro com `type` diferente: a linha do tempo da oportunidade
+        é uma leitura só, e não a costura de seis tabelas.
+      properties:
+        id:          { type: string, format: uuid }
+        type:        { $ref: "#/components/schemas/TipoDeAtividade" }
+        subject:     { type: string }
+        description: { type: [string, "null"] }
+        due_at:      { type: [string, "null"], format: date-time }
+        done_at:     { type: [string, "null"], format: date-time, description: "Carimbado pelo servidor em `POST /{id}/complete`. Nunca escrito pelo cliente." }
+        status:      { $ref: "#/components/schemas/EstadoDaAtividade" }
+        overdue:     { type: boolean, description: "Derivado: `pendente` com `due_at` no passado, pelo relógio de `America/Fortaleza`." }
+        priority:    { type: string, enum: [baixa, normal, alta] }
+        lead_id:        { type: [string, "null"], format: uuid }
+        opportunity_id: { type: [string, "null"], format: uuid }
+        contact_id:     { type: [string, "null"], format: uuid }
+        contact_name:   { type: [string, "null"] }
+        owner_id:    { type: string, format: uuid, description: "Quem tem de fazer. É o que o escopo `own` compara — e tarefa sem responsável é tarefa que ninguém faz." }
+        owner_name:  { type: [string, "null"] }
+        stage_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            A etapa que originou a tarefa automática. É a chave da
+            idempotência: não se cria outra enquanto existir tarefa `auto`
+            **pendente** com o mesmo `(opportunity_id, stage_id)`.
+        auto:
+          type: boolean
+          description: "`true` quando foi o servidor que criou, ao entrar na etapa. Não é aceito no corpo de criação."
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    AtividadeCriar:
+      type: object
+      description: "Corpo do `POST /crm/activities`. Pelo menos um entre `opportunity_id`, `lead_id` e `contact_id` é obrigatório."
+      required: [type, subject]
+      properties:
+        type:        { $ref: "#/components/schemas/TipoDeAtividade" }
+        subject:     { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"] }
+        due_at:      { type: [string, "null"], format: date-time, description: "Ignorado em `type: nota` — nota não tem prazo." }
+        priority:    { type: string, enum: [baixa, normal, alta], default: normal }
+        lead_id:        { type: [string, "null"], format: uuid }
+        opportunity_id: { type: [string, "null"], format: uuid }
+        contact_id:     { type: [string, "null"], format: uuid }
+        owner_id:       { type: [string, "null"], format: uuid, description: Ausente assume o requisitante. }
+
+    AtividadeAtualizar:
+      type: object
+      description: |
+        Corpo do `PUT` e do `PATCH`. `done_at` fica de fora — concluir é
+        `POST /{id}/complete`, com o relógio do servidor.
+      properties:
+        type:        { $ref: "#/components/schemas/TipoDeAtividade" }
+        subject:     { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"] }
+        due_at:      { type: [string, "null"], format: date-time }
+        priority:    { type: string, enum: [baixa, normal, alta] }
+        owner_id:    { type: [string, "null"], format: uuid, description: "Repassar a tarefa a outra pessoa. Quem tem escopo `own` perde a tarefa de vista ao fazer isso — e é o comportamento correto." }
+        status:
+          type: string
+          enum: [pendente, cancelada]
+          description: |
+            Cancelar, ou reabrir o que foi cancelado. `concluida` é recusado
+            aqui (`422 VALIDATION_ERROR`): concluir carimba `done_at`, e
+            `done_at` escrito pelo cliente é o tempo médio de resposta do §15
+            medido pelo relógio do navegador.
+
+    PedidoDeConclusao:
+      type: object
+      description: "Corpo opcional do `POST /crm/activities/{id}/complete`."
+      properties:
+        note:
+          type: [string, "null"]
+          maxLength: 1000
+          description: "O resultado — o que foi dito na ligação. Anexado à `description` e visível na linha do tempo."
+        next_activity:
+          description: |
+            A próxima ação, criada na mesma transação. É o "concluir e agendar o
+            próximo passo": sem ele a operação conclui e esquece, e o único
+            lembrete passa a ser o alerta de cliente parado.
+
+            Herda `opportunity_id`, `lead_id`, `contact_id` e `owner_id` da
+            atividade concluída.
+          oneOf:
+            - $ref: "#/components/schemas/ProximaAtividade"
+            - { type: "null" }
+
+    ProximaAtividade:
+      type: object
+      required: [type, subject, due_at]
+      properties:
+        type:     { $ref: "#/components/schemas/TipoDeAtividade" }
+        subject:  { type: string, minLength: 1, maxLength: 200 }
+        due_at:   { type: string, format: date-time }
+        priority: { type: string, enum: [baixa, normal, alta], default: normal }
+        owner_id: { type: [string, "null"], format: uuid, description: Ausente herda o dono da atividade concluída. }
+
+    ResultadoDeConclusao:
+      type: object
+      properties:
+        activity: { $ref: "#/components/schemas/Atividade" }
+        next_activity:
+          description: "A próxima ação, se pedida. `null` quando não."
+          oneOf:
+            - { $ref: "#/components/schemas/Atividade" }
+            - { type: "null" }
 
 security:
   - bearerAuth: []

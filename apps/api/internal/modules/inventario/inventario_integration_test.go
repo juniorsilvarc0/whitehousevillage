@@ -5,6 +5,7 @@ package inventario_test
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -659,50 +660,73 @@ func TestPatchNaoDesativaProdutoComReservaAtiva(t *testing.T) {
 // exclusiva já vendida, e a `EXCLUDE` não tem como defender: não existe linha
 // com que a próxima venda possa colidir. O desfecho medido pela revisão foi um
 // hóspede de outro produto dormindo dentro da casa alugada por inteiro.
-func TestReativarUnidadeQueFaltouNumaVendaExclusivaEhRecusado(t *testing.T) {
+// TestBancoRecusaVenderACasaInteiraIncompleta é a prova permanente do crítico
+// que atravessou três revisões adversariais.
+//
+// O cenário original: uma unidade fora do ar, a casa inteira vendida entregando
+// N-1 unidades pelo preço de N, e a unidade que faltou vendida depois a um
+// estranho. Nenhuma constraint via o problema, porque o defeito é a AUSÊNCIA de
+// uma linha em `reservation_units`, e constraint nenhuma vê ausência.
+//
+// A versão anterior deste teste montava esse estado à mão para provar que
+// reativar a unidade precisava ser recusado pelo service. Hoje o estado é
+// inalcançável: a constraint trigger adiável confere o CONJUNTO no commit. O
+// teste passa a cobrar a garantia na origem — e por SQL direto, sem a aplicação
+// no caminho, que é onde uma garantia de banco precisa se sustentar.
+func TestBancoRecusaVenderACasaInteiraIncompleta(t *testing.T) {
 	a := subir(t)
-	gestor := a.token(t, a.perfil(t, "inv_reativa", celulaVer, celulaEditar))
 
 	produtoID, _ := a.produtoDireto(t, "all_members")
 	dentro := a.unidadeDireta(t, "IT-RA-"+sufixo())
-	deFora := a.unidadeDiretaAssim(t, "IT-RB-"+sufixo(), false)
+	deFora := a.unidadeDireta(t, "IT-RB-"+sufixo())
 	a.compor(t, produtoID, dentro, deFora)
 
-	// A casa inteira vendida enquanto `deFora` estava fora do ar: bloco só na
-	// unidade que o alocador enxergou.
-	reservaID := a.reserva(t, produtoID, "confirmed")
-	a.bloqueioDaReserva(t, dentro, reservaID)
-	codigo := a.codigoDaReserva(t, reservaID)
+	contato := a.contato(t)
 
-	caminho := "/units/" + deFora.String()
-	r := a.chamar(t, http.MethodPatch, caminho, gestor, map[string]any{"active": true})
-	if r.Status != http.StatusConflict {
-		t.Fatalf("status %d, esperado 409 — %s", r.Status, r.Corpo)
+	// Tudo numa transação, como a produção faz — a constraint é adiada até o
+	// commit, então é ele quem precisa recusar.
+	tx, err := a.pool.Begin(a.ctx)
+	if err != nil {
+		t.Fatalf("abrindo transação: %v", err)
 	}
-	if c := r.codigoDoErro(); c != "RESOURCE_IN_USE" {
-		t.Fatalf("code = %s, esperado RESOURCE_IN_USE — %s", c, r.Corpo)
-	}
-	conflitos, _ := r.detalhes(t)["conflicting_reservations"].([]any)
-	if len(conflitos) != 1 {
-		t.Fatalf("details.conflicting_reservations = %v, esperado 1 reserva", r.detalhes(t)["conflicting_reservations"])
-	}
-	if primeira, _ := conflitos[0].(map[string]any); primeira["code"] != codigo {
-		t.Fatalf("a reserva conflitante deveria ser %s; veio %v", codigo, conflitos[0])
-	}
-	if a.ativoDaUnidade(t, deFora) {
-		t.Fatal("a unidade foi reativada apesar da recusa")
+	defer func() { _ = tx.Rollback(a.ctx) }()
+
+	var reservaID uuid.UUID
+	if err := tx.QueryRow(a.ctx, `
+		INSERT INTO reservations (property_id, unit_type_id, contact_id, status,
+		                          check_in, check_out, guests_count)
+		VALUES ($1, $2, $3, 'confirmed', current_date + 30, current_date + 33, 2)
+		RETURNING id`, a.propriedade, produtoID, contato).Scan(&reservaID); err != nil {
+		t.Fatalf("criando a reserva: %v", err)
 	}
 
-	// Resolvida a reserva, a reativação passa: a guarda é sobre a venda de pé,
-	// não sobre a unidade.
-	a.executar(t, `UPDATE stay_blocks SET status = 'cancelled' WHERE reservation_id = $1`, reservaID)
-	a.executar(t, `UPDATE reservations SET status = 'cancelled' WHERE id = $1`, reservaID)
-	if r := a.chamar(t, http.MethodPatch, caminho, gestor, map[string]any{"active": true}); r.Status != http.StatusOK {
-		t.Fatalf("reativação legítima: status %d, esperado 200 — %s", r.Status, r.Corpo)
+	// Só UMA das duas unidades da composição: a casa vendida sem estar inteira.
+	var bloco uuid.UUID
+	if err := tx.QueryRow(a.ctx, `
+		INSERT INTO stay_blocks (property_id, unit_id, reservation_id, source, status, period)
+		VALUES ($1, $2, $3, 'reservation', 'confirmed',
+		        daterange(current_date + 30, current_date + 33, '[)'))
+		RETURNING id`, a.propriedade, dentro, reservaID).Scan(&bloco); err != nil {
+		t.Fatalf("criando o bloco: %v", err)
 	}
-	if !a.ativoDaUnidade(t, deFora) {
-		t.Fatal("a unidade continuou inativa depois do PATCH aceito")
+	if _, err := tx.Exec(a.ctx, `
+		INSERT INTO reservation_units (reservation_id, unit_id, stay_block_id)
+		VALUES ($1, $2, $3)`, reservaID, dentro, bloco); err != nil {
+		t.Fatalf("vinculando a unidade: %v", err)
 	}
+
+	err = tx.Commit(a.ctx)
+	if err == nil {
+		a.executar(t, `DELETE FROM reservations WHERE id = $1`, reservaID)
+		t.Fatal("o banco aceitou vender a casa inteira segurando 1 de 2 unidades: " +
+			"a unidade que faltou fica vendável a um estranho dentro da estadia " +
+			"exclusiva — a invariante da casa inteira não está valendo")
+	}
+	if !strings.Contains(err.Error(), "sem estar inteira") {
+		t.Fatalf("a recusa veio por outro motivo: %v", err)
+	}
+	t.Logf("o banco recusou no commit, como deve: %v", err)
+	_ = deFora
 }
 
 // A porta oposta: em vez de desativar a unidade que compõe, compor com uma

@@ -1018,12 +1018,23 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 		"/units":        a.unidadeNova(t, u.Token, "varredura"),
 		"/reservations": reserva.ID,
 	}
+	// O CRM entrou com 45 rotas; sem alvo aqui elas nasceriam fora da varredura,
+	// que é exatamente o que esta mensagem de erro existe para impedir.
+	// Funil, etapas e motivos de perda vêm do seed; lead, oportunidade e
+	// atividade não são semeados, então a varredura cria os seus.
+	alvos["/crm/leads"] = a.leadDeVarredura(t, propriedade, contato)
+	alvos["/crm/opportunities"] = a.oportunidadeDeVarredura(t, propriedade, contato)
+	alvos["/crm/activities"] = a.atividadeDeVarredura(t, propriedade, alvos["/crm/opportunities"])
+
 	for prefixo, tabela := range map[string]string{
-		"/rate-tables":     "rate_tables",
-		"/rates":           "rates",
-		"/holidays":        "holidays",
-		"/special-periods": "special_periods",
-		"/min-nights":      "min_nights_rules",
+		"/rate-tables":      "rate_tables",
+		"/rates":            "rates",
+		"/holidays":         "holidays",
+		"/special-periods":  "special_periods",
+		"/min-nights":       "min_nights_rules",
+		"/crm/pipelines":    "crm_pipelines",
+		"/crm/stages":       "crm_stages",
+		"/crm/lost-reasons": "crm_lost_reasons",
 	} {
 		var id uuid.UUID
 		if err := a.pool.QueryRow(a.ctx, `SELECT id FROM `+tabela+` LIMIT 1`).Scan(&id); err != nil {
@@ -1050,8 +1061,19 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 
 		caminho := rota.Path
 		if strings.Contains(caminho, "{id}") {
-			raiz := "/" + strings.Split(strings.TrimPrefix(caminho, "/"), "/")[0]
-			alvo, ok := alvos[raiz]
+			// A chave é o primeiro segmento, MAS o CRM agrupa seis coleções sob
+			// `/crm` — cada uma com o seu alvo. Por isso tenta-se primeiro o
+			// prefixo de dois níveis, e só então a raiz. Sem isso, todo o CRM
+			// colapsaria numa chave só e a varredura acharia que falta alvo.
+			partes := strings.Split(strings.TrimPrefix(caminho, "/"), "/")
+			raiz := "/" + partes[0]
+			chave := raiz
+			if len(partes) > 1 {
+				if _, existe := alvos["/"+partes[0]+"/"+partes[1]]; existe {
+					chave = "/" + partes[0] + "/" + partes[1]
+				}
+			}
+			alvo, ok := alvos[chave]
 			if !ok {
 				t.Errorf("%s %s: a varredura não sabe alcançar esta rota (falta um alvo para %q) — rota "+
 					"nova com corpo tem de entrar aqui, senão ela nasce fora da cobertura",
@@ -1109,4 +1131,61 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 		t.Fatalf("a varredura cobriu só %d rotas com corpo — o scanner do contrato ficou defasado e a "+
 			"cobertura encolheu sem ninguém notar", varridas)
 	}
+}
+
+// ─── Alvos de CRM para a varredura de campo desconhecido ────────────────────
+// Criados por SQL de propósito: a varredura mede o DECODER, e montar o alvo
+// pela própria API acoplaria o teste ao DTO que ele está auditando.
+
+func (a *ambiente) leadDeVarredura(t *testing.T, propriedade, contato uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	var id uuid.UUID
+	if err := a.pool.QueryRow(a.ctx, `
+		INSERT INTO crm_leads (property_id, contact_id, source, status, score)
+		VALUES ($1, $2, 'varredura', 'novo', 0)
+		RETURNING id`, propriedade, contato).Scan(&id); err != nil {
+		t.Fatalf("criando lead para a varredura: %v", err)
+	}
+	t.Cleanup(func() { a.executarQA(t, `DELETE FROM crm_leads WHERE id = $1`, id) })
+	return id
+}
+
+func (a *ambiente) oportunidadeDeVarredura(t *testing.T, propriedade, contato uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	var funil, etapa uuid.UUID
+	if err := a.pool.QueryRow(a.ctx,
+		`SELECT p.id, e.id FROM crm_pipelines p
+		   JOIN crm_stages e ON e.pipeline_id = p.id
+		  ORDER BY e.position LIMIT 1`).Scan(&funil, &etapa); err != nil {
+		t.Fatalf("sem funil semeado para a varredura: %v", err)
+	}
+
+	var id uuid.UUID
+	if err := a.pool.QueryRow(a.ctx, `
+		INSERT INTO crm_opportunities (property_id, contact_id, pipeline_id, stage_id,
+		                               title, amount_cents, probability, status, entered_stage_at)
+		VALUES ($1, $2, $3, $4, 'Varredura', 0, 0, 'aberto', now())
+		RETURNING id`, propriedade, contato, funil, etapa).Scan(&id); err != nil {
+		t.Fatalf("criando oportunidade para a varredura: %v", err)
+	}
+	t.Cleanup(func() { a.executarQA(t, `DELETE FROM crm_opportunities WHERE id = $1`, id) })
+	return id
+}
+
+func (a *ambiente) atividadeDeVarredura(t *testing.T, propriedade, oportunidade uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	// `crm_activities_tem_vinculo` exige ao menos um vínculo: atividade solta
+	// não existe no modelo, e é um bom desenho — tarefa sem dono some.
+	var id uuid.UUID
+	if err := a.pool.QueryRow(a.ctx, `
+		INSERT INTO crm_activities (property_id, opportunity_id, type, subject, status, priority, auto)
+		VALUES ($1, $2, 'tarefa', 'Varredura', 'pendente', 'normal', false)
+		RETURNING id`, propriedade, oportunidade).Scan(&id); err != nil {
+		t.Fatalf("criando atividade para a varredura: %v", err)
+	}
+	t.Cleanup(func() { a.executarQA(t, `DELETE FROM crm_activities WHERE id = $1`, id) })
+	return id
 }

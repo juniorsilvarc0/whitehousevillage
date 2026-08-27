@@ -37,6 +37,7 @@ import (
 type estado struct {
 	propriedadeID pgtype.UUID
 	tarifarioID   pgtype.UUID
+	funilID       pgtype.UUID
 	producao      bool
 }
 
@@ -67,6 +68,9 @@ func etapas() []etapa {
 		{"perfis", perfis},
 		{"permissoes", permissoes},
 		{"usuarios_de_desenvolvimento", usuariosDeDesenvolvimento},
+		{"funil_padrao", funilPadrao},
+		{"etapas_do_funil", etapasDoFunil},
+		{"motivos_de_perda", motivosDePerda},
 	}
 }
 

@@ -391,3 +391,18 @@ func (w *respostaObservada) Flush() {
 		f.Flush()
 	}
 }
+
+// Unwrap entrega o writer de baixo para o http.ResponseController.
+//
+// Sem esta linha, `rc.SetWriteDeadline` devolve "feature not supported" (o
+// controller só desce a cadeia por Unwrap; repassar Flush NÃO basta), e toda
+// conexão de longa duração — o SSE do /stream — morre no `WriteTimeout` do
+// http.Server sem que o handler consiga empurrar o prazo. O sintoma é o pior
+// possível: o mapa e o kanban param de receber evento de minuto em minuto, com
+// a API saudável e nenhum erro em lugar nenhum.
+//
+// Medido antes da correção, com o mesmo handler nos dois lados:
+//
+//	sem middleware            SetWriteDeadline=<nil>
+//	com httpx.RequestLogger   SetWriteDeadline=feature not supported
+func (w *respostaObservada) Unwrap() http.ResponseWriter { return w.ResponseWriter }

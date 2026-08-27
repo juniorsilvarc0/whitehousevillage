@@ -11,10 +11,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/stream"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
@@ -68,6 +70,12 @@ func New(o Opcoes) (http.Handler, error) {
 		Tarifario:       tarifario.NovoHandler(o.Pool, tx),
 		Disponibilidade: disponibilidade.NovoHandler(o.Pool, tx),
 		Reservas:        reservas.NovoHandler(o.Pool, tx),
+
+		// O CRM segue o mesmo construtor. O stream ignora o TxManager (ele não
+		// escreve): abre uma conexão dedicada para o LISTEN, porque LISTEN não
+		// convive com conexão devolvida ao pool entre consultas.
+		CRM:    crm.NovoHandler(o.Pool, tx),
+		Stream: stream.NovoHandler(o.Pool, tx),
 	}
 
 	tabela := Rotas(deps)

@@ -29,6 +29,7 @@ package inventario_test
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -48,14 +49,64 @@ func (a *ambiente) casaVendida(t *testing.T, consome string, quantas int) (produ
 	}
 	a.compor(t, produto, unidades...)
 
-	reserva = a.reserva(t, produto, "confirmed")
-	for _, unidade := range unidades {
-		bloco := a.bloqueioDaReserva(t, unidade, reserva)
-		// `reservation_units` é o que a invariante da venda exclusiva compara
-		// com a composição; sem ela o cenário não seria o cenário.
-		a.vincular(t, reserva, unidade, bloco)
-	}
+	// A venda inteira numa transação só — como a produção faz (`service.tx.Do`).
+	//
+	// Não é detalhe de teste: a invariante da casa inteira é um
+	// `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED`, validado no
+	// COMMIT. Inserindo linha a linha em autocommit, o commit da reserva
+	// acontece quando ela ainda tem zero unidades, e o banco recusa —
+	// corretamente. Um fixture que monta a venda em pedaços não reproduz uma
+	// venda; reproduz um estado que o sistema nunca cria.
+	reserva = a.vendaExclusivaNumaTransacao(t, produto, unidades)
 	return produto, unidades, reserva
+}
+
+// vendaExclusivaNumaTransacao grava reserva + blocos + reservation_units num
+// único commit, que é a única forma de a constraint adiável enxergar a venda
+// completa.
+func (a *ambiente) vendaExclusivaNumaTransacao(t *testing.T, produto uuid.UUID, unidades []uuid.UUID) uuid.UUID {
+	t.Helper()
+
+	contato := a.contato(t)
+
+	tx, err := a.pool.Begin(a.ctx)
+	if err != nil {
+		t.Fatalf("abrindo transação da venda: %v", err)
+	}
+	defer func() { _ = tx.Rollback(a.ctx) }()
+
+	var reserva uuid.UUID
+	if err := tx.QueryRow(a.ctx, `
+		INSERT INTO reservations (property_id, unit_type_id, contact_id, status,
+		                          check_in, check_out, guests_count)
+		VALUES ($1, $2, $3, 'confirmed', current_date + 30, current_date + 33, 2)
+		RETURNING id`, a.propriedade, produto, contato).Scan(&reserva); err != nil {
+		t.Fatalf("criando reserva confirmed: %v", err)
+	}
+
+	for _, unidade := range unidades {
+		var bloco uuid.UUID
+		if err := tx.QueryRow(a.ctx, `
+			INSERT INTO stay_blocks (property_id, unit_id, reservation_id, source, status, period)
+			VALUES ($1, $2, $3, 'reservation', 'confirmed',
+			        daterange(current_date + 30, current_date + 33, '[)'))
+			RETURNING id`, a.propriedade, unidade, reserva).Scan(&bloco); err != nil {
+			t.Fatalf("criando bloco da reserva: %v", err)
+		}
+		// `reservation_units` é o que a invariante compara com a composição;
+		// sem ela o cenário não seria o cenário.
+		if _, err := tx.Exec(a.ctx, `
+			INSERT INTO reservation_units (reservation_id, unit_id, stay_block_id)
+			VALUES ($1, $2, $3)`, reserva, unidade, bloco); err != nil {
+			t.Fatalf("vinculando unidade à reserva: %v", err)
+		}
+	}
+
+	if err := tx.Commit(a.ctx); err != nil {
+		t.Fatalf("commitando a venda exclusiva: %v", err)
+	}
+	t.Cleanup(func() { a.executar(t, `DELETE FROM reservations WHERE id = $1`, reserva) })
+	return reserva
 }
 
 func (a *ambiente) vincular(t *testing.T, reserva, unidade, bloco uuid.UUID) {
@@ -347,40 +398,37 @@ func TestRemoverUnidadeOcupadaDeOneMemberEhRecusadoNaAPI(t *testing.T) {
 
 // ═══════════ Por que a EXCLUDE não bastava: o mecanismo, medido ═════════════
 
-// TestUnidadeForaDaVendaFicaLivreDentroDaEstadiaExclusiva demonstra POR QUE a
-// composição precisa de guarda no service.
+// TestBancoRecusaComposicaoMaiorQueAVendaExclusiva nasceu como demonstração do
+// PROBLEMA e virou prova da GARANTIA.
 //
-// Ele monta à mão o estado que a API agora recusa criar — composição com uma
-// unidade a mais do que a venda segura — e prova que a `stay_no_overlap` aceita
-// uma ocupação concorrente naquela unidade DENTRO das datas da estadia
-// exclusiva. É o `POST /reservations` do caminho relatado, reduzido ao INSERT
-// que ele executa: a constraint não tem com o que colidir porque a linha que
-// faltaria nunca foi inserida.
-func TestUnidadeForaDaVendaFicaLivreDentroDaEstadiaExclusiva(t *testing.T) {
+// Na versão anterior ele montava à mão o estado inconsistente — composição com
+// uma unidade a mais do que a venda segura — e mostrava a `stay_no_overlap`
+// aceitando um intruso naquela unidade dentro das datas da estadia exclusiva:
+// a constraint não tinha com o que colidir, porque a linha que faltaria nunca
+// fora inserida. Era o argumento de por que a guarda precisava morar no service.
+//
+// Depois da migration da invariante, esse estado deixou de ser alcançável — nem
+// pelo service, nem por SQL direto. O teste passa a cobrar exatamente isso: a
+// tentativa de compor a unidade órfã é recusada PELO BANCO. Se alguém remover a
+// constraint trigger, este teste fica vermelho antes de um hóspede descobrir.
+func TestBancoRecusaComposicaoMaiorQueAVendaExclusiva(t *testing.T) {
 	a := subir(t)
 
 	produto, _, reserva := a.casaVendida(t, "all_members", 3)
-	// A nona unidade: na composição, sem bloco — o estado exato que o PUT
-	// produzia antes da guarda.
 	orfa := a.unidadeDireta(t, "IT-ORFA-"+sufixo())
-	a.compor(t, produto, orfa)
 
-	var intruso uuid.UUID
-	err := a.pool.QueryRow(a.ctx, `
-		INSERT INTO stay_blocks (property_id, unit_id, source, status, period)
-		VALUES ($1, $2, 'reservation', 'confirmed',
-		        daterange(current_date + 31, current_date + 32, '[)'))
-		RETURNING id`, a.propriedade, orfa).Scan(&intruso)
-	if err != nil {
-		t.Fatalf("a inserção concorrente falhou por outro motivo: %v", err)
+	// Escreve direto em unit_type_members, sem passar pela API: é o caminho que
+	// a guarda do service não alcança, e que só o banco pode fechar.
+	_, err := a.pool.Exec(a.ctx,
+		`INSERT INTO unit_type_members (unit_type_id, unit_id) VALUES ($1, $2)`, produto, orfa)
+	if err == nil {
+		a.executar(t, `DELETE FROM unit_type_members WHERE unit_type_id = $1 AND unit_id = $2`, produto, orfa)
+		t.Fatalf("o banco aceitou crescer a composição de %s com a casa vendida: a unidade "+
+			"órfã fica livre dentro da estadia exclusiva e a EXCLUDE não vê ausência de "+
+			"linha — a invariante da casa inteira não está valendo", a.codigoDaReserva(t, reserva))
 	}
-	a.executar(t, `DELETE FROM stay_blocks WHERE id = $1`, intruso)
-
-	// Não é uma falha do banco: é a demonstração de que o banco NÃO PODE
-	// resolver isso sozinho com a EXCLUDE. Por isso a guarda mora no service, e
-	// por isso o relatório pede a constraint trigger — a única forma de o banco
-	// enxergar a ausência de uma linha é conferir o CONJUNTO no commit.
-	t.Logf("a unidade fora da venda aceitou ocupação concorrente dentro de %s: "+
-		"a EXCLUDE não vê ausência de linha, e é isso que a guarda de composição impede de existir",
-		a.codigoDaReserva(t, reserva))
+	if !strings.Contains(err.Error(), "sem estar inteira") {
+		t.Fatalf("a recusa veio por outro motivo: %v", err)
+	}
+	t.Logf("o banco recusou, como deve: %v", err)
 }

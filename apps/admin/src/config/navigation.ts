@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import {
-  CalendarRange, LayoutGrid, ClipboardList, Columns3, MessageCircle,
+  CalendarRange, LayoutGrid, ClipboardList, Columns3, ContactRound, MessageCircle,
   CalendarDays, Wallet, Users, Package, Share2, ChartLine, SlidersHorizontal,
 } from "lucide-react";
 
@@ -69,6 +69,7 @@ export const navigation: NavItem[] = [
   { title: "Mapa",           href: "/app/mapa",         icon: CalendarRange,     group: "Operação",      recurso: "calendar" },
   { title: "Reservas",       href: "/app/reservas",     icon: ClipboardList,     group: "Operação",      recurso: "reservations" },
   { title: "Funil",          href: "/app/funil",        icon: Columns3,          group: "Comercial",     recurso: "crm.opportunities" },
+  { title: "Leads",          href: "/app/leads",        icon: ContactRound,      group: "Comercial",     recurso: "crm.leads" },
   { title: "WhatsApp",       href: "/app/chat",         icon: MessageCircle,     group: "Comercial",     recurso: "chat" },
   { title: "Agenda",         href: "/app/agenda",       icon: CalendarDays,      group: "Operação",      recurso: "agenda" },
   { title: "Financeiro",     href: "/app/financeiro",   icon: Wallet,            group: "Análise",       recurso: "finance.receivables" },

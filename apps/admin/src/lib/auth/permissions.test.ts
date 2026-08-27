@@ -152,7 +152,7 @@ describe("navegacaoVisivel", () => {
   });
 
   it("o admin com o catálogo inteiro vê o menu inteiro", () => {
-    expect(hrefs({ role: "admin" }, PERMISSOES_DO_ADMIN)).toHaveLength(12);
+    expect(hrefs({ role: "admin" }, PERMISSOES_DO_ADMIN)).toHaveLength(13);
   });
 
   it("o corretor não vê Financeiro nem Configurações", () => {
@@ -172,6 +172,9 @@ describe("navegacaoVisivel", () => {
       "/app/mapa",
       "/app/reservas",
       "/app/funil",
+      // Leads entrou junto com o CRM: o seed dá `crm.leads` ao corretor em
+      // escopo `own` — são os leads dele, e o menu é função só da matriz.
+      "/app/leads",
       "/app/chat",
       "/app/agenda",
       "/app/comissoes",

@@ -1,0 +1,280 @@
+/*
+ * Geometria e paleta do mapa de ocupação.
+ *
+ * ## Por que um arquivo CSS, e não classes do Tailwind no JSX
+ *
+ * Três coisas aqui não têm utility: o **hachurado** da manutenção
+ * (`repeating-linear-gradient`), o **tracejado** da pré-reserva e a **grade de
+ * posicionamento por índice**, que precisa de `calc()` sobre uma variável de
+ * largura de coluna. Escrevê-las em `style={{}}` inline geraria uma string de
+ * gradiente nova a cada render, para cada uma das ~40 colunas × 9 linhas — o
+ * caminho mais curto conhecido para transformar um evento de tempo real em
+ * meio segundo de trabalho de estilo.
+ *
+ * ## Por que os tokens são locais
+ *
+ * `globals.css` é arquivo compartilhado, e esta entrega não escreve nele
+ * (ownership de pasta). Todas as cores abaixo são **derivadas** dos tokens da
+ * marca por `color-mix` — nenhum hex, nenhum oklch solto: mudar `--primary` no
+ * `globals.css` continua repintando o mapa inteiro, que é a propriedade que o
+ * anti-padrão nº 4 de `docs/ui.md` protege. Se um dia virarem sistema, sobem
+ * para o `@theme` sem mudar um nome (está no relatório, PARA O INTEGRADOR).
+ */
+
+.mapa {
+  /* 2,25rem = 36px por dia: cabe "31" com folga e mantém 90 dias em ~3.240px,
+     três telas de rolagem horizontal. Menos que isso e o número do dia começa a
+     encostar na borda; mais, e a temporada não cabe em rolagem nenhuma. */
+  --mapa-dia: 2.25rem;
+  --mapa-linha: 2.5rem;
+  --mapa-rotulo: 11rem;
+  --mapa-raio: calc(var(--radius) * 0.45);
+
+  /* Fundo por tipo de data — a escala é a PRECEDÊNCIA da spec §3, não gosto:
+     quanto mais forte o tipo, mais presente a cor. Réveillon e Carnaval
+     dividem o mesmo tom porque dividem a mesma precedência (100). */
+  --mapa-normal: transparent;
+  --mapa-fds: color-mix(in oklab, var(--muted) 85%, transparent);
+  --mapa-feriado: color-mix(in oklab, var(--accent) 40%, transparent);
+  --mapa-alta: color-mix(in oklab, var(--accent) 62%, transparent);
+  --mapa-especial: color-mix(in oklab, var(--primary) 20%, transparent);
+
+  --mapa-grade: color-mix(in oklab, var(--border) 70%, transparent);
+  --mapa-hoje: color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+/* ── A moldura: rola por dentro, nunca a página ───────────────────────────── */
+
+.mapa-rolagem {
+  overflow: auto;
+  overscroll-behavior-x: contain;
+  /* Rolagem horizontal com trackpad em cima de uma grade densa vira zigue-zague
+     sem isto: o navegador tenta rolar os dois eixos a cada gesto. */
+  scrollbar-gutter: stable;
+}
+
+.mapa-conteudo {
+  display: grid;
+  grid-template-columns: var(--mapa-rotulo) max-content;
+  width: max-content;
+  min-width: 100%;
+}
+
+/* A coluna de rótulos acompanha a rolagem horizontal e fica por cima das
+   faixas. O fundo é opaco de propósito: translúcido deixaria a barra de uma
+   reserva aparecer por baixo do nome da unidade. */
+.mapa-rotulo {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background-color: var(--card);
+  border-right: 1px solid var(--mapa-grade);
+}
+
+.mapa-cabecalho {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background-color: var(--card);
+  border-bottom: 1px solid var(--mapa-grade);
+}
+
+/* O canto onde as duas barras fixas se cruzam precisa de z-index maior que as
+   duas, senão o cabeçalho passa por baixo do rótulo ao rolar na diagonal. */
+.mapa-canto {
+  z-index: 4;
+}
+
+/* ── Colunas ──────────────────────────────────────────────────────────────── */
+
+.mapa-pista {
+  position: relative;
+  height: var(--mapa-linha);
+}
+
+.mapa-coluna {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: var(--mapa-dia);
+  border-right: 1px solid var(--mapa-grade);
+}
+
+.mapa-coluna[data-tipo="normal"] { background-color: var(--mapa-normal); }
+.mapa-coluna[data-tipo="fds"] { background-color: var(--mapa-fds); }
+.mapa-coluna[data-tipo="feriado"] { background-color: var(--mapa-feriado); }
+.mapa-coluna[data-tipo="alta"] { background-color: var(--mapa-alta); }
+.mapa-coluna[data-tipo="reveillon"],
+.mapa-coluna[data-tipo="carnaval"] { background-color: var(--mapa-especial); }
+
+.mapa-coluna[data-hoje="1"] {
+  box-shadow: inset 2px 0 0 0 var(--mapa-hoje);
+}
+
+.mapa-coluna[data-apontada="1"] {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ring) 55%, transparent);
+}
+
+/* ── As faixas ────────────────────────────────────────────────────────────── */
+
+/*
+ * `pointer-events: none` é decisão de arquitetura, não detalhe: o hover e o
+ * clique são resolvidos UMA vez na linha, por aritmética sobre a posição do
+ * ponteiro, e não por 90 alvos de evento por linha. É o que mantém o custo do
+ * mapa proporcional ao que se vê, e não ao que existe.
+ */
+.mapa-faixa {
+  position: absolute;
+  top: 0.28rem;
+  bottom: 0.28rem;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  overflow: hidden;
+  padding-inline: 0.375rem;
+  border-radius: var(--mapa-raio);
+  font-size: 0.6875rem;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Ponta reta = "corta aqui", não "termina aqui". A faixa que encosta na borda
+   da janela não sabe se a estadia continua fora dela — a resposta só cobre o
+   intervalo pedido —, e arredondar seria afirmar o que não se sabe. */
+.mapa-faixa[data-toca-inicio="1"] {
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+.mapa-faixa[data-toca-fim="1"] {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+}
+
+/* Confirmada: sólida, no gradiente da marca. É a única faixa que usa a cor
+   cheia — venda com sinal pago é o estado que a tela deve deixar mais firme. */
+.mapa-faixa--confirmed {
+  background-image: linear-gradient(135deg, oklch(0.36 0.05 140), oklch(0.42 0.055 120) 55%, oklch(0.47 0.06 100));
+  color: oklch(0.99 0.004 95);
+}
+
+/* Pré-reserva: tracejada. O tracejado é literal — data segurada sem dinheiro é
+   um contorno, não um preenchimento. */
+.mapa-faixa--hold {
+  background-color: color-mix(in oklab, var(--alcada-atencao) 16%, var(--card));
+  border: 1.5px dashed color-mix(in oklab, var(--alcada-atencao) 75%, transparent);
+  color: color-mix(in oklab, var(--alcada-atencao) 82%, var(--foreground));
+}
+
+.mapa-faixa--hold[data-urgencia="critica"],
+.mapa-faixa--hold[data-urgencia="expirada"] {
+  background-color: color-mix(in oklab, var(--destructive) 14%, var(--card));
+  border-color: color-mix(in oklab, var(--destructive) 70%, transparent);
+  color: color-mix(in oklab, var(--destructive) 85%, var(--foreground));
+}
+
+/* Estadia cumprida: tom de histórico. Continua desenhada — é receita realizada,
+   e apagá-la levaria ADR e RevPAR do mapa junto. Mas não disputa atenção com o
+   que ainda está por acontecer. */
+.mapa-faixa--checked_out {
+  background-color: color-mix(in oklab, var(--muted-foreground) 18%, transparent);
+  color: var(--muted-foreground);
+  border: 1px solid color-mix(in oklab, var(--muted-foreground) 26%, transparent);
+}
+
+/* Manutenção: hachurada. A textura diz "não é venda" antes de qualquer rótulo
+   ser lido — e é a leitura que a operação faz de relance. */
+.mapa-faixa--maintenance {
+  background-color: color-mix(in oklab, var(--muted) 60%, var(--card));
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in oklab, var(--muted-foreground) 34%, transparent) 0 3px,
+    transparent 3px 7px
+  );
+  color: var(--foreground);
+  border: 1px solid color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+}
+
+/* Uso do proprietário: mesma família da manutenção (não é venda), hachura no
+   sentido oposto para não se confundir com ela num relance. */
+.mapa-faixa--owner_hold {
+  background-color: color-mix(in oklab, var(--accent) 45%, var(--card));
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, var(--accent-foreground) 30%, transparent) 0 3px,
+    transparent 3px 7px
+  );
+  color: var(--accent-foreground);
+  border: 1px solid color-mix(in oklab, var(--accent-foreground) 24%, transparent);
+}
+
+/* OTA: sólida como uma venda — porque é —, em tom secundário, com o selo do
+   canal. O selo existe porque a ação da gestão muda: reserva de canal não se
+   cancela por aqui. */
+.mapa-faixa--ota {
+  background-color: color-mix(in oklab, var(--chart-3) 78%, var(--card));
+  color: oklch(0.99 0.004 95);
+}
+
+/* Linha sintética, dia em que parte da casa está ocupada: a casa inteira não é
+   vendável e não há reserva da Completa para desenhar. Hachura fina e discreta
+   — é uma consequência, não um registro. */
+.mapa-faixa--parcial {
+  background-image: repeating-linear-gradient(
+    45deg,
+    color-mix(in oklab, var(--muted-foreground) 22%, transparent) 0 2px,
+    transparent 2px 6px
+  );
+  color: var(--muted-foreground);
+  border: 1px dashed color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+}
+
+.mapa-selo {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding-inline: 0.3rem;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background-color: oklch(1 0 0 / 26%);
+}
+
+.mapa-faixa--hold .mapa-selo,
+.mapa-faixa--parcial .mapa-selo,
+.mapa-faixa--checked_out .mapa-selo,
+.mapa-faixa--maintenance .mapa-selo {
+  background-color: color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+/* A seleção de arrasto que vira bloqueio operacional. Fica ACIMA das faixas
+   porque é o gesto em curso — e o gesto em curso é sempre o que manda. */
+.mapa-selecao {
+  position: absolute;
+  top: 0.15rem;
+  bottom: 0.15rem;
+  z-index: 1;
+  border-radius: var(--mapa-raio);
+  border: 1.5px solid var(--ring);
+  background-color: color-mix(in oklab, var(--ring) 16%, transparent);
+  pointer-events: none;
+}
+
+.mapa-linha-hoje {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  z-index: 1;
+  background-color: var(--mapa-hoje);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mapa-pulso {
+    animation: mapa-pulso 1.4s ease-in-out infinite;
+  }
+  @keyframes mapa-pulso {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+}

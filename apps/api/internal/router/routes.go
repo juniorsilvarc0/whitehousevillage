@@ -5,10 +5,12 @@ import (
 	"net/http"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/stream"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
 )
@@ -64,6 +66,8 @@ type Deps struct {
 	Tarifario       *tarifario.Handler
 	Disponibilidade *disponibilidade.Handler
 	Reservas        *reservas.Handler
+	CRM             *crm.Handler
+	Stream          *stream.Handler
 }
 
 // Rotas devolve a tabela completa da API v1, concatenando os grupos.
@@ -79,6 +83,8 @@ func Rotas(d Deps) []Rota {
 		rotasTarifario,
 		rotasDisponibilidade,
 		rotasReservas,
+		rotasCRM,
+		rotasStream,
 	} {
 		todas = append(todas, grupo(d)...)
 	}
@@ -131,6 +137,28 @@ func rotasNucleo(d Deps) []Rota {
 	}
 }
 
+// rotasDeLongaDuracao são os paths que NÃO podem passar pelo teto de tempo por
+// requisição.
+//
+// O teto (`middleware.Timeout` no router.go) existe para consulta presa não
+// segurar conexão para sempre. Só que "para sempre" é justamente o contrato do
+// SSE: `/stream` fica aberto enquanto o operador tiver o mapa na tela, e sob o
+// teto ele cairia a cada 50 segundos — todas as vezes, para todo mundo.
+//
+// A exceção é declarada por PATH, e não descoberta por heurística, porque a
+// consequência de errar nos dois sentidos é grave e silenciosa: rota de longa
+// duração dentro do teto morre de minuto em minuto sem erro nenhum no log; rota
+// comum fora do teto segura uma conexão de banco indefinidamente. `ValidarTabela`
+// confere que todo path listado aqui existe de fato na tabela — sem isso,
+// renomear `/stream` devolveria o SSE ao teto sem uma linha vermelha em lugar
+// nenhum.
+var rotasDeLongaDuracao = map[string]bool{
+	"/stream": true,
+}
+
+// EhDeLongaDuracao diz se a rota fica aberta por tempo indeterminado.
+func EhDeLongaDuracao(r Rota) bool { return rotasDeLongaDuracao[r.Path] }
+
 // ValidarTabela confere as invariantes da tabela. É chamada no boot: uma rota
 // mal declarada derruba o processo na subida, e não silenciosamente em produção
 // com um endpoint aberto.
@@ -162,6 +190,20 @@ func ValidarTabela(rotas []Rota) error {
 			}
 		default:
 			return fmt.Errorf("%s: acesso não classificado", chave)
+		}
+	}
+
+	// A exceção ao teto de tempo tem de apontar para rota que existe. Um path
+	// listado e ausente da tabela é uma exceção que não protege nada — e o
+	// sintoma seria o SSE caindo de 50 em 50 segundos com tudo verde.
+	paths := map[string]bool{}
+	for _, r := range rotas {
+		paths[r.Path] = true
+	}
+	for path := range rotasDeLongaDuracao {
+		if !paths[path] {
+			return fmt.Errorf("%s está declarado como rota de longa duração, mas não existe na tabela: "+
+				"ou o path foi renomeado (e a rota voltou para o teto de 50s sem ninguém notar), ou a linha aqui sobrou", path)
 		}
 	}
 	return nil
