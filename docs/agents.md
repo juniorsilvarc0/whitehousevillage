@@ -12,13 +12,20 @@ O que desacopla o time é o **contrato**: `apps/api/openapi/openapi.yaml` + `doc
 
 | Agente | Escrita exclusiva | Responsabilidade | Nunca toca |
 |---|---|---|---|
-| **`tech-lead`** | `docs/**`, `apps/api/openapi/**`, `apps/api/internal/domain/**`, `internal/router/routes.go` | Orquestra. Decide ordem, quebra tarefas, escreve o contrato e o domínio puro, revisa entregas, mantém `roadmap.md`. É o único que aciona os outros | Implementação de módulo, UI, infra |
+| **`squad-lead`** | `docs/roadmap.md`, `docs/backlog/**`, `.claude/agents/**` | **Chefe do squad.** Abre a FASE: monta o backlog de implantação (cada item com efeito, dono, entrada, prova e quem bloqueia), decide a ordem, revisa código antes de entrar, audita segurança, cobra teste que possa falhar e impede que dívida passe calada | Código de produção. Se está editando `.go` ou `.tsx`, delegou errado |
+| **`tech-lead`** | `apps/api/openapi/**`, `apps/api/internal/domain/**`, `internal/router/routes.go`, `apps/admin/src/config/navigation.ts`, `docs/**` exceto o do squad lead | Orquestra **uma fatia**: escreve o contrato e o domínio puro, distribui, integra as linhas propostas em `routes.go` e `navigation.ts`, revisa entregas | Implementação de módulo, UI, infra |
 | **`db-migrations`** | `apps/api/migrations/**`, `apps/api/cmd/seed/**`, `docs/db.md` | Migrations up/down, constraints, índices, seed idempotente | Go de aplicação, front, infra |
 | **`backend-go`** | `apps/api/internal/{modules,platform,auth,jobs,realtime}/**`, `cmd/{api,worker}` | Handlers, services, repositórios, jobs, SSE, testes de unidade | Migrations, `internal/domain`, front |
 | **`integracoes`** | `apps/api/internal/modules/{chat,channels,integrations}/**`, `docs/integracao.md` | uazapi, iCal, webhooks, tokens, MCP, agente de IA | Reservas, financeiro, front |
 | **`next-frontend`** | `apps/admin/**` | Telas, design system, componentes, testes de componente | Qualquer coisa em `apps/api` |
 | **`devops`** | `infra/**`, `Dockerfile*`, `.github/workflows/**`, `Makefile` | Compose, Traefik, CI, backup, observabilidade, deploy | Código de aplicação |
 | **`qa-testes`** | `**/*_test.go`, `apps/admin/**/*.test.{ts,tsx}`, `tests/e2e/**`, `docs/testing.md` | Testes de integração, e2e, teste de concorrência do overbooking | Código de produção — **reporta, não conserta** |
+
+### Onde termina o squad lead e começa o tech lead
+
+O squad lead decide **quais fatias existem e em que ordem**; o tech lead decide **como uma fatia é desenhada**. A fronteira importa porque os dois revisam, e revisão em duas camadas só não vira burocracia se cada uma olhar coisa diferente: o tech lead cobra o desenho (o domínio está puro? o contrato veio antes?), o squad lead cobra o que entra (isso funciona servindo? a garantia está no banco? existe teste que possa falhar? a dívida tem efeito, motivo e fase escritos?).
+
+Os dois compartilham `docs/`, e por isso a divisão é nominal: `roadmap.md` e `backlog/**` são do squad lead; `spec.md`, `db.md`, `api.md` e o resto são do tech lead.
 
 ### Por que `internal/domain` é do tech-lead
 
