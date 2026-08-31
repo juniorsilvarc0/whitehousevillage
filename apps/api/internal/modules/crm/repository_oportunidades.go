@@ -24,12 +24,27 @@ import (
 //
 // `pending_task_count` exclui `nota`: nota não é trabalho pendente de ninguém,
 // e contá-la faria a faixa vermelha do card acender por um registro de texto.
+//
+// `quote_id` é o ORÇAMENTO VIGENTE, e sai de `quotes` — não da coluna
+// `crm_opportunities.quote_id`. A coluna existe e ainda referencia
+// `reservations(id)`: ela nasceu quando orçamento era reserva em `quote`, e a
+// migration que criou a tabela `quotes` (20260827130000) NÃO repontou a FK, de
+// propósito, para não quebrar o CRM que está no ar no meio da rodada. Gravar o
+// id de um orçamento nela é `23503` na cara. A subconsulta responde o MESMO
+// fato sem a coluna: "emitir outro substitui este" é literalmente
+// `ORDER BY created_at DESC LIMIT 1`, e `quotes_oportunidade_idx` a cobre.
+//
+// PARA O INTEGRADOR: quando a FK for repontada, esta subconsulta pode voltar a
+// ser `o.quote_id` — mas não precisa. Ver o relatório.
 const colunasDaOportunidade = `
 	    o.id, o.contact_id, c.name,
 	    o.lead_id, o.pipeline_id, p.name, o.stage_id, s.name, s.type,
 	    o.unit_type_id, ut.name,
 	    o.check_in::text, o.check_out::text,
-	    o.quote_id, o.reservation_id, res.code,
+	    (SELECT q.id FROM quotes q
+	      WHERE q.opportunity_id = o.id
+	      ORDER BY q.created_at DESC, q.id DESC LIMIT 1),
+	    o.reservation_id, res.code,
 	    o.amount_cents, o.probability, o.expected_close::text,
 	    o.owner_id, u.name,
 	    o.status, o.lost_reason_id, lr.label,
@@ -220,7 +235,10 @@ func (r *Repository) TravarOportunidade(ctx context.Context, propriedade, id uui
 	const q = `
 		SELECT o.id, o.pipeline_id, o.stage_id, s.type, o.status, o.contact_id,
 		       o.unit_type_id, o.check_in::text, o.check_out::text, o.guests_count,
-		       o.quote_id, o.reservation_id, o.owner_id, o.amount_cents, o.lead_id
+		       (SELECT q.id FROM quotes q
+		         WHERE q.opportunity_id = o.id
+		         ORDER BY q.created_at DESC, q.id DESC LIMIT 1),
+		       o.reservation_id, o.owner_id, o.amount_cents, o.lead_id
 		  FROM crm_opportunities o
 		  JOIN crm_stages s ON s.id = o.stage_id
 		 WHERE o.property_id = $1 AND o.id = $2
@@ -521,64 +539,28 @@ func (r *Repository) Kanban(ctx context.Context, propriedade, funil uuid.UUID, f
 
 // ═══════════════════════════ Orçamento e reserva ════════════════════
 
-// ReservaDaOportunidade lê o mínimo da reserva vinculada que o `/win` precisa
-// para decidir. A reserva COMPLETA é lida pelo módulo de reservas — repetir a
-// projeção dele aqui criaria uma segunda verdade sobre o mesmo registro.
-type ReservaDaOportunidade struct {
-	ID          uuid.UUID
-	Status      string
-	UnitTypeID  uuid.UUID
-	ContactID   uuid.UUID
-	CheckIn     string
-	CheckOut    string
-	Hospedes    int
-	DescontoPct float64
-	IsEvento    bool
-	TipoEvento  *string
-	Total       int64
-}
-
-// OrcamentoDaOportunidade lê a reserva em status `quote` apontada por
-// `quote_id`, conferindo que ela é DESTA propriedade.
+// O orçamento vigente NÃO é lido aqui.
 //
-// Devolve `QUOTE_REQUIRED_TO_WIN` quando o id não resolve para um orçamento
-// legítimo: sem preço congelado não há o que virar reserva, e inventar o preço
-// na hora é o que a spec §3 proíbe.
-func (r *Repository) OrcamentoDaOportunidade(ctx context.Context, propriedade, orcamento uuid.UUID) (ReservaDaOportunidade, error) {
-	// O preço vive em `reservation_pricing`, e não em `reservations`: a
-	// migration 20260826100000 tirou as oito colunas de dinheiro da tabela
-	// principal. O LEFT JOIN é deliberado — um orçamento pode existir sem linha
-	// de preço (é o estado em que o fixture de teste o cria), e nesse caso o
-	// desconto e o total caem em zero em vez de o orçamento sumir.
-	const q = `
-		SELECT r.id, r.status, r.unit_type_id, r.contact_id,
-		       r.check_in::text, r.check_out::text, r.guests_count,
-		       COALESCE(p.discount_pct, 0), r.is_event, r.event_type,
-		       COALESCE(p.total_cents, 0)
-		  FROM reservations r
-		  LEFT JOIN reservation_pricing p ON p.reservation_id = r.id
-		 WHERE r.id = $1 AND r.property_id = $2`
+// Até 27/08/2026 este arquivo tinha `ReservaDaOportunidade`, `OrcamentoDaOportunidade`
+// e `VincularOrcamento`: o "orçamento" era uma reserva em `reservations` com
+// status `quote`, lida daqui e apontada por `crm_opportunities.quote_id`. Nenhum
+// endpoint criava essa linha — só o fixture da suíte —, e por isso `/win`
+// respondia SEMPRE `422 QUOTE_REQUIRED_TO_WIN` (medido contra o stack no ar).
+//
+// Desde a migration 20260827130000 o orçamento é uma linha de `quotes`, tabela
+// própria com dono próprio: quem a lê e a escreve é `internal/modules/
+// disponibilidade`, e o CRM pergunta por lá (`Servico.orcamentos`). Repetir a
+// projeção de `quotes` aqui criaria a segunda verdade sobre o mesmo registro —
+// que é exatamente o que o comentário da versão anterior dizia sobre a reserva.
 
-	var o ReservaDaOportunidade
-	err := r.exec(ctx).QueryRow(ctx, q, orcamento, propriedade).
-		Scan(&o.ID, &o.Status, &o.UnitTypeID, &o.ContactID, &o.CheckIn, &o.CheckOut,
-			&o.Hospedes, &o.DescontoPct, &o.IsEvento, &o.TipoEvento, &o.Total)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return o, OrcamentoObrigatorioParaGanhar.WithDetails(map[string]any{
-			"quote_id": "orçamento desconhecido nesta propriedade.",
-		})
-	}
-	return o, db.MapError(err)
-}
-
-// VincularOrcamento grava o orçamento vigente e o valor esperado do negócio.
+// AtualizarValorEsperado copia o total do orçamento ganho para `amount_cents`.
 //
 // O valor vem do orçamento, e não da digitação: `amount_cents` é o que soma no
-// total da coluna do kanban, e um número digitado à mão ao lado de um orçamento
-// emitido faria a previsão de receita divergir da soma das propostas.
-func (r *Repository) VincularOrcamento(ctx context.Context, id, orcamento uuid.UUID, valor int64) error {
-	const q = `UPDATE crm_opportunities SET quote_id = $2, amount_cents = $3, updated_at = now() WHERE id = $1`
-	_, err := r.exec(ctx).Exec(ctx, q, id, orcamento, valor)
+// total da coluna do kanban, e um número digitado à mão ao lado de uma proposta
+// emitida faria a previsão de receita divergir da soma das propostas.
+func (r *Repository) AtualizarValorEsperado(ctx context.Context, id uuid.UUID, valor int64) error {
+	const q = `UPDATE crm_opportunities SET amount_cents = $2, updated_at = now() WHERE id = $1`
+	_, err := r.exec(ctx).Exec(ctx, q, id, valor)
 	return db.MapError(err)
 }
 

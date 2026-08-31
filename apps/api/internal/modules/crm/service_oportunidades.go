@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
@@ -582,11 +583,22 @@ const rotaDeGanho = "POST /crm/opportunities/{id}/win"
 // Ganhar — POST /crm/opportunities/{id}/win.
 //
 // O ponto do módulo inteiro: GANHAR NÃO REDIGITA NADA. Numa transação, o
-// orçamento vigente vira reserva `hold` pelo MESMO caminho do
-// `POST /reservations` — recalculando pelo motor e congelando
-// `reservation_nights`, `rate_table_id`, `policy_version` e
-// `cancellation_policy_id` —, a oportunidade vai para a etapa `ganho` com
-// histórico, e as tarefas automáticas pendentes são concluídas.
+// orçamento vigente (uma linha de `quotes`) vira reserva `hold` pelo MESMO
+// caminho do `POST /reservations` — mas TRANSCREVENDO o snapshot em vez de
+// recalcular: as noites de `quote_nights` viram `reservation_nights`, os valores
+// viram `reservation_pricing`, e `rate_table_id`, `policy_version` e
+// `cancellation_policy_id` vão junto. Em seguida `quotes.reservation_id` grava a
+// conversão, a oportunidade vai para a etapa `ganho` com histórico, e as tarefas
+// automáticas pendentes são concluídas.
+//
+// # Até 27/08/2026 esta rota era inalcançável
+//
+// Medido contra o stack no ar, numa oportunidade recém-criada: `/win` respondia
+// `422 QUOTE_REQUIRED_TO_WIN` com a dica "emita o orçamento e vincule-o à
+// oportunidade" — instrução que nenhum cliente conseguia seguir, porque
+// `POST /quotes` era cálculo puro e `PATCH /crm/opportunities/{id}` recusa
+// `quote_id` de propósito. A ação mais importante do CRM não tinha caminho de
+// entrada, e a suíte fabricava a linha por SQL direto para poder testá-la.
 //
 // # Nasce `hold`, não `confirmed`
 //
@@ -666,35 +678,37 @@ func (s *Servico) ganhar(ctx context.Context, u *auth.Usuario, id uuid.UUID, cor
 
 	if reservaID == nil {
 		// A oportunidade ainda não tem reserva: o orçamento vigente vira uma.
-		orcamento, err := s.orcamentoVigente(ctx, u, travada, corpo.OrcamentoID)
+		orcamento, err := s.orcamentoParaGanhar(ctx, u, travada, corpo.OrcamentoID)
 		if err != nil {
 			return ResultadoDeGanho{}, 0, err
 		}
 
-		// A chave de idempotência do `/win` é reaproveitada no
-		// `POST /reservations` interno: a mesma chave, do mesmo ator, em duas
-		// rotas diferentes são duas linhas independentes em `idempotency_keys`
-		// (a PK é `(key, endpoint, actor_id, property_id)`), e é isso que faz o
-		// replay do `/win` nunca chegar a criar uma segunda reserva.
-		nova, err := s.vendas.Criar(ctx, chaveInternaDaReserva(id), reservas.ReservaCriar{
-			UnitTypeID:  orcamento.UnitTypeID,
-			CheckIn:     orcamento.CheckIn,
-			CheckOut:    orcamento.CheckOut,
-			Hospedes:    orcamento.Hospedes,
-			DescontoPct: orcamento.DescontoPct,
-			IsEvento:    orcamento.IsEvento,
-			TipoEvento:  orcamento.TipoEvento,
-			ContactID:   orcamento.ContactID,
-			Origem:      "crm",
-		})
+		// O contato da reserva é o do CARD, e não o do orçamento: o orçamento
+		// pode ter nascido sem contato nenhum (simulação de preço antes de saber
+		// quem perguntou, `quotes.contact_id` é anulável) e `reservations.contact_id`
+		// é NOT NULL. Quando o orçamento TEM contato, `orcamentoParaGanhar` já
+		// garantiu que é o mesmo.
+		nova, err := s.emitirDoOrcamento(ctx, travada.ContactID, orcamento)
 		if err != nil {
 			// As recusas do motor valem inteiras aqui — DATE_CONFLICT,
-			// MIN_STAY_NOT_MET, CAPACITY_EXCEEDED, COMPOSITION_INCOMPLETE — e
-			// nenhuma delas é reescrita: o operador precisa ler o motivo real.
+			// COMPOSITION_INCOMPLETE — e nenhuma delas é reescrita: o operador
+			// precisa ler o motivo real. `DATE_CONFLICT` é o desfecho NORMAL
+			// deste endpoint na alta temporada, e a contrapartida direta de o
+			// orçamento não bloquear calendário.
 			return ResultadoDeGanho{}, 0, err
 		}
 		reserva, err := reservaDoResultado(nova)
 		if err != nil {
+			return ResultadoDeGanho{}, 0, err
+		}
+
+		// A conversão do funil, gravada sem recalcular nada. `quotes_reserva_uniq`
+		// e o `AND reservation_id IS NULL` do UPDATE garantem que dois ganhos
+		// simultâneos não reivindiquem a mesma venda.
+		if err := s.orcamentos.MarcarOrcamentoConvertido(ctx, orcamento.ID, reserva.ID); err != nil {
+			return ResultadoDeGanho{}, 0, err
+		}
+		if err := s.repo.AtualizarValorEsperado(ctx, id, orcamento.Total); err != nil {
 			return ResultadoDeGanho{}, 0, err
 		}
 		reservaID, criouReserva, status = &reserva.ID, true, http.StatusCreated
@@ -745,48 +759,134 @@ func (s *Servico) ganhar(ctx context.Context, u *auth.Usuario, id uuid.UUID, cor
 	}, status, nil
 }
 
-// orcamentoVigente resolve QUAL orçamento vira reserva.
+// emitirDoOrcamento cria a pré-reserva TRANSCREVENDO o orçamento.
 //
-// Sem `quote_id` na oportunidade e sem `quote_id` no corpo, `422
-// QUOTE_REQUIRED_TO_WIN`: sem preço congelado não há o que virar reserva, e
-// inventar o preço na hora é o que a spec §3 proíbe.
+// O motor NÃO roda de novo, e é a diferença que mais importa deste endpoint: os
+// números da reserva são os do orçamento, centavo a centavo, incluindo o preço
+// de cada noite. Recalcular no ganho devolveria o preço da tabela de HOJE —
+// ganhar uma proposta de três semanas atrás cobraria do hóspede um valor que ele
+// nunca ouviu, e bastaria um `PUT /rates` no meio da negociação para isso
+// acontecer sem ninguém notar.
 //
-// LIMITAÇÃO CONHECIDA: "orçamento DESTA oportunidade" é conferido pelo CONTATO,
-// porque `reservations` não tem `opportunity_id` (ver o relatório). O
-// `quote_id` já vinculado passa direto; um id vindo do corpo precisa ser uma
-// reserva em `quote` do mesmo contato.
-func (s *Servico) orcamentoVigente(ctx context.Context, u *auth.Usuario, o OportunidadeTravada, pedido httpx.Opt[uuid.UUID]) (ReservaDaOportunidade, error) {
-	escolhido := o.OrcamentoID
-	if v, ok := pedido.Definido(); ok {
-		escolhido = &v
+// O mecanismo é o orçamento FIXADO no contexto (`disponibilidade.ComOrcamentoFixado`):
+// o módulo de reservas segue pedindo o preço ao módulo de orçamento, como sempre,
+// e é ele que devolve o snapshot em vez de calcular. Daí os valores congelados
+// seguem para `reservation_pricing`, as noites para `reservation_nights` e
+// `rate_table_id`/`policy_version` para as colunas que os congelam.
+//
+// O que a fixação NÃO desliga, e por que está certo assim: a alocação continua
+// conferindo a composição do produto (`COMPOSITION_INCOMPLETE` da casa inteira) e
+// o calendário continua sendo defendido pela constraint `stay_no_overlap`
+// (`DATE_CONFLICT`). O que deixa de ser reavaliado é só o PREÇO — capacidade,
+// estadia mínima e alçada do desconto já foram julgadas na emissão, com a
+// política daquela versão, e rejulgá-las hoje seria mudar o veredito de um
+// documento que já saiu.
+func (s *Servico) emitirDoOrcamento(ctx context.Context, contato uuid.UUID,
+	orcamento disponibilidade.OrcamentoSalvo) (reservas.Resultado, error) {
+
+	// A chave de idempotência do `POST /reservations` interno é derivada do
+	// ORÇAMENTO, e não da chave do cliente: assim, duas chamadas de `/win` com
+	// chaves de cliente diferentes (o operador que gerou outra depois de um
+	// timeout) ainda batem na MESMA chave de reserva, e a segunda recebe a
+	// reserva da primeira em vez de criar uma segunda venda das mesmas datas —
+	// que seria, na melhor das hipóteses, um 409 contra si mesma.
+	//
+	// Do orçamento e não da oportunidade — que era a chave até 27/08/2026 —
+	// porque um orçamento converte UMA vez (`quotes_reserva_uniq`) e é ele que
+	// define a venda. Com a chave da oportunidade, um card reaberto com um
+	// orçamento NOVO recebia por replay a reserva do orçamento ANTIGO, e a
+	// gravação de `quotes.reservation_id` do novo estourava contra o índice
+	// único com uma mensagem que não explicava nada. Pela chave do orçamento,
+	// esse caso vira uma venda nova de verdade — que sucede, ou responde
+	// `409 DATE_CONFLICT` contra o próprio hold anterior, que é a frase certa.
+	return s.vendas.Criar(disponibilidade.ComOrcamentoFixado(ctx, orcamento),
+		chaveInternaDaReserva(orcamento.ID), reservas.ReservaCriar{
+			UnitTypeID:  orcamento.UnitTypeID,
+			CheckIn:     orcamento.CheckIn,
+			CheckOut:    orcamento.CheckOut,
+			Hospedes:    orcamento.Hospedes,
+			DescontoPct: orcamento.DescontoPct,
+			IsEvento:    orcamento.IsEvento,
+			ContactID:   contato,
+			Origem:      "crm",
+		})
+}
+
+// orcamentoParaGanhar resolve QUAL orçamento vira reserva, e recusa o que não
+// serve mais.
+//
+// O vigente é o ÚLTIMO emitido para esta oportunidade (`quotes.opportunity_id`,
+// N:1 — a negociação emite proposta, contraproposta e desconto revisto, e todos
+// ficam). O corpo pode apontar outro pelo `quote_id`, e aí ele passa a ser o
+// vigente antes do ganho: o card não pode dizer que ganhou com um orçamento que
+// ele nunca declarou ter.
+//
+// As três recusas, e por que cada uma tem código próprio:
+//
+//   - sem orçamento nenhum → `422 QUOTE_REQUIRED_TO_WIN`. Sem preço congelado
+//     não há o que virar reserva, e inventar o preço na hora é o que a spec §3
+//     proíbe. Desde 27/08/2026 a dica é seguível: `POST /quotes` com
+//     `persist: true` e `opportunity_id` produz exatamente o que falta.
+//   - vencido ou já convertido → `422 QUOTE_NOT_PENDING`, com `valid_until` e
+//     `reservation_id` em `details`. Preço vencido não se renova sozinho: reusá-lo
+//     é vender pelo número que a casa já retirou de circulação.
+//   - de outro card ou de outro contato → `422 VALIDATION_ERROR` no campo
+//     `quote_id`. Orçamento colado num card de outra pessoa é como o `/win`
+//     acabaria criando reserva no nome errado.
+func (s *Servico) orcamentoParaGanhar(ctx context.Context, u *auth.Usuario, o OportunidadeTravada,
+	pedido httpx.Opt[uuid.UUID]) (disponibilidade.OrcamentoSalvo, error) {
+
+	vazio := disponibilidade.OrcamentoSalvo{}
+
+	escolhido, temEscolha := pedido.Definido()
+	if !temEscolha {
+		vigente, err := s.orcamentos.OrcamentoVigente(ctx, u.PropertyID, o.ID)
+		if err != nil {
+			return vazio, err
+		}
+		if vigente == nil {
+			return vazio, OrcamentoObrigatorioParaGanhar.WithDetails(map[string]any{
+				"hint": "emita o orçamento em POST /quotes com persist: true e opportunity_id, e ganhe de novo.",
+			})
+		}
+		escolhido = *vigente
 	}
-	if escolhido == nil {
-		return ReservaDaOportunidade{}, OrcamentoObrigatorioParaGanhar.WithDetails(map[string]any{
-			"hint": "emita o orçamento e vincule-o à oportunidade antes de ganhar, ou informe quote_id no corpo.",
+
+	orcamento, err := s.orcamentos.OrcamentoParaGanhar(ctx, u.PropertyID, escolhido)
+	if err != nil {
+		return vazio, err
+	}
+
+	if orcamento.OportunidadeID != nil && *orcamento.OportunidadeID != o.ID {
+		return vazio, apperr.Validation(map[string]string{
+			"quote_id": "este orçamento é de outra oportunidade.",
+		})
+	}
+	if orcamento.ContactID != nil && *orcamento.ContactID != o.ContactID {
+		return vazio, apperr.Validation(map[string]string{
+			"quote_id": "este orçamento é de outro contato; informe um orçamento desta oportunidade.",
+		})
+	}
+	if orcamento.ReservaID != nil {
+		return vazio, disponibilidade.OrcamentoNaoEstaDePe.WithDetails(map[string]any{
+			"quote_id": orcamento.ID, "reservation_id": *orcamento.ReservaID,
+		})
+	}
+	if orcamento.Vencido {
+		return vazio, disponibilidade.OrcamentoNaoEstaDePe.WithDetails(map[string]any{
+			"quote_id": orcamento.ID, "valid_until": orcamento.ValidoAte,
 		})
 	}
 
-	orcamento, err := s.repo.OrcamentoDaOportunidade(ctx, u.PropertyID, *escolhido)
-	if err != nil {
-		return ReservaDaOportunidade{}, err
-	}
-	if o.OrcamentoID == nil || *o.OrcamentoID != orcamento.ID {
-		if orcamento.ContactID != o.ContactID {
-			return ReservaDaOportunidade{}, apperr.Validation(map[string]string{
-				"quote_id": "este orçamento é de outro contato; informe um orçamento desta oportunidade.",
-			})
+	// Vincula o orçamento escolhido à oportunidade ANTES de ganhar. Só alcança o
+	// orçamento SOLTO (o UPDATE tem `opportunity_id IS NULL`): mover um orçamento
+	// de uma negociação para outra apagaria o histórico de preço da primeira, e o
+	// caso já foi recusado acima.
+	if orcamento.OportunidadeID == nil {
+		if err := s.orcamentos.VincularOrcamentoAOportunidade(ctx, orcamento.ID, o.ID); err != nil {
+			return vazio, err
 		}
-		if orcamento.Status != reservas.EstadoQuote {
-			return ReservaDaOportunidade{}, apperr.Validation(map[string]string{
-				"quote_id": "esta reserva já saiu de `quote`; ela não é mais um orçamento vigente.",
-			})
-		}
-		// Vincula o orçamento escolhido à oportunidade ANTES de ganhar: sem
-		// isso, o card ficaria dizendo que ganhou com um orçamento que ele nunca
-		// declarou ter.
-		if err := s.repo.VincularOrcamento(ctx, o.ID, orcamento.ID, orcamento.Total); err != nil {
-			return ReservaDaOportunidade{}, err
-		}
+		orcamento.OportunidadeID = &o.ID
 	}
 	return orcamento, nil
 }
@@ -819,14 +919,9 @@ func reservaDoResultado(res reservas.Resultado) (reservas.Reserva, error) {
 }
 
 // chaveInternaDaReserva monta a `Idempotency-Key` do POST /reservations interno.
-//
-// É derivada da OPORTUNIDADE, e não da chave do cliente: assim, duas chamadas de
-// `/win` com chaves de cliente diferentes (o operador que gerou outra chave
-// depois de um timeout) ainda batem na MESMA chave de reserva, e a segunda
-// recebe a reserva da primeira em vez de criar uma segunda venda das mesmas
-// datas — que seria, na melhor das hipóteses, um 409 contra si mesma.
-func chaveInternaDaReserva(oportunidade uuid.UUID) string {
-	return "crm-win-" + oportunidade.String()
+// O porquê da derivação está em `emitirDoOrcamento`.
+func chaveInternaDaReserva(orcamento uuid.UUID) string {
+	return "crm-win-quote-" + orcamento.String()
 }
 
 // ═══════════════════════════ /lose ══════════════════════════════════
@@ -1016,8 +1111,13 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (OportunidadeCompl
 	etapaAtual := Etapa{ID: c.Oportunidade.EtapaID, Nome: c.Oportunidade.EtapaNome, SLADias: c.Oportunidade.SLADias}
 	c.SLA = faixaDeSLA(c.Oportunidade, etapaAtual)
 
+	// O orçamento vigente vem da tabela `quotes`, aberto noite a noite. Sem o
+	// recorte `own` de `quotes`: quem chegou até aqui já passou por
+	// `crm.opportunities:ver` NESTE card, e esconder dele o preço da própria
+	// negociação por causa do dono do orçamento deixaria a tela com um card sem
+	// proposta e um botão de ganhar que funciona.
 	if c.Oportunidade.OrcamentoID != nil {
-		orcamento, err := s.reservasRepo.Buscar(ctx, u.PropertyID, *c.Oportunidade.OrcamentoID, false, u.ID)
+		orcamento, err := s.orcamentos.OrcamentoParaGanhar(ctx, u.PropertyID, *c.Oportunidade.OrcamentoID)
 		if err != nil {
 			return c, err
 		}

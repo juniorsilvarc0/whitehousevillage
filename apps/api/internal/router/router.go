@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
@@ -76,6 +77,12 @@ func New(o Opcoes) (http.Handler, error) {
 		// convive com conexão devolvida ao pool entre consultas.
 		CRM:    crm.NovoHandler(o.Pool, tx),
 		Stream: stream.NovoHandler(o.Pool, tx),
+
+		// Contatos entra pelo mesmo construtor. Montar aqui é OBRIGATÓRIO: as
+		// rotas dele degradam para 503 com handler nulo (rotas_contatos.go) em
+		// vez de estourarem panic, o que é bom para não derrubar o processo e
+		// péssimo como estado permanente — a agenda simplesmente não existiria.
+		Contatos: contatos.NovoHandler(o.Pool, tx),
 	}
 
 	tabela := Rotas(deps)
@@ -124,11 +131,18 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 
 	limitadorDeLogin := auth.LimitadorDeLogin()
 
+	// As sondas primeiro, na RAIZ e fora do prefixo — ver Rota.NaRaiz.
+	for _, rota := range tabela {
+		if rota.NaRaiz {
+			r.Method(rota.Metodo, rota.Path, rota.Handler)
+		}
+	}
+
 	r.Route(PrefixoDaAPI, func(api chi.Router) {
 		// Grupo público: só quem está listado como AcessoPublico na tabela.
 		api.Group(func(pub chi.Router) {
 			for _, rota := range tabela {
-				if rota.Acesso != AcessoPublico {
+				if rota.Acesso != AcessoPublico || rota.NaRaiz {
 					continue
 				}
 				h := http.Handler(rota.Handler)

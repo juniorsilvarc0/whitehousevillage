@@ -6,7 +6,7 @@
 
 | Regra | Motivo |
 |---|---|
-| PK `uuid` v7 | Ordenável no tempo (bom para índice) e não enumerável como `serial` |
+| PK `uuid` com `DEFAULT gen_random_uuid()` | Não enumerável como `serial`. É **v4**, não v7: esta linha dizia v7 e nenhuma migration jamais gerou v7 — `pgcrypto` não tem gerador de v7 e o Postgres 16 não traz `uuidv7()`. Ordenação no tempo sai de `created_at`, que toda tabela tem |
 | `created_at`/`updated_at` `timestamptz` + `created_by`/`updated_by` | Auditoria mínima em toda tabela |
 | `property_id` em toda tabela de negócio | Não impede uma segunda propriedade depois; custa quase nada agora |
 | Dinheiro `bigint` em centavos, sufixo `_cents` | Float em dinheiro é bug de auditoria |
@@ -15,7 +15,7 @@
 | Máximo ~25 colunas por tabela | O `crm_opportunities` de 118 colunas do portal_amimoveis é o antiexemplo |
 | Soft delete só onde há histórico (`deleted_at` + índice parcial) | Deletar reserva quebra o razão |
 | Toda FK indexada | Evita seq scan em cascade e em join |
-| Migrations nomeadas por timestamp | `20260820T143000_nome.up.sql` — dois agentes em paralelo não colidem |
+| Migrations nomeadas por timestamp | `20260820143000_nome.up.sql` — sem `T`, que é o formato que `golang-migrate` lê e o que está no disco; dois agentes em paralelo não colidem |
 
 ---
 
@@ -137,6 +137,12 @@ Oito unidades (`AP-01..03`, `SP-01..04`, `COB-01`) e quatro produtos. A Completa
 
 **`units` não tem `unit_type_id`** — esta página listava a coluna e a migration `20260820130000` nunca a criou, porque ela seria *errada*. A relação produto × unidade é **muitos-para-muitos de propósito**: `AP-01` é vendável como *Apartamento 2 Suítes* **e** como parte da *White House Completa*, e uma FK escalar em `units` só saberia escrever um dos dois. `unit_type_members` é a única verdade sobre essa composição, e é dela que a Completa tira as 8 linhas de `stay_blocks` que dão a exclusividade bidirecional. A partir de `20260827100000` esta tabela também é **lado de constraint**: acrescentar ou remover um membro de um produto `all_members` com venda viva é recusado no commit (§5), porque crescer a composição depois da venda abre exatamente o mesmo buraco que vender N−1.
 
+**`unit_types.consumes` é imutável enquanto o produto tiver reserva viva** (`hold`, `confirmed`, `checked_in`), desde `20260827140000`. A porta que isso fecha foi medida com o stack no ar: com uma reserva confirmada da Completa ocupando as oito unidades, `UPDATE unit_types SET consumes='one_member' WHERE code='completa'` respondia `UPDATE 1`, sem recusa — e a venda seguinte da "Completa" passava a alocar **uma** unidade cobrando o preço da casa inteira.
+
+O detalhe que torna esta guarda necessária, e não redundante com a invariante do §5: aquela é `WHEN (NEW.consumes = 'all_members')`, isto é, defende a **entrada** no regime da casa inteira. A troca perigosa é a **saída** — e ela é auto-imunizante, porque no instante em que o produto deixa de ser `all_members` a conferência de composição não encontra mais linha para ele e volta sem conferir nada. Trocar o tipo **tira o produto do alcance da invariante que o protegia**. A direção contrária (`one_member → all_members`) também é recusada, e por um caso que a contagem não pega: um produto de composição unitária atravessava a troca sem violar contagem nenhuma e mudava de significado em silêncio — medido, desligando só o gatilho novo, `UPDATE 1`.
+
+A guarda trava a linha do produto em `FOR UPDATE` antes de contar. Não é zelo: criar reserva trava `unit_types` em `FOR KEY SHARE` (pela FK `unit_type_id`) e `UPDATE ... SET consumes` toma `FOR NO KEY UPDATE` — **os dois modos não conflitam**, e é por isso que venda e troca corriam lado a lado. `FOR UPDATE` é o único modo que conflita com `FOR KEY SHARE`. Medido nas duas versões: com a trava, a troca espera a venda em voo comitar e então recusa nomeando a reserva; sem a trava, a mesma troca passa em 100 ms e o banco fica com a Completa marcada `one_member` e uma pré-reserva viva de 8 unidades fora da invariante.
+
 ---
 
 ## 4. Calendário comercial e tarifário
@@ -167,6 +173,36 @@ Precedência é **dado**, não `if/else` — mudar a ordem de resolução é `UP
 Três tabelas ganharam **chave natural** para o seed poder reencontrar a própria linha na segunda execução: `special_periods(property_id, name)`, `rate_tables(property_id, name)` e `cancellation_tiers(policy_id, sort_order)`. Por isso o nome do período carrega o ano (`Réveillon 2026/2027`): o Réveillon do ano seguinte é linha nova, não edição desta.
 
 ---
+
+
+## 4a. Orçamento persistido (`quotes`)
+
+```
+quotes(id, property_id, contact_id?, opportunity_id?,               -- 25 colunas
+       unit_type_id, check_in date, check_out date, guests_count, is_event,
+       subtotal_cents, discount_pct, discount_cents, cleaning_cents,
+       event_deposit_cents, total_cents, deposit_cents,             -- congelados
+       rate_table_id, policy_version, cancellation_policy_id?,      -- snapshots (regra 7)
+       owner_id?, valid_until, reservation_id?,
+       created_by, created_at, updated_at)
+
+quote_nights(quote_id, night date, date_type, unit_type_id, price_cents)   -- PK(quote_id, night)
+```
+
+Até `20260827130000` o orçamento era **calculado e jogado fora**: `POST /quotes` rodava o motor e devolvia o número sem gravar nada. Três consequências, todas verificáveis na árvore: `/crm/opportunities/{id}/win` pedia um "orçamento vigente" que nenhum caminho de aplicação sabia criar (a suíte do CRM fabrica a linha por SQL direto, e o comentário dela diz isso com todas as letras); reabrir o orçamento de ontem **recalculava**, então uma alteração de tarifa mudava o preço que a gestão já tinha falado ao telefone; e não havia como responder quanto se orçou contra quanto virou venda.
+
+**Por que tabela própria e não `reservations` em `quote`.** Toda reserva ocupa unidade física — é o que `reservation_units` e `stay_blocks` significam —, e orçamento **não bloqueia data** (spec §4): seria uma reserva permanentemente sem unidade, a exceção que enfraquece a leitura do módulo inteiro. Além disso o funil emite vários orçamentos para a mesma negociação, e cada tentativa viraria linha em `reservations` que nunca foi venda, gastando inclusive número de `WH-2026-…` em proposta recusada.
+
+**Nenhuma linha aqui toca `stay_blocks`, e isso é a regra, não esquecimento.** Conferido: gravado um orçamento de 15–18/06, `stay_blocks` no período continua com zero linhas e a mesma unidade ainda pode ser vendida para as mesmas datas. Consequência aceita e correta: um orçamento pode virar `409 DATE_CONFLICT` na hora de virar reserva.
+
+**O snapshot fecha, e quem garante é o banco.** `subtotal_cents` sem `quote_nights` é um número sem prova — passa em todos os `CHECK` de coluna e é indistinguível, na leitura, de um orçamento correto. Um `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` sobre as duas tabelas confere no commit: uma noite para cada dia de `[check_in, check_out)`, todas do produto orçado, somando exatamente o subtotal. Adiado pelo mesmo motivo do §5 — o cabeçalho nasce antes das noites (a FK exige) e portanto nasce com zero noites.
+
+`CHECK (total_cents = subtotal_cents − discount_cents + cleaning_cents + event_deposit_cents)` escreve no banco a identidade do motor (`booking.Build`), que é exata em centavos porque o arredondamento acontece no total e nunca noite a noite. `balance_cents` (saldo) e `avg_nightly_cents` (diária média) **não são colunas**: são `total − sinal` e `total / noites`, e guardar o que se deriva é criar a segunda verdade que um dia diverge.
+
+`valid_until` é o que separa "proposta em pé" de "preço que já venceu" — é por ela que um orçamento expira em vez de precisar ser apagado. É `timestamptz` porque vencimento é instante, e instante tem fuso. **De onde sai o número**: hoje, de quem grava. O dia em que a validade precisar ser configurável ela vira coluna de `commercial_policies`, ao lado de `hold_extension_hours` — não foi feita agora porque `PublicarPoliticaComercial` copia as colunas nome a nome, e uma coluna nova sem esse acerto voltaria ao `DEFAULT` a cada versão publicada, em silêncio.
+
+`reservation_id` tem **`UNIQUE` parcial**: uma reserva nasce de um orçamento só. Dois orçamentos reivindicando a mesma venda fariam a conversão contar duas vezes e a auditoria não saber qual preço foi o combinado.
+
 
 ## 5. Reservas
 
@@ -235,6 +271,8 @@ Ela é do banco, não da aplicação — quatro `CREATE CONSTRAINT TRIGGER ... D
 | `reservations` (INSERT/UPDATE de `status`, `unit_type_id`) | a reserva que nasce, ou revive, sem nenhuma unidade |
 | `unit_type_members` (INSERT/DELETE) | a composição que cresce (ou encolhe) **depois** da venda |
 | `unit_types` (UPDATE de `consumes`) | o produto que vira `all_members` com venda viva |
+
+Desde `20260827140000` existe um **quinto** gatilho, e ele é de outra natureza: `unit_types_consumes_com_venda_viva` recusa a **transição** de `consumes` enquanto o produto tem reserva viva, nas duas direções (§3). Os quatro de cima conferem a invariante; ele impede que o produto saia do alcance dela. Os dois ficam: no dia em que alguém afrouxar a transição, é a invariante que continua impedindo a casa de ser vendida pela metade.
 
 **Adiar não é otimização, é requisito.** Um `CHECK` — mesmo materializado numa coluna — não pode ser adiado no Postgres, e reprovaria a ordem de escrita **correta** da aplicação: a linha de `reservations` nasce antes das unidades (a FK exige), e `Realocar` fica legitimamente com N−1 entre o `DELETE` da unidade antiga e o `INSERT` da nova. Estado intermediário inconsistente é normal; o que não pode existir é estado inconsistente **comitado**. Só o `CONSTRAINT TRIGGER` junta as duas coisas de que a regra precisa: código que enxerga ausência, avaliado no `COMMIT`.
 
@@ -501,6 +539,10 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 | `rate_tables` | `UNIQUE(property_id, name)` — chave natural do seed |
 | `cancellation_tiers` | `UNIQUE(policy_id, sort_order)` — chave natural do seed |
 | `reservation_units` | `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` — a invariante da casa inteira (§5). Gêmeos em `reservations`, `unit_type_members` e `unit_types.consumes`; `CHECK` não serviria porque `CHECK` não é adiável |
+| `quotes` | `CHECK (total_cents = subtotal_cents - discount_cents + cleaning_cents + event_deposit_cents)` — a identidade do motor virou fato do banco · `CHECK (discount_cents <= subtotal_cents)` · `CHECK (is_event OR event_deposit_cents = 0)` · `CHECK (valid_until > created_at)` |
+| `quotes` | `UNIQUE(reservation_id) WHERE reservation_id IS NOT NULL` — uma reserva nasce de um orçamento só · `(property_id, created_at DESC)` a listagem · `(property_id, valid_until)` o que está de pé · `(unit_type_id, check_in)` a conversão por produto |
+| `quote_nights` | `PRIMARY KEY (quote_id, night)` · `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` — as noites fecham com o subtotal, uma por dia da estadia, todas do produto orçado (§4a) · `(unit_type_id, night)` — preço orçado × preço vendido |
+| `unit_types` | `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` em `consumes` — troca recusada com reserva viva, nas duas direções, com `FOR UPDATE` na linha do produto para serializar contra a venda concorrente (§3) |
 | `crm_pipelines` | `UNIQUE(property_id, name)` — chave natural do seed · `UNIQUE(property_id) WHERE is_default` — um funil padrão, e só um |
 | `crm_stages` | `UNIQUE(pipeline_id, position) DEFERRABLE INITIALLY DEFERRED` — reordenar o kanban reescreve várias linhas numa instrução · `UNIQUE(pipeline_id, name)` — chave natural do seed |
 | `crm_stages` | `CHECK` amarrando `auto_task_subject`/`auto_task_type`/`auto_task_due_days`: os três ou nenhum — tarefa automática sem prazo nunca vence |
@@ -530,18 +572,24 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20260820120000_core` | propriedade, identidade e RBAC (`users`, `roles`, `resources`, `role_permissions`, `refresh_tokens`, `password_resets`), auditoria, `app_settings` e `idempotency_keys` |
 | `20260820130000_inventario_reservas` | inventário, calendário comercial e tarifário, políticas, contatos, `reservations`, `reservation_*` e `stay_blocks` com a `EXCLUDE` |
 | `20260820140000_catalogo_e_chaves_naturais` | `users.broker_id` + índice parcial; catálogo completo em `resources` (`actions`, `supports_own`, `sort_order` e o `CHECK` do vocabulário); chaves naturais de `special_periods`, `rate_tables` e `cancellation_tiers` |
-| `20260826100000_reservation_pricing` | extrai o satélite financeiro 1:1 e leva `reservations` de 32 para 22 colunas (dívida **1a** / **D2**) |
+| `20260826100000_reservation_pricing` | extrai o satélite financeiro 1:1 e leva `reservations` de 32 para 22 colunas (dívida **1a** / **D2**, **paga**). `owner_id` entra na migration seguinte e a tabela fica com as **23** de hoje |
 | `20260826110000_reservas_fase1` | `reservations.owner_id` (escopo `own`); `reservation_code_counters` + `proximo_codigo_reserva()` como `DEFAULT` de `code`; `hold_extension_hours`/`hold_max_extensions` na política comercial; os índices das consultas quentes da Fase 1 |
 | `20260826120000_historico_ocupacao_dono_do_bloco_e_idempotencia_por_ator` | `stay_blocks.status = 'completed'` (o check-out deixa de apagar a estadia do mapa) + gist parcial da ocupação; `idempotency_keys` chaveada por `(key, endpoint, actor_id, property_id)` (o replay deixa de vazar resposta entre usuários); `stay_blocks.owner_id` + índice parcial (o escopo `own` de `calendar` vira SQL) |
 | `20260827100000_invariante_da_casa_inteira` | a exclusividade da Completa vira regra **do banco**: quatro `CONSTRAINT TRIGGER` adiados sobre `reservation_units`, `reservations`, `unit_type_members` e `unit_types.consumes` (§5). Repara o estado legado reparável e **aborta**, nomeando reserva e unidade, o que exige decisão comercial |
 | `20260827110000_crm` | as nove tabelas do CRM (§7), a `UNIQUE` adiável de `position`, a parcial única que torna a tarefa automática idempotente, e o bloco que faz a migration falhar se uma tabela do CRM passar de 25 colunas |
 | `20260827120000_notificacoes_tempo_real` | gatilhos de `pg_notify` em `stay_blocks`, `reservations` e `crm_opportunities` nos canais `whv_calendar` e `whv_crm`, com payload de identificadores e `v = pg_current_xact_id()` (§13a) |
+| `20260827130000_orcamentos_persistidos` | `quotes` (25 colunas) e `quote_nights`, com os `CHECK` da aritmética do motor e o `CONSTRAINT TRIGGER` adiado que faz o snapshot fechar (§4a). O orçamento deixa de ser calculado e jogado fora — é o que destrava `/win` |
+| `20260827140000_troca_de_consumes_com_venda_viva` | `unit_types.consumes` passa a ser imutável com reserva viva, nas duas direções, com trava de linha contra a venda concorrente (§3). Avisa (`RAISE WARNING`, no log do servidor) sobre estado legado já trocado, sem reparar nem abortar — reclassificação passada pode ter sido decisão comercial legítima |
 
 ## 16. Seeds
 
-`cmd/seed` popula, numa **transação única**: propriedade, 8 unidades, 4 produtos e a composição (a Completa apontando para as oito), tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (24 tarifas + estadia mínima), política comercial e de cancelamento v1, um contato de demonstração, o catálogo de 23 recursos, os 3 perfis com a matriz inteira e um usuário de cada perfil para desenvolvimento.
+`cmd/seed` popula, numa **transação única**: propriedade, 8 unidades, 4 produtos e a composição (a Completa apontando para as oito), tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (24 tarifas + estadia mínima), política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 23 recursos, os 3 perfis com a matriz inteira e um usuário de cada perfil para desenvolvimento.
 
-O **contato de demonstração** existe porque `reservations.contact_id` é `NOT NULL`: sem ele não há como abrir orçamento, pré-reserva ou smoke test da jornada num banco recém-semeado. Sua chave natural é o telefone (`UNIQUE(phone_e164)`), o que torna a etapa idempotente. É gated como os usuários de desenvolvimento — em produção só entra com `SEED_DEMO_DATA=true`, porque contato fictício polui a base real de leads. E-mail em `.invalid` (RFC 2606, nunca resolve) e telefone em faixa não atribuível a celular no Brasil, para o WhatsApp jamais casar uma pessoa real com esta linha.
+Os **contatos de demonstração** existem por duas razões. A primeira: `reservations.contact_id` e `crm_opportunities.contact_id` são `NOT NULL`, então sem contato não há como abrir orçamento, pré-reserva, oportunidade nem smoke test da jornada num banco recém-semeado. A segunda: com **um** contato só, a tela de contatos e o funil nascem praticamente vazios — não dá para ver ordenação, busca por nome, recorte por base legal, nem a diferença entre quem aceitou receber oferta e quem não aceitou. Tela vazia não prova que a tela funciona.
+
+São quatro, e as **bases legais variam de propósito**: `lgpd_basis` é o que sustenta guardar a ficha (LGPD art. 7), e o seed é o único lugar onde alguém aprende o vocabulário por exemplo — um seed em que todos são `legitimo_interesse` ensina que o campo é decorativo. O lead do formulário é `consentimento` e é o único com `marketing_opt_in = true`, com `consent_at` gravado; quem já se hospedou é `contrato`, que legitima guardar o cadastro e **não** legitima mandar oferta; a prospecção de evento é `legitimo_interesse`. O instante do consentimento é **fixo e com fuso** (`2026-08-01T12:00:00-03:00`): `now()` faria a linha voltar como "atualizada" em toda execução, e data sem fuso renderia meia-noite UTC, que em America/Fortaleza é o dia anterior às 21h.
+
+A chave natural é o telefone (`UNIQUE(phone_e164)`), o que torna a etapa idempotente. É gated como os usuários de desenvolvimento — em produção só entra com `SEED_DEMO_DATA=true`, porque contato fictício polui a base real de leads. E-mail em `.invalid` (RFC 2606, nunca resolve) e telefone E.164 na faixa `9 0000 xxxx`, não atribuível a celular no Brasil, para o WhatsApp jamais casar uma pessoa real com estas linhas. `doc_type`/`doc_number` ficam nulos: CPF inventado ou passa na validação de dígito e vira dado plausível em que alguém acredita, ou não passa e quebra a primeira tela que validar.
 
 **Idempotente por contrato**: rodar dez vezes tem o mesmo efeito de rodar uma. Três decisões sustentam isso:
 

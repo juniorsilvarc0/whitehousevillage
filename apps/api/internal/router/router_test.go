@@ -47,13 +47,38 @@ func chamar(t *testing.T, h http.Handler, metodo, alvo string, ajustar func(*htt
 }
 
 func TestHealthzRespondeSemToken(t *testing.T) {
-	resp := chamar(t, montarParaTeste(t), http.MethodGet, "/api/v1/healthz", nil)
+	resp := chamar(t, montarParaTeste(t), http.MethodGet, "/healthz", nil)
 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, corpo %s", resp.Code, resp.Body.String())
 	}
 	if !strings.Contains(resp.Body.String(), `"status":"ok"`) {
 		t.Fatalf("corpo inesperado: %s", resp.Body.String())
+	}
+}
+
+// As sondas moram na RAIZ, e só nela.
+//
+// Elas nasceram sob `/api/v1` e o efeito foi medido: `curl localhost:8080/readyz`
+// devolvia 404 — contra o plano do projeto, contra o healthcheck do Compose e
+// contra o que qualquer runbook tenta primeiro. Servi-las nos DOIS caminhos
+// seria pior que escolher errado: dois endereços para o mesmo fato, e no dia do
+// `/api/v2` a infraestrutura teria de saber qual deles ainda vale.
+//
+// Este teste cobra a escolha nos dois sentidos, porque só a metade de cima
+// deixaria a duplicação passar despercebida.
+func TestSondasSoExistemNaRaiz(t *testing.T) {
+	h := montarParaTeste(t)
+
+	for _, caminho := range []string{"/healthz", "/readyz"} {
+		if resp := chamar(t, h, http.MethodGet, caminho, nil); resp.Code == http.StatusNotFound {
+			t.Errorf("%s devia existir na raiz e deu 404", caminho)
+		}
+		versionado := PrefixoDaAPI + caminho
+		if resp := chamar(t, h, http.MethodGet, versionado, nil); resp.Code != http.StatusNotFound {
+			t.Errorf("%s respondeu %d: sonda não é contrato de negócio e não entra na versão da API",
+				versionado, resp.Code)
+		}
 	}
 }
 

@@ -26,6 +26,14 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: Vet
         run: go vet ./...
+      # A segunda passada é a que importa: arquivo com `//go:build integration`
+      # é INVISÍVEL para `go vet ./...`, `go build ./...` e `go test ./...`.
+      # Sem ela, uma suíte de integração que nem compila atravessa este job — e
+      # o erro só aparece lá no job `integration`, depois de subir um Postgres.
+      # É o mesmo par que `make vet` roda; ter só um dos dois aqui era a
+      # diferença entre o CI e o portão local.
+      - name: Vet com a tag integration
+        run: go vet -tags=integration ./...
       - name: Testes
         run: go test ./... -race -count=1
 
@@ -146,8 +154,58 @@ jobs:
           cache: pnpm
           cache-dependency-path: apps/admin/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile || pnpm install
+      # O lint e os TESTES do painel não rodavam no CI — só `tsc` e `build`.
+      # Eram 334 testes em 40 arquivos executados apenas por quem lembrasse de
+      # digitar `make check`, e entre eles os que existem justamente para o CI
+      # cobrar: `config/navigation.test.ts` varre `app/**/page.tsx` e reprova
+      # item de menu sem tela (e tela existente ainda marcada como em
+      # construção), e `lib/auth/*.test.ts` fixa o que cada perfil enxerga.
+      # Guarda que não roda sozinha não é guarda.
+      - run: pnpm lint
       - run: pnpm exec tsc --noEmit
+      - run: pnpm test --run
       - run: pnpm build
+
+  smoke:
+    name: Fumaça de aplicação (stack de pé)
+    runs-on: ubuntu-latest
+    # Teto porque o alvo constrói duas imagens antes de abrir o navegador.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: apps/admin/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile || pnpm install
+        working-directory: apps/admin
+      # O script prefere o Chrome da máquina e cai no Chromium do Playwright
+      # quando ele não existe — este passo é o que garante o segundo.
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: apps/admin
+      # O compose lê `--env-file .env`, que não é versionado. Os valores de
+      # exemplo bastam: APP_ENV=development, e a única checagem que endurece em
+      # produção (JWT_SECRET de 32 bytes) não se aplica aqui.
+      - name: Ambiente
+        run: cp .env.example .env
+      # Um alvo só, o MESMO que se roda na máquina: build das imagens, schema,
+      # seed e a fumaça, nessa ordem. Repetir a sequência aqui é como um passo
+      # entra num lado e some do outro — a mesma razão pela qual o job
+      # `integration` chama os alvos do Makefile.
+      - name: Subir o stack, migrar, semear e percorrer as telas
+        run: make smoke-stack
+      # Log do stack quando a fumaça reprova: sem ele o diagnóstico é "alguma
+      # tela abriu com erro" e a investigação recomeça do zero na máquina de
+      # alguém.
+      - name: Logs do stack (só quando falha)
+        if: failure()
+        run: docker compose -f infra/docker-compose.yml --env-file .env logs --tail=200
+      - name: Derrubar
+        if: always()
+        run: docker compose -f infra/docker-compose.yml --env-file .env down -v
 
   build-images:
     name: Build das imagens

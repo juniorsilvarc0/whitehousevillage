@@ -226,6 +226,36 @@ type Pedido struct {
 	// centavo a centavo — nunca para o cliente escolher preço na venda.
 	RateTableID   *uuid.UUID `json:"rate_table_id"`
 	PolicyVersion *int       `json:"policy_version"`
+
+	// Persistir separa SIMULAR de EMITIR. É a mesma conta com destinos
+	// diferentes: ausente ou `false` devolve 200 e não grava nada; `true` grava
+	// em `quotes` + `quote_nights` e devolve 201 com `id`.
+	//
+	// O padrão é NÃO gravar, e o motivo é medido: o QuoteBuilder do painel
+	// dispara esta rota a cada tecla, com 350 ms de espera
+	// (`apps/admin/src/components/comercial/quote-builder.tsx:116`). Persistir
+	// por padrão encheria a tabela de dezenas de linhas por orçamento realmente
+	// emitido, e a conversão do funil ("quantos orçamentos viraram venda")
+	// passaria a dividir por ruído de digitação.
+	//
+	// É campo explícito, e não inferência a partir de `contact_id`: orçamento
+	// salvo SEM contato é caso legítimo (`quotes.contact_id` é anulável) — o
+	// corretor responde "quanto fica o Réveillon?" antes de saber quem
+	// perguntou. Decisão de quem chama se escreve, não se adivinha.
+	Persistir bool `json:"persist"`
+
+	// ContactID é para quem é o orçamento. Opcional MESMO emitindo.
+	ContactID *uuid.UUID `json:"contact_id"`
+
+	// OportunidadeID vincula o orçamento ao card do funil e o torna o VIGENTE
+	// dele — o que `POST /crm/opportunities/{id}/win` consome. N:1: a mesma
+	// negociação emite proposta, contraproposta e desconto revisto, e todos
+	// ficam.
+	OportunidadeID *uuid.UUID `json:"opportunity_id"`
+
+	// ValidoAte é até quando este preço fica de pé. Ausente vale
+	// `validadePadraoEmDias` a partir da emissão.
+	ValidoAte *string `json:"valid_until"`
 }
 
 // Validar cobre só o FORMATO das datas. Se `check_out` é posterior a `check_in`
@@ -246,6 +276,24 @@ func (p Pedido) Validar() map[string]string {
 	if p.PolicyVersion != nil && *p.PolicyVersion < 1 {
 		falhas["policy_version"] = "deve ser no mínimo 1."
 	}
+
+	// Os dois campos que só existem no orçamento EMITIDO são recusados sem
+	// `persist: true` em vez de ignorados. Aceitar em silêncio um vínculo que
+	// não vai ser gravado é a pior resposta possível: o cliente acha que
+	// vinculou, o card não muda, e ninguém tem como descobrir onde se perdeu.
+	if !p.Persistir {
+		if p.OportunidadeID != nil {
+			falhas["opportunity_id"] = "só faz sentido com `persist: true`: sem gravar, não há o que vincular."
+		}
+		if p.ValidoAte != nil {
+			falhas["valid_until"] = "só faz sentido com `persist: true`: simulação não tem validade."
+		}
+	}
+	if p.ValidoAte != nil {
+		if _, err := time.Parse(time.RFC3339, *p.ValidoAte); err != nil {
+			falhas["valid_until"] = "instante inválido: use RFC 3339 (2026-09-03T18:00:00-03:00)."
+		}
+	}
 	return falhas
 }
 
@@ -259,6 +307,14 @@ type Entrada struct {
 	IsEvento      bool
 	RateTableID   *uuid.UUID
 	PolicyVersion *int
+
+	// Os quatro campos da EMISSÃO. `ValidoAte` já é instante: a conversão do
+	// texto acontece uma vez, em Normalizar, para o service não precisar saber
+	// que ele chegou como string.
+	Persistir      bool
+	ContactID      *uuid.UUID
+	OportunidadeID *uuid.UUID
+	ValidoAte      *time.Time
 }
 
 // Normalizar converte o pedido. O erro é defensivo: depois de Validar ele não
@@ -275,16 +331,29 @@ func (p Pedido) Normalizar() (Entrada, error) {
 	if err != nil {
 		return Entrada{}, apperr.Validation(map[string]string{"check_out": "data inválida: use AAAA-MM-DD."})
 	}
-	return Entrada{
-		UnitTypeID:    p.UnitTypeID,
-		CheckIn:       entrada,
-		CheckOut:      saida,
-		Hospedes:      p.Hospedes,
-		DescontoPct:   p.DescontoPct,
-		IsEvento:      p.IsEvento,
-		RateTableID:   p.RateTableID,
-		PolicyVersion: p.PolicyVersion,
-	}, nil
+	e := Entrada{
+		UnitTypeID:     p.UnitTypeID,
+		CheckIn:        entrada,
+		CheckOut:       saida,
+		Hospedes:       p.Hospedes,
+		DescontoPct:    p.DescontoPct,
+		IsEvento:       p.IsEvento,
+		RateTableID:    p.RateTableID,
+		PolicyVersion:  p.PolicyVersion,
+		Persistir:      p.Persistir,
+		ContactID:      p.ContactID,
+		OportunidadeID: p.OportunidadeID,
+	}
+	if p.ValidoAte != nil {
+		instante, err := time.Parse(time.RFC3339, *p.ValidoAte)
+		if err != nil {
+			return Entrada{}, apperr.Validation(map[string]string{
+				"valid_until": "instante inválido: use RFC 3339 (2026-09-03T18:00:00-03:00).",
+			})
+		}
+		e.ValidoAte = &instante
+	}
+	return e, nil
 }
 
 // ─────────────────────────── Saída: POST /quotes ────────────────────────────

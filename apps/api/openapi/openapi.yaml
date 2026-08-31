@@ -42,8 +42,19 @@ tags:
     description: Propriedade, produtos (o que se vende) e unidades físicas (o que se ocupa).
   - name: Tarifário
     description: Tarifas, calendário comercial e políticas — tudo dado versionado, e nada reescreve o passado.
+  - name: Contatos
+    description: |
+      A pessoa. **Uma pessoa, um registro** (spec §6): lead, hóspede, corretor e
+      proprietário apontam todos para `contacts`, e é por isso que não existe
+      "cadastro de hóspede" separado do de lead — seriam duas fichas do mesmo ser
+      humano, e no dia em que ela trocasse de telefone só uma seria corrigida.
+      Deduplicação por telefone E.164 e por documento, e os deveres de LGPD
+      (base legal, opt-in datado, eliminação e portabilidade) moram aqui.
   - name: Disponibilidade
-    description: Mapa de ocupação e orçamento. Não bloqueia data.
+    description: |
+      Mapa de ocupação e orçamento. **Nada aqui bloqueia data** — nem a consulta,
+      nem o orçamento salvo. Quem insere em `stay_blocks` é a pré-reserva
+      (`POST /reservations`), e só ela.
   - name: Reservas
     description: O ciclo de vida da venda e o bloqueio operacional do calendário.
   - name: CRM
@@ -60,7 +71,20 @@ tags:
       sozinhos. O evento diz **que** algo mudou, nunca **o que** mudou.
 
 paths:
+  # As duas sondas declaram `servers` próprio porque NÃO moram sob `/api/v1`:
+  # sonda de saúde não é contrato de negócio. Quem as chama é o healthcheck do
+  # Compose, o proxy da frente e o orquestrador, com um caminho fixo escrito na
+  # configuração de infraestrutura — e no dia do `/api/v2` esse caminho não pode
+  # ter de ser reescrito junto, nem passar a existir em duas versões.
+  #
+  # Elas já nasceram sob o prefixo uma vez, e o efeito foi medido:
+  # `curl localhost:8080/readyz` devolvia 404. `router.Rota.NaRaiz` é o que as
+  # tira do prefixo, e `TestSondasSoExistemNaRaiz` cobra que existam na raiz e
+  # SÓ nela.
   /healthz:
+    servers:
+      - url: http://localhost:8080
+        description: Desenvolvimento (raiz, fora do prefixo da API)
     get:
       tags: [Saúde]
       summary: Processo vivo
@@ -69,6 +93,9 @@ paths:
         "200": { description: OK }
 
   /readyz:
+    servers:
+      - url: http://localhost:8080
+        description: Desenvolvimento (raiz, fora do prefixo da API)
     get:
       tags: [Saúde]
       summary: Pronto para servir (banco acessível e schema na versão esperada)
@@ -2125,6 +2152,413 @@ paths:
           $ref: "#/components/responses/Erro"
 
   # ════════════════════════════════════════════════════════════════════
+  # Contatos — módulo `contatos`.
+  #
+  # UMA PESSOA, UM REGISTRO (spec §6). Lead, hóspede, corretor e proprietário
+  # apontam todos para `contacts`. Não existe "cadastro de hóspede" separado do
+  # "cadastro de lead": seriam duas fichas da mesma pessoa, e no dia em que ela
+  # trocar de telefone só uma seria corrigida.
+  #
+  # ESTE MÓDULO NÃO EXISTIA ATÉ 27/08/2026, e a falta dele quebrava a jornada
+  # principal: `POST /reservations` e `POST /crm/opportunities` exigem
+  # `contact_id`, `GET /contacts` respondia 404 (medido), e o único contato do
+  # sistema era a linha que o seed insere. Vender pela API era impossível — os
+  # testes criavam contato por SQL, e foi por isso que ninguém percebeu.
+  #
+  # DADO PESSOAL TEM DONO, E O DONO É O TITULAR. Três consequências que
+  # atravessam todas as operações abaixo:
+  #   1. leitura de ficha individual grava `pii_access_log` (spec §16);
+  #   2. `POST /contacts/{id}/anonymize` atende ao direito de eliminação SEM
+  #      apagar o razão — o `id` sobrevive, a PII não;
+  #   3. `GET /contacts/{id}/export` atende à portabilidade.
+  #
+  # RBAC: recurso `contacts`, e ele é o ÚNICO do grupo Comercial sem escopo
+  # `own` (`supports_own = false` no catálogo semeado) — a tabela não tem coluna
+  # de dono. Consequência já registrada no seed e que o contrato repete para não
+  # surpreender: o corretor tem `ver` e `criar` em `all` (sem poder criar o
+  # contato ele não registra o próprio lead) e **não** tem `editar` nem
+  # `excluir` — ninguém corrige, anonimiza ou apaga o contato alheio. No dia em
+  # que `contacts` ganhar `owner_id`, essas células viram `own`.
+  # ════════════════════════════════════════════════════════════════════
+
+  /contacts:
+    get:
+      tags: [Contatos]
+      summary: Lista contatos
+      description: |
+        A lista é a agenda da casa. Três filtros carregam o peso:
+
+        - **`phone` é o caminho do WhatsApp.** O inbound chega com um número e
+          precisa saber, antes de criar qualquer coisa, se aquela pessoa já
+          existe. A busca é por **igualdade exata em E.164** (`+5585999990000`),
+          servida pelo índice `contacts_phone_idx`, e devolve **zero ou um**
+          registro — nunca uma lista parecida. Número mal formatado é
+          `422 VALIDATION_ERROR`, e não uma busca vazia: "não achei" e "você
+          perguntou errado" são respostas diferentes, e o chat que confunde as
+          duas cria um contato duplicado a cada mensagem.
+        - **`doc_number` é o caminho do balcão** — quem chega sem o telefone
+          cadastrado mas com o documento na mão.
+        - **`q` é a busca humana**, por nome ou e-mail, com trigram
+          (`contacts_name_trgm_idx`). Serve para a tela, não para deduplicar:
+          "Ana Silva" e "ana silva " são a mesma pessoa para o olho e duas linhas
+          para o `q`.
+
+        Contato anonimizado **não aparece** por padrão: a ficha existe só para
+        sustentar a reserva antiga, e oferecê-la num seletor de novo negócio é
+        reintroduzir na operação o dado que o titular mandou eliminar. Quem
+        precisa auditar passa `include_anonymized=true`.
+      x-rbac: { recurso: contacts, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - name: q
+          in: query
+          schema: { type: string, minLength: 2 }
+          description: Busca por nome (trigram) ou e-mail. Não serve para deduplicar — para isso use `phone` ou `doc_number`.
+        - name: phone
+          in: query
+          schema: { type: string, example: "+5585999990000" }
+          description: |
+            **E.164 exato**, com `+` e DDI. Igualdade, não prefixo. É a consulta
+            que o inbound de WhatsApp faz antes de criar contato.
+        - name: doc_number
+          in: query
+          schema: { type: string, example: "12345678909" }
+          description: "Só dígitos, como é gravado. Igualdade exata."
+        - { name: marketing_opt_in, in: query, schema: { type: boolean }, description: "Filtra quem aceitou (ou recusou) comunicação de marketing. É por aqui que se monta uma lista de disparo sem varrer a base inteira na mão." }
+        - { name: include_anonymized, in: query, schema: { type: boolean, default: false } }
+        - name: sort
+          in: query
+          schema: { type: string, default: name, enum: [name, -name, created_at, -created_at] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Contato" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "403": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: "`VALIDATION_ERROR` — `phone` fora do formato E.164."
+          $ref: "#/components/responses/Erro"
+    post:
+      tags: [Contatos]
+      summary: Cria o contato
+      description: |
+        ## Deduplicação não é uma busca antes de gravar
+
+        Telefone e documento identificam a pessoa, e a garantia de que não
+        existem dois registros do mesmo ser humano é do **banco**, não de um
+        `SELECT` antes do `INSERT` — é a regra 2 do `CLAUDE.md` aplicada fora do
+        calendário. `contacts_phone_idx` (`UNIQUE (phone_e164) WHERE phone_e164
+        IS NOT NULL`) já existe desde a Fase 1; a violação `23505` vira
+        `409 CONTACT_DUPLICATE`, com **o `id` do contato que já existe** em
+        `details.contact_id` — para o cliente seguir usando aquele, que é o
+        desfecho certo em 100% dos casos: quem tenta cadastrar de novo quer
+        justamente chegar na pessoa.
+
+        `details.field` diz qual chave colidiu (`phone_e164` ou `doc_number`).
+
+        > **O índice de documento ainda não é único** (`contacts_doc_idx` é
+        > comum). Enquanto a migration não o tornar
+        > `UNIQUE (property_id, doc_type, doc_number) WHERE doc_number IS NOT
+        > NULL`, a colisão por documento é detectada por consulta e, portanto,
+        > é um TOCTOU: dois pedidos simultâneos com o mesmo CPF passam os dois.
+        > O contrato descreve o comportamento final; a implementação não deve
+        > declarar essa garantia antes do índice existir.
+
+        ## Telefone é opcional, e é de propósito
+
+        O lead que chega por formulário às vezes só deixa e-mail. Exigir telefone
+        empurraria a operação a inventar `+5500000000000`, e aí a `UNIQUE` do
+        telefone passaria a recusar o segundo lead sem telefone — o índice
+        parcial existe exatamente para que `NULL` não colida com `NULL`.
+
+        ## LGPD entra na criação, não depois
+
+        `lgpd_basis` é a base legal que sustenta **guardar a ficha**;
+        `marketing_opt_in` é um eixo separado, com `consent_at` datando o aceite.
+        Os dois nunca se confundem: executar a reserva de quem nunca aceitou
+        propaganda é legítimo, mandar oferta para essa mesma pessoa não é.
+      x-rbac: { recurso: contacts, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContatoCriar" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location: { description: URI do recurso criado., schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Contato" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `CONTACT_DUPLICATE` — já existe contato com este telefone ou
+            documento. `details.field` (`phone_e164` \| `doc_number`) e
+            `details.contact_id` (o registro existente, para o cliente usá-lo).
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — `name` vazio, `phone_e164` fora do E.164,
+            `email` inválido, `doc_number` que não bate com o `doc_type`
+            (CPF com 11 dígitos e dígito verificador, CNPJ com 14),
+            `marketing_opt_in: true` sem `consent_at`, ou campo desconhecido
+            no corpo.
+          $ref: "#/components/responses/Erro"
+
+  /contacts/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Contatos]
+      summary: Detalhe do contato
+      description: |
+        Devolve a ficha inteira, inclusive documento e data de nascimento — e por
+        isso **grava `pii_access_log`** (ator, contato, instante), como manda a
+        spec §16. É a diferença entre esta rota e a lista: a lista serve à
+        operação do dia, a ficha é leitura de dado pessoal identificável, e a LGPD
+        pede que ela deixe rastro de quem olhou.
+
+        Contato anonimizado responde `200` com a ficha esvaziada e
+        `anonymized_at` preenchido — nunca `404`. Sumir com a ficha faria o
+        painel exibir "contato inexistente" numa reserva que existe, e a operação
+        perderia a única prova de que a eliminação foi feita e quando.
+      x-rbac: { recurso: contacts, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ContatoCompleto" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Contatos]
+      summary: Substitui o contato
+      x-rbac: { recurso: contacts, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContatoCriar" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Contato" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `CONTACT_DUPLICATE` — o telefone ou documento informado é de outro
+            contato · `CONTACT_ANONYMIZED` — ficha anonimizada não volta a
+            receber dado pessoal.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Contatos]
+      summary: Atualiza o contato
+      description: |
+        Campo **ausente** não muda nada; campo com `null` limpa. Vale aqui uma
+        assimetria que a LGPD impõe e que o `PATCH` genérico esconderia:
+        `marketing_opt_in` e `consent_at` andam juntos. Ligar o opt-in sem data
+        de consentimento é `422` — consentimento sem data não é consentimento,
+        é afirmação. Desligar o opt-in limpa `consent_at` sozinho: a revogação
+        não precisa de segunda chamada, e deixar a data antiga sobreviver faria o
+        relatório dizer que a pessoa aceitou.
+      x-rbac: { recurso: contacts, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContatoAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Contato" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`CONTACT_DUPLICATE` · `CONTACT_ANONYMIZED`"
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Contatos]
+      summary: Apaga o contato que nunca foi usado
+      description: |
+        **Apaga de verdade, e só o que nunca existiu comercialmente** — a mesma
+        regra do `DELETE /reservations/{id}` em `quote`. Serve para o erro de
+        digitação de dois minutos atrás, e para nada mais.
+
+        Assim que o contato tiver **qualquer** vínculo — reserva, lead,
+        oportunidade, atividade, nota, conversa —, a resposta é
+        `409 RESOURCE_IN_USE`, com a contagem por tipo em `details.references`, e
+        o caminho correto passa a ser `POST /contacts/{id}/anonymize`. Apagar
+        aqui derrubaria a FK `reservations.contact_id`, que é `NOT NULL`: o preço
+        de "sumir com o cadastro" seria sumir com a venda.
+
+        É essa a razão de o direito de eliminação da LGPD **não** ser servido por
+        este verbo. Eliminar dado pessoal e destruir registro fiscal são coisas
+        diferentes, e o `DELETE` só consegue fazer as duas juntas ou nenhuma.
+      x-rbac: { recurso: contacts, acao: excluir }
+      responses:
+        "204": { description: Apagado }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — o contato tem vínculos.
+            `details.references` traz `{reservations, leads, opportunities,
+            activities, notes, conversations}` e `details.hint` aponta
+            `/contacts/{id}/anonymize`.
+          $ref: "#/components/responses/Erro"
+
+  /contacts/{id}/anonymize:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Contatos]
+      summary: Anonimiza o contato — direito de eliminação sem quebrar o razão
+      description: |
+        O direito de eliminação (LGPD art. 18, VI) aplicado ao único jeito que
+        sobrevive a uma auditoria fiscal: **a pessoa some, a venda fica**.
+
+        ## O que acontece
+
+        Numa transação, a linha de `contacts` perde a PII e ganha `anonymized_at`:
+
+        | Campo | Depois |
+        |---|---|
+        | `name` | `Contato anonimizado #<8 primeiros hex do id>` |
+        | `email`, `phone_e164`, `doc_number`, `doc_type`, `birth_date`, `city`, `state`, `notes` | `NULL` |
+        | `marketing_opt_in` | `false` |
+        | `consent_at` | `NULL` |
+        | `anonymized_at` | `now()` |
+        | `id`, `property_id`, `created_at` | **intactos** |
+
+        `phone_e164` e `doc_number` viram `NULL` (e não um hash) por dois motivos
+        somados: hash de CPF é dado pessoal pseudonimizado, não anônimo — a base
+        de CPFs é pequena o bastante para ser varrida inteira —, e `NULL` é o que
+        libera o índice único parcial para a pessoa se recadastrar amanhã, que é
+        direito dela.
+
+        ## O que NÃO acontece
+
+        **Nada financeiro é apagado.** Reservas, `reservation_nights`,
+        `reservation_pricing`, recebíveis, pagamentos, comissões e o razão
+        continuam existindo e continuam apontando para o **mesmo `contact_id`** —
+        a FK nunca é rompida. O fechamento do mês depois de uma anonimização bate
+        exatamente como batia antes; se não batesse, a anonimização estaria
+        destruindo escrituração, que é obrigação legal concorrente e vence o
+        pedido de eliminação sobre esses registros específicos.
+
+        Idem para a trilha: `audit_log` e `pii_access_log` guardam
+        `contact_id` — não o nome —, e é isso que permite provar *quando* a
+        eliminação foi feita e por quem, sem reintroduzir o dado que ela eliminou.
+
+        ## Irreversível, e por isso pede motivo
+
+        Não há "desanonimizar": o dado não está guardado em lugar nenhum para
+        voltar. `reason` é obrigatório e vai para `audit_log` — é o que responde
+        "por que esta ficha está vazia?" seis meses depois, e é o registro do
+        pedido do titular que a ANPD pede em fiscalização.
+
+        Repetir a chamada num contato já anonimizado responde `200` com a mesma
+        ficha e **não** regrava `anonymized_at` — idempotente de fato, e não só
+        de aparência: reescrever a data faria a segunda chamada mentir sobre
+        quando a eliminação aconteceu.
+      x-rbac: { recurso: contacts, acao: excluir }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeAnonimizacao" }
+      responses:
+        "200":
+          description: Anonimizado (ou já estava).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDeAnonimizacao" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — há reserva **viva** (`hold`, `confirmed` ou
+            `checked_in`) para este contato. Não se elimina o dado de quem está
+            hospedado hoje: a operação precisa do nome para entregar a chave, e
+            a base legal enquanto o contrato corre é a execução do contrato, não
+            o consentimento. `details.reservations` traz os códigos, e a ficha
+            fica elegível assim que a estadia terminar.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — `reason` ausente ou com menos de 3 caracteres."
+          $ref: "#/components/responses/Erro"
+
+  /contacts/{id}/export:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Contatos]
+      summary: Exporta tudo que o sistema sabe do contato (portabilidade)
+      description: |
+        Portabilidade da LGPD (art. 18, V) em JSON: a ficha cadastral mais tudo
+        que está vinculado a ela — reservas com noites e valores, estadias,
+        leads, oportunidades, atividades, notas e o histórico de consentimento.
+
+        Duas escolhas que valem escrever:
+
+        - **É JSON, não PDF.** Portabilidade é "em formato de uso comum e
+          interoperável"; PDF é para ler, JSON é para carregar em outro sistema.
+        - **Grava `pii_access_log` com `reason: "export"`.** Exportar é a maior
+          leitura de dado pessoal que o sistema faz numa chamada só; se alguma
+          leitura tem de deixar rastro, é esta.
+
+        Contato anonimizado exporta o que sobrou — o `id`, as datas e os vínculos
+        financeiros, sem PII. Devolver `404` esconderia do titular a informação de
+        que ainda existem registros ligados a ele, que é justamente o que ele tem
+        direito de saber.
+      x-rbac: { recurso: contacts, acao: ver }
+      responses:
+        "200":
+          description: Pacote de portabilidade
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ExportacaoDeContato" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  # ════════════════════════════════════════════════════════════════════
   # Disponibilidade e orçamento — módulo `disponibilidade`.
   # ════════════════════════════════════════════════════════════════════
 
@@ -2235,7 +2669,7 @@ paths:
   /quotes:
     post:
       tags: [Disponibilidade]
-      summary: Calcula o orçamento — não bloqueia data
+      summary: Calcula o orçamento — e o emite quando `persist` pede
       description: |
         Roda o motor puro `internal/domain/booking` sobre a tabela de tarifas e a
         política **vigentes na data de hoje**, e devolve o cálculo inteiro aberto:
@@ -2253,15 +2687,99 @@ paths:
           `balance_cents` é o resto, vencendo `balance_due_days` antes do
           check-in.
 
-        Não grava nada e **não segura a data** — só a pré-reserva
-        (`POST /reservations`) insere em `stay_blocks`. Por isso um orçamento
-        pode virar `409 DATE_CONFLICT` na hora de virar reserva, e isso é
-        correto, não um defeito.
+        ## Simular e emitir são a mesma conta com destinos diferentes
+
+        | Corpo | Resposta | Gravou? |
+        |---|---|---|
+        | `persist` ausente ou `false` (padrão) | `200`, `Orcamento` **sem `id`** | não |
+        | `persist: true` | `201` + `Location`, `OrcamentoSalvo` **com `id`** | sim, em `quotes` |
+
+        O padrão é **não gravar**, e o motivo é medido: o `QuoteBuilder` do painel
+        dispara esta rota a cada tecla, com 350 ms de espera
+        (`src/components/comercial/quote-builder.tsx`). Persistir por padrão
+        encheria `quotes` de dezenas de linhas por orçamento realmente emitido, e
+        a conversão do funil — quantos orçamentos viraram venda — passaria a
+        dividir por um denominador que é ruído de digitação.
+
+        `persist` é um campo explícito, e não uma inferência a partir de
+        `contact_id`, porque orçamento salvo **sem** contato é caso legítimo: o
+        corretor responde "quanto fica o Réveillon?" antes de saber quem
+        perguntou, e o agente de IA orça antes de cadastrar ninguém.
+        `quotes.contact_id` é anulável exatamente por isso. Emitir é uma decisão
+        de quem chama, e decisão de quem chama se escreve, não se adivinha.
+
+        ## O que ficou pendurado até 27/08/2026
+
+        `POST /quotes` era cálculo puro: o schema `Orcamento` não tinha `id`, não
+        havia `GET /quotes/{id}` e a tabela `quotes` não existia. Consequência
+        medida: `POST /crm/opportunities/{id}/win` só sabia responder
+        `422 QUOTE_REQUIRED_TO_WIN`, porque nenhum caminho da API produzia o
+        orçamento que ele exige — a ação mais importante do CRM era inalcançável,
+        e a suíte do CRM fabricava a linha por SQL direto para poder testar.
+
+        ## O orçamento emitido NÃO bloqueia data
+
+        Nenhuma linha de `stay_blocks` é inserida aqui, e a constraint
+        `stay_no_overlap` não enxerga `quotes` — a tabela não tem sequer uma
+        referência a `stay_blocks`, e isso é regra de negócio, não esquecimento
+        (spec §4). Segurar data continua sendo exclusividade da pré-reserva
+        (`POST /reservations`, estado `hold`).
+
+        A contrapartida é aceita e correta: um orçamento emitido pode virar
+        `409 DATE_CONFLICT` na hora de virar reserva. Se o orçamento segurasse
+        data, cada simulação de preço da White House Completa — que consome as
+        oito unidades — travaria a casa inteira para todo mundo.
+
+        ## Ele é um snapshot, e é essa a razão de existir
+
+        A emissão grava `rate_table_id`, `policy_version`,
+        `cancellation_policy_id` e o preço de **cada noite** (`quote_nights`,
+        espelho de `reservation_nights`). Reabrir em `GET /quotes/{id}` devolve
+        **os valores gravados, nunca os de hoje**: publicar um tarifário novo
+        amanhã não reescreve o número que o hóspede ouviu ao telefone. É a regra 7
+        do `CLAUDE.md` e o critério de aceite do §3 — "alterar uma tarifa na tela
+        muda o próximo orçamento e não muda nenhum orçamento já emitido".
+
+        Por isso **orçamento não se edita**: não há `PUT`, `PATCH` nem `DELETE` em
+        `/quotes/{id}`. Reprecificar é emitir outro; o anterior continua legível e
+        vence sozinho pelo `valid_until`. Um `PATCH` aqui seria reescrever um
+        documento que já saiu — e é justamente contra isso que a coerência do
+        snapshot é imposta pelo banco (`quote_nights_fecham_o_orcamento`: uma
+        noite por dia da estadia, todas do produto orçado, somando exatamente o
+        subtotal).
+
+        ## `opportunity_id` fecha a jornada do CRM
+
+        Informado com `persist: true`, o orçamento nasce vinculado à oportunidade
+        e passa a ser **o orçamento vigente** dela — o que
+        `POST /crm/opportunities/{id}/win` consome. A relação é **N:1**: a mesma
+        negociação emite proposta, contraproposta e desconto revisto, e **todos
+        ficam** — é assim que se compara o que o cliente recusou com o que ele
+        aceitou. Qual deles está de pé é `crm_opportunities.quote_id`, que a
+        emissão passa a apontar.
+
+        Exige que o `contact_id`, quando informado, seja o **mesmo contato da
+        oportunidade**; senão `422 VALIDATION_ERROR` — orçamento colado num card
+        de outra pessoa é como o `/win` acabaria criando reserva no nome errado.
 
         O corpo aceita `rate_table_id` e `policy_version` explícitos para
         reproduzir um orçamento antigo centavo a centavo; ausentes, valem os
         vigentes.
       x-rbac: { recurso: quotes, acao: criar }
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: |
+            **Opcional**, e é a única exceção deliberada à convenção de
+            `Idempotency-Key` obrigatório: a regra vale para `POST` que cria
+            reserva ou dinheiro, e o orçamento não faz nem uma coisa nem outra —
+            não segura data e não gera recebível. Exigir o cabeçalho quebraria o
+            caminho de simulação, que dispara a cada tecla. Quando **é** enviado,
+            vale inteiro: mesma chave, mesmo ator e mesmo corpo devolvem a
+            resposta original; corpo diferente é `409 IDEMPOTENCY_MISMATCH`. Vale
+            a pena mandá-lo sempre que `persist` for `true`.
       requestBody:
         required: true
         content:
@@ -2269,27 +2787,96 @@ paths:
             schema: { $ref: "#/components/schemas/PedidoDeOrcamento" }
       responses:
         "200":
-          description: Orçamento calculado
+          description: |
+            **Simulação** — `persist` ausente ou `false`. Nada foi gravado, e por
+            isso não há `id` para buscar depois.
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Orcamento" }
+        "201":
+          description: |
+            **Orçamento emitido** — `persist: true`. Linha em `quotes` com as
+            noites congeladas em `quote_nights`. Não bloqueia data.
+          headers:
+            Location: { description: "URI do orçamento (`/quotes/{id}`).", schema: { type: string } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrcamentoSalvo" }
+        "403": { $ref: "#/components/responses/Erro" }
         "404":
-          description: "`NOT_FOUND` — produto, tabela de tarifas ou política inexistente."
+          description: "`NOT_FOUND` — produto, tabela de tarifas, política, contato ou oportunidade inexistente."
+          $ref: "#/components/responses/Erro"
+        "409":
+          description: |
+            `IDEMPOTENCY_MISMATCH` — mesma chave, corpo diferente ·
+            `CONTACT_ANONYMIZED` — o contato pediu eliminação; não se emite
+            proposta nova para ele. (O mesmo código responde `409` em
+            `/contacts` — um código, um status.)
           $ref: "#/components/responses/Erro"
         "422":
           description: |
             Vem do motor, com o código estável do `booking.RuleError`:
 
-            - `VALIDATION_ERROR` — `check_out` não é posterior a `check_in`, `guests_count < 1`, ou campo desconhecido no corpo.
+            - `VALIDATION_ERROR` — `check_out` não é posterior a `check_in`, `guests_count < 1`, `opportunity_id` ou `valid_until` com `persist` ausente, `contact_id` diferente do contato da oportunidade, `valid_until` no passado, ou campo desconhecido no corpo.
             - `CAPACITY_EXCEEDED` — hóspedes acima da capacidade do produto (`details.capacity`, `details.requested`).
             - `MIN_STAY_NOT_MET` — noites abaixo do mínimo do período (`details.required`, `details.requested`).
             - `DISCOUNT_ABOVE_LIMIT` — desconto acima da alçada (`details.requested_pct`, `details.max_pct`).
             - `RATE_NOT_FOUND` — a tabela vigente não tem tarifa para algum tipo de data da estadia (`details.date`, `details.date_type`).
             - `COMPOSITION_INCOMPLETE` — a composição do produto não pode ser entregue (veja `POST /reservations`). Orçar o que não se pode vender é prometer.
           $ref: "#/components/responses/Erro"
+
+  /quotes/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Disponibilidade]
+      summary: Reabre o orçamento emitido — os valores de quando foi emitido
+      description: |
+        **Devolve o que foi gravado, não o que o motor calcularia hoje.** Nenhum
+        número desta resposta é recalculado: subtotal, desconto, limpeza, caução,
+        total, sinal e o preço de cada noite saem de `quotes` e `quote_nights`, e
+        `rate_table_id`/`policy_version` dizem contra qual tabela e qual política
+        aquele número foi feito.
+
+        É o ponto inteiro de persistir o orçamento. Reproduzir uma proposta de
+        três semanas atrás recalculando-a devolveria o preço de hoje — e a única
+        pergunta que se faz a um orçamento antigo ("quanto foi que eu prometi?")
+        seria a única que ele não saberia responder. Tarifário novo não reescreve
+        o passado (regra 7 do `CLAUDE.md`).
+
+        `balance_cents` e `avg_nightly_cents` **não** são colunas: são
+        `total − sinal` e `total / noites`, exatos em inteiro, derivados na
+        leitura. Guardar o que se deriva é criar a segunda verdade que um dia
+        diverge.
+
+        Dois campos contam a vida do orçamento sem que ele mude de valor:
+        `expired` (derivado de `valid_until` contra "agora" em
+        `America/Fortaleza`) e `reservation_id`, preenchido quando ele virou
+        venda. Orçamento vencido **continua legível** — ele é o histórico de
+        preço da casa, e some do seletor, não do banco.
+
+        **Escopo `own`**: o corretor lê só os orçamentos de que é dono
+        (`AND owner_id = $usuario` no SQL). Orçamento sem dono — o que o agente de
+        IA emite — não aparece para quem tem escopo `own`, pela mesma razão que o
+        lead sem dono não aparece: é fila da gestão até ser distribuído.
+      x-rbac: { recurso: quotes, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrcamentoSalvo" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
 
   # ════════════════════════════════════════════════════════════════════
   # Reservas — módulo `reservas`.
@@ -2304,7 +2891,7 @@ paths:
   #
   # | estado       | como se chega                      | bloqueia calendário |
   # |--------------|------------------------------------|---------------------|
-  # | quote        | orçamento salvo, sem data segurada  | não                 |
+  # | quote        | reserva rascunho, sem data segurada  | não                |
   # | hold         | POST /reservations                  | SIM                 |
   # | confirmed    | POST /confirm (sinal registrado)    | SIM                 |
   # | checked_in   | POST /check-in                      | SIM                 |
@@ -2565,6 +3152,12 @@ paths:
       description: |
         Só apaga o que nunca existiu comercialmente: reserva em `quote`, que não
         tem `stay_block`, não tem sinal e não entrou no razão.
+
+        **Não confunda com orçamento.** Desde `20260827130000` o orçamento emitido
+        é uma linha de `quotes`, tabela própria, e não uma reserva em `quote`;
+        ele não se apaga — vence sozinho pelo `valid_until`. O estado `quote` de
+        `reservations` continua existindo para a reserva rascunho que nasce sem
+        segurar data, e é essa que este verbo descarta.
 
         A partir de `hold` a resposta é `409 INVALID_STATE_TRANSITION` apontando
         `/cancel`: apagar reserva quebra o razão e some com a prova de quem
@@ -4289,19 +4882,38 @@ paths:
         O ponto do módulo inteiro: **ganhar não redigita nada** (critério de
         aceite do §7). Numa transação:
 
-        1. lê o **orçamento vigente** da oportunidade (`quote_id`, ou o
-           `quote_id` do corpo, que precisa ser da mesma oportunidade);
-        2. cria a reserva como `hold` pelo mesmo caminho do
-           `POST /reservations` — recalculando pelo motor e congelando
-           `reservation_nights`, `rate_table_id`, `policy_version` e
-           `cancellation_policy_id` — e aloca a(s) unidade(s);
-        3. move a oportunidade para a etapa de tipo `ganho` do funil, gravando
+        1. lê o **orçamento vigente** da oportunidade
+           (`crm_opportunities.quote_id`, ou o `quote_id` do corpo, que precisa
+           ser da mesma oportunidade e ainda estar de pé);
+        2. cria a reserva como `hold` **copiando o snapshot do orçamento** —
+           `quote_nights` vira `reservation_nights`, os valores viram
+           `reservation_pricing`, e `rate_table_id`, `policy_version` e
+           `cancellation_policy_id` vão junto — e aloca a(s) unidade(s),
+           inserindo os `stay_blocks` que seguram o calendário;
+        3. grava `quotes.reservation_id`, que é a conversão do funil medida sem
+           recálculo (e é única: `quotes_reserva_uniq`);
+        4. move a oportunidade para a etapa de tipo `ganho` do funil, gravando
            `crm_stage_history`;
-        4. grava `status: ganha`, `reservation_id` e `probability: 100`;
-        5. conclui as tarefas automáticas pendentes da oportunidade — cobrar
+        5. grava `status: ganha`, `reservation_id` e `probability: 100`;
+        6. conclui as tarefas automáticas pendentes da oportunidade — cobrar
            follow-up de negócio fechado é ruído que ensina a ignorar o alerta;
-        6. publica eventos nos tópicos `crm` **e** `calendar`: o mapa de ocupação
+        7. publica eventos nos tópicos `crm` **e** `calendar`: o mapa de ocupação
            de quem estiver com a tela aberta ganha o bloco na hora.
+
+        ## Cópia do snapshot, não recálculo — e por que a diferença importa
+
+        O motor **não** roda de novo. Os números da reserva são os do orçamento,
+        centavo a centavo, incluindo o preço de cada noite. Recalcular no ganho
+        devolveria o preço da tabela de **hoje**: ganhar uma proposta de três
+        semanas atrás cobraria do hóspede um valor que ele nunca ouviu, e
+        bastaria um `PUT /rates` no meio da negociação para isso acontecer sem
+        ninguém notar. O orçamento é o snapshot; ganhar é transcrevê-lo, não
+        refazê-lo.
+
+        A **data**, essa sim, só passa a estar bloqueada aqui: enquanto era
+        orçamento, o calendário estava livre e qualquer um podia vender aquelas
+        noites. É por isso que `409 DATE_CONFLICT` é um desfecho normal deste
+        endpoint, e não um defeito.
 
         ## Nasce `hold`, não `confirmed`
 
@@ -4330,11 +4942,30 @@ paths:
 
         Sem orçamento vigente e sem `quote_id` no corpo, `422
         QUOTE_REQUIRED_TO_WIN` — sem preço congelado não há o que virar reserva,
-        e inventar o preço na hora é exatamente o que o §3 proíbe. As recusas do
-        motor de reservas valem inteiras aqui: `409 DATE_CONFLICT` (a data foi
-        vendida enquanto se negociava — o caso mais comum e o mais importante de
-        mostrar bem na tela), `422 MIN_STAY_NOT_MET`, `422 CAPACITY_EXCEEDED`,
-        `422 COMPOSITION_INCOMPLETE`.
+        e inventar o preço na hora é exatamente o que o §3 proíbe. O caminho de
+        saída é emitir o orçamento em `POST /quotes` com `persist: true` e
+        `opportunity_id`, e chamar `/win` de novo.
+
+        > Até 27/08/2026 **essa saída não existia**. Medido contra o stack no ar,
+        > numa oportunidade recém-criada: `/win` respondia
+        > `422 QUOTE_REQUIRED_TO_WIN` com a dica "emita o orçamento e vincule-o à
+        > oportunidade" — instrução que nenhum cliente conseguia seguir, porque
+        > `POST /quotes` não gravava nada e `PATCH /crm/opportunities/{id}`
+        > recusa `quote_id` de propósito. A ação mais importante do CRM era
+        > inalcançável.
+
+        Se o orçamento apontado não está mais de pé — venceu (`valid_until` no
+        passado) ou já virou venda (`reservation_id` preenchido) —, a resposta é
+        `422 QUOTE_NOT_PENDING`, com `details.valid_until` e
+        `details.reservation_id`. O caminho é emitir outro: preço vencido não se
+        renova sozinho, e reusar o vencido é vender pelo número que a casa já
+        retirou de circulação.
+
+        As recusas do motor de reservas valem inteiras aqui: `409 DATE_CONFLICT`
+        (a data foi vendida enquanto se negociava — o caso mais comum e o mais
+        importante de mostrar bem na tela; é a contrapartida direta de o
+        orçamento não bloquear calendário), `422 MIN_STAY_NOT_MET`,
+        `422 CAPACITY_EXCEEDED`, `422 COMPOSITION_INCOMPLETE`.
 
         Em qualquer recusa **nada muda**: a oportunidade continua aberta, na
         etapa em que estava. Fechar a oportunidade e falhar a reserva deixaria uma
@@ -4378,9 +5009,11 @@ paths:
           $ref: "#/components/responses/Erro"
         "422":
           description: |
-            `QUOTE_REQUIRED_TO_WIN` — sem orçamento vigente ·
-            `MIN_STAY_NOT_MET` · `CAPACITY_EXCEEDED` · `COMPOSITION_INCOMPLETE` ·
-            `VALIDATION_ERROR` — o funil não tem etapa de tipo `ganho`.
+            `QUOTE_REQUIRED_TO_WIN` — sem orçamento vigente e sem `quote_id` ·
+            `QUOTE_NOT_PENDING` — o orçamento apontado já saiu de `quote`
+            (`details.status`) · `MIN_STAY_NOT_MET` · `CAPACITY_EXCEEDED` ·
+            `COMPOSITION_INCOMPLETE` · `VALIDATION_ERROR` — o orçamento é de
+            outro contato, ou o funil não tem etapa de tipo `ganho`.
           $ref: "#/components/responses/Erro"
 
   /crm/opportunities/{id}/lose:
@@ -4653,6 +5286,7 @@ components:
                            STAGE_NOT_IN_PIPELINE, STAGE_ORDER_INCOMPLETE, DEFAULT_PIPELINE_REQUIRED,
                            OPPORTUNITY_ALREADY_CLOSED, LOSS_REASON_REQUIRED, QUOTE_REQUIRED_TO_WIN,
                            LEAD_ALREADY_CONVERTED,
+                           CONTACT_DUPLICATE, CONTACT_ANONYMIZED, QUOTE_NOT_PENDING,
                            INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
@@ -5177,6 +5811,217 @@ components:
 
     # ────────────────── Disponibilidade e orçamento ───────────────────
 
+    BaseLegalLGPD:
+      type: string
+      enum: [consentimento, contrato, obrigacao_legal, legitimo_interesse]
+      description: |
+        Base legal que sustenta **guardar esta ficha** (LGPD art. 7). Não é a
+        base do marketing — essa é o `marketing_opt_in` com `consent_at`, e são
+        eixos separados de propósito: `contrato` legitima guardar o cadastro de
+        quem se hospedou, e não legitima mandar oferta para ele.
+
+        `contrato` é o caso normal do hóspede; `consentimento` é o do lead que
+        preencheu formulário; `legitimo_interesse` cobre a prospecção registrada;
+        `obrigacao_legal` é o que sobrevive à anonimização — o dado que a
+        legislação fiscal manda guardar.
+
+    TipoDeDocumento:
+      type: string
+      enum: [cpf, cnpj, passaporte]
+      description: |
+        `cpf` e `cnpj` são gravados **só com dígitos** e validados por dígito
+        verificador; `passaporte` é alfanumérico e não tem validação de formato —
+        cada país tem o seu, e recusar o que não se sabe validar barraria hóspede
+        estrangeiro no balcão.
+
+    Contato:
+      type: object
+      description: |
+        A pessoa. **Uma pessoa, um registro** (spec §6): lead, hóspede, corretor
+        e proprietário apontam todos para cá, e é por isso que não existe um
+        cadastro de hóspede paralelo a este.
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        email:      { type: [string, "null"], format: email }
+        phone_e164:
+          type: [string, "null"]
+          example: "+5585999990000"
+          description: |
+            E.164, com `+` e DDI. **Único em toda a base**
+            (`UNIQUE (phone_e164) WHERE phone_e164 IS NOT NULL`) — é a chave de
+            deduplicação do WhatsApp. `NULL` não colide com `NULL`: o índice é
+            parcial justamente para caber mais de um contato sem telefone.
+        doc_type:   { oneOf: [{ $ref: "#/components/schemas/TipoDeDocumento" }, { type: "null" }] }
+        doc_number: { type: [string, "null"], example: "12345678909", description: "Só dígitos para CPF/CNPJ." }
+        birth_date: { type: [string, "null"], format: date }
+        city:       { type: [string, "null"] }
+        state:      { type: [string, "null"], maxLength: 2, example: CE }
+        notes:      { type: [string, "null"] }
+        lgpd_basis: { oneOf: [{ $ref: "#/components/schemas/BaseLegalLGPD" }, { type: "null" }] }
+        marketing_opt_in:
+          type: boolean
+          description: |
+            Eixo **separado** da base legal. `true` sem `consent_at` não existe:
+            a validação recusa, porque consentimento sem data não é
+            consentimento.
+        consent_at:
+          type: [string, "null"]
+          format: date-time
+          description: "Quando o aceite de marketing foi registrado. Revogar o opt-in limpa esta data na mesma escrita."
+        anonymized_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            Preenchido pelo `/anonymize`. Enquanto for `null` a ficha é normal;
+            preenchido, ela é uma casca que existe só para sustentar os registros
+            financeiros que apontam para este `id`.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    VinculosDoContato:
+      type: object
+      description: |
+        Quantos registros apontam para este contato, por tipo. É o que o
+        `DELETE` devolve em `details.references` quando recusa, e o que a tela
+        mostra antes de oferecer o botão de anonimizar.
+      properties:
+        reservations:   { type: integer }
+        leads:          { type: integer }
+        opportunities:  { type: integer }
+        activities:     { type: integer }
+        notes:          { type: integer }
+        conversations:  { type: integer }
+
+    ContatoCompleto:
+      allOf:
+        - $ref: "#/components/schemas/Contato"
+        - type: object
+          description: |
+            A ficha com o que só o detalhe carrega. `references` está aqui, e não
+            na lista, porque contá-lo é uma consulta por contato: numa página de
+            25 seriam 25 contagens para desenhar um número que a lista não mostra.
+          properties:
+            references: { $ref: "#/components/schemas/VinculosDoContato" }
+
+    ContatoCriar:
+      type: object
+      description: |
+        Corpo do `POST` e do `PUT`. `name` é o único obrigatório: o lead que
+        chega pelo formulário às vezes só deixa o nome, e exigir telefone
+        empurraria a operação a inventar um número — que a `UNIQUE` recusaria na
+        segunda vez.
+      required: [name]
+      properties:
+        name:       { type: string, minLength: 2, maxLength: 200 }
+        email:      { type: [string, "null"], format: email }
+        phone_e164:
+          type: [string, "null"]
+          example: "+5585999990000"
+          description: |
+            E.164 com `+` e DDI. Formato errado é `422 VALIDATION_ERROR`, não
+            uma normalização silenciosa: `85999990000` pode ser Fortaleza ou
+            outra coisa, e adivinhar o DDI é criar contato duplicado do mesmo
+            número escrito de dois jeitos.
+        doc_type:   { oneOf: [{ $ref: "#/components/schemas/TipoDeDocumento" }, { type: "null" }] }
+        doc_number: { type: [string, "null"], description: "Exige `doc_type` junto — número sem tipo não se valida nem se compara." }
+        birth_date: { type: [string, "null"], format: date }
+        city:       { type: [string, "null"] }
+        state:      { type: [string, "null"], maxLength: 2 }
+        notes:      { type: [string, "null"], maxLength: 2000 }
+        lgpd_basis: { oneOf: [{ $ref: "#/components/schemas/BaseLegalLGPD" }, { type: "null" }] }
+        marketing_opt_in: { type: boolean, default: false }
+        consent_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            Obrigatório quando `marketing_opt_in` é `true`. Ausente com opt-in
+            ligado é `422 VALIDATION_ERROR`.
+
+    ContatoAtualizar:
+      type: object
+      description: |
+        Corpo do `PATCH`: tudo opcional, ausente não muda, `null` limpa. É a
+        distinção que o `Opt[T]` do Go carrega e que um `map[string]any`
+        perderia.
+      properties:
+        name:       { type: string, minLength: 2, maxLength: 200 }
+        email:      { type: [string, "null"], format: email }
+        phone_e164: { type: [string, "null"] }
+        doc_type:   { oneOf: [{ $ref: "#/components/schemas/TipoDeDocumento" }, { type: "null" }] }
+        doc_number: { type: [string, "null"] }
+        birth_date: { type: [string, "null"], format: date }
+        city:       { type: [string, "null"] }
+        state:      { type: [string, "null"], maxLength: 2 }
+        notes:      { type: [string, "null"], maxLength: 2000 }
+        lgpd_basis: { oneOf: [{ $ref: "#/components/schemas/BaseLegalLGPD" }, { type: "null" }] }
+        marketing_opt_in:
+          type: boolean
+          description: |
+            Ligar exige `consent_at` (no mesmo corpo ou já gravado). Desligar
+            limpa `consent_at` na mesma escrita — revogação não pede segunda
+            chamada, e data de aceite sobrevivente faria o relatório dizer que a
+            pessoa aceitou.
+        consent_at: { type: [string, "null"], format: date-time }
+
+    PedidoDeAnonimizacao:
+      type: object
+      description: Corpo do `POST /contacts/{id}/anonymize`.
+      required: [reason]
+      properties:
+        reason:
+          type: string
+          minLength: 3
+          maxLength: 500
+          description: |
+            Por que a ficha está sendo esvaziada — normalmente o pedido do
+            titular, com a data em que ele pediu. Vai para `audit_log` e é a
+            única coisa que responde "por que este contato está vazio?" depois.
+            Obrigatório porque a ação é irreversível: não há dado guardado em
+            lugar nenhum para desfazê-la.
+
+    ResultadoDeAnonimizacao:
+      type: object
+      properties:
+        contact: { $ref: "#/components/schemas/Contato" }
+        preserved:
+          $ref: "#/components/schemas/VinculosDoContato"
+          description: |
+            O que **continua existindo** apontando para este `id`. Está na
+            resposta de propósito: quem anonimiza precisa ver, na hora, que a
+            reserva e o razão não foram tocados — é a diferença entre "eliminei o
+            dado pessoal" e "apaguei a venda".
+
+    ExportacaoDeContato:
+      type: object
+      description: |
+        Pacote de portabilidade (LGPD art. 18, V). Formato de uso comum e
+        interoperável — JSON, não PDF: portabilidade é para carregar em outro
+        sistema, não para ler.
+      properties:
+        exported_at: { type: string, format: date-time }
+        contact:     { $ref: "#/components/schemas/ContatoCompleto" }
+        consent:
+          type: object
+          description: O eixo de consentimento isolado, porque é o que o titular mais pergunta.
+          properties:
+            lgpd_basis:       { oneOf: [{ $ref: "#/components/schemas/BaseLegalLGPD" }, { type: "null" }] }
+            marketing_opt_in: { type: boolean }
+            consent_at:       { type: [string, "null"], format: date-time }
+        reservations:
+          type: array
+          description: "Reservas com noites e valores congelados — o que ele pagou, por qual noite."
+          items: { $ref: "#/components/schemas/ReservaCompleta" }
+        leads:
+          type: array
+          items: { $ref: "#/components/schemas/Lead" }
+        opportunities:
+          type: array
+          items: { $ref: "#/components/schemas/Oportunidade" }
+        activities:
+          type: array
+          items: { $ref: "#/components/schemas/Atividade" }
+
     PedidoDeOrcamento:
       type: object
       description: |
@@ -5187,6 +6032,66 @@ components:
         unit_type_id: { type: string, format: uuid }
         check_in:     { type: string, format: date }
         check_out:    { type: string, format: date, description: "Exclusivo: a noite do check-out não é cobrada." }
+        persist:
+          type: boolean
+          default: false
+          description: |
+            `false` (padrão) calcula e **não grava**: resposta `200`, sem `id`.
+            `true` **emite** o orçamento — grava em `quotes` com as noites
+            congeladas em `quote_nights` — e responde `201` com `id` e `Location`.
+
+            O padrão é não gravar porque o `QuoteBuilder` do painel chama esta
+            rota a cada tecla (350 ms de espera): persistir por padrão encheria a
+            tabela de dezenas de linhas por orçamento realmente emitido, e a
+            conversão do funil passaria a dividir por ruído de digitação.
+
+            Os campos que só fazem sentido no orçamento emitido —
+            `opportunity_id` e `valid_until` — são `422 VALIDATION_ERROR` sem
+            `persist: true`. Aceitar em silêncio um vínculo que não vai ser
+            gravado é a pior resposta possível: o cliente acha que vinculou.
+        contact_id:
+          type: string
+          format: uuid
+          description: |
+            Para quem é o orçamento. **Opcional mesmo emitindo**
+            (`quotes.contact_id` é anulável): a simulação vem antes da pessoa — o
+            corretor responde "quanto fica o Réveillon?" antes de saber quem
+            perguntou, e o agente de IA orça antes de cadastrar ninguém.
+
+            Com `opportunity_id`, tem de ser o **mesmo contato da oportunidade**;
+            senão `422 VALIDATION_ERROR`. Contato anonimizado é recusado com
+            `409 CONTACT_ANONYMIZED`.
+        opportunity_id:
+          type: string
+          format: uuid
+          description: |
+            Vincula o orçamento à oportunidade (`quotes.opportunity_id`) e o torna
+            o **vigente** dela, apontado por `crm_opportunities.quote_id` — é o
+            que `POST /crm/opportunities/{id}/win` consome.
+
+            A relação é **N:1**: a mesma negociação emite proposta,
+            contraproposta e desconto revisto, e todos ficam gravados. Emitir um
+            novo troca o vigente; os anteriores continuam legíveis pelo `id`, e é
+            assim que se compara o que o cliente recusou com o que ele aceitou.
+
+            Exige `persist: true`.
+        valid_until:
+          type: string
+          format: date-time
+          description: |
+            Até quando este preço fica de pé (`quotes.valid_until`, `NOT NULL`).
+            Ausente, vale **7 dias** a partir da emissão, em `America/Fortaleza`.
+            No passado é `422 VALIDATION_ERROR` — proposta que nasce vencida não é
+            proposta (`CHECK quotes_validade`).
+
+            Exige `persist: true`.
+
+            > **Dívida registrada**: esses 7 dias são constante de aplicação, e
+            > "tudo que é regra comercial é dado versionado" (spec, Convenções).
+            > O lugar dele é `commercial_policies.quote_validity_days`, junto de
+            > `hold_hours` e `balance_due_days`. Enquanto a coluna não existir, o
+            > padrão fica no código — e fica escrito aqui para não virar número
+            > mágico esquecido.
         guests_count:
           type: integer
           minimum: 1
@@ -5263,6 +6168,73 @@ components:
           type: array
           description: Noite a noite — é exatamente o que vira `reservation_nights` se o orçamento virar reserva.
           items: { $ref: "#/components/schemas/NoiteDoOrcamento" }
+
+    OrcamentoSalvo:
+      allOf:
+        - $ref: "#/components/schemas/Orcamento"
+        - type: object
+          description: |
+            O orçamento **emitido** — resposta do `POST /quotes` com
+            `persist: true` e do `GET /quotes/{id}`.
+
+            Por baixo é uma linha de `quotes` com as noites em `quote_nights`,
+            tabela própria e não uma reserva em `quote`. A escolha está escrita na
+            migration `20260827130000`: toda reserva ocupa unidade física
+            (`reservation_units`, `stay_blocks`) e orçamento não ocupa nada, o
+            funil emite vários orçamentos por negociação — cada um gastaria um
+            código `WH-2026-…` que nunca foi venda — e os dois objetos têm vidas
+            diferentes: a reserva muda de estado a vida inteira, o orçamento é um
+            instantâneo que, uma vez emitido, não muda mais.
+
+            **Ele não bloqueia data.** `quotes` não tem referência nenhuma a
+            `stay_blocks`, e a constraint `stay_no_overlap` não o enxerga —
+            segurar o calendário é exclusividade do `hold`.
+
+            **Ele não se edita.** Reprecificar é emitir outro. Por isso
+            `/quotes/{id}` só tem `GET`.
+          required: [id, created_at, valid_until, expired]
+          properties:
+            id: { type: string, format: uuid, description: "É o `quote_id` que `POST /crm/opportunities/{id}/win` aceita no corpo." }
+            contact_id:     { type: [string, "null"], format: uuid, description: "Anulável: orçamento pode ser emitido antes de se saber quem perguntou." }
+            opportunity_id: { type: [string, "null"], format: uuid, description: "A negociação a que ele pertence. N:1 — a mesma oportunidade tem vários." }
+            owner_id:
+              type: [string, "null"]
+              format: uuid
+              description: |
+                Dono comercial. É por ele que o escopo `own` filtra
+                (`AND owner_id = $usuario` no SQL). Nulo no que o agente de IA ou
+                uma importação emite — e nesse caso o orçamento simplesmente não
+                aparece para quem tem escopo `own`.
+            cancellation_policy_id:
+              type: [string, "null"]
+              format: uuid
+              description: "A política de cancelamento congelada junto com o preço. Anulável porque ela não entra na conta do total e uma propriedade recém-configurada pode não ter publicado nenhuma."
+            valid_until:
+              type: string
+              format: date-time
+              description: |
+                Até quando o preço está de pé. É o que faz o orçamento vencer
+                sozinho em vez de precisar ser apagado ou reescrito.
+            expired:
+              type: boolean
+              description: |
+                Derivado — `valid_until` contra "agora" em `America/Fortaleza`,
+                calculado no servidor. Não é coluna: um booleano gravado ficaria
+                errado no minuto seguinte, e quem o corrigisse seria um job que
+                não precisa existir.
+
+                Orçamento vencido continua legível: ele é o histórico de preço da
+                casa, e o `/win` que tentar usá-lo recebe `422 QUOTE_NOT_PENDING`.
+            reservation_id:
+              type: [string, "null"]
+              format: uuid
+              description: |
+                A reserva em que este orçamento virou venda — preenchida por
+                `/win` e pela pré-reserva criada a partir dele. É a medida de
+                conversão do funil sem recalcular nada, e é **única**
+                (`quotes_reserva_uniq`): dois orçamentos reivindicando a mesma
+                venda fariam a conversão contar duas vezes.
+            created_at: { type: string, format: date-time, description: "Quando o orçamento foi emitido. É a data que explica por que os valores são estes." }
 
     DisponibilidadeDoProduto:
       type: object
@@ -5375,6 +6347,12 @@ components:
       description: |
         `quote → hold → confirmed → checked_in → checked_out → closed`, com
         `cancelled`, `expired` e `no_show` como saídas.
+
+        `quote` aqui é a **reserva rascunho**, não o orçamento: desde
+        `20260827130000` o orçamento emitido tem tabela própria (`quotes`) e não
+        é uma reserva. Os dois se parecem — nenhum bloqueia data — e são coisas
+        diferentes: o orçamento é um instantâneo de preço que não muda mais, a
+        reserva em `quote` é uma venda que ainda não segurou o calendário.
 
         Bloqueiam o calendário: `hold`, `confirmed` e `checked_in`. Não bloqueiam:
         `quote`, `checked_out`, `closed`, `cancelled`, `expired` e `no_show`.
@@ -6006,9 +6984,10 @@ components:
       type: object
       description: |
         O contato como o CRM precisa dele — o suficiente para ligar, escrever e
-        identificar. O cadastro completo é de `/contacts`, de outra fase; expor
-        aqui só o resumo evita que a tela de oportunidade vire uma segunda porta
-        de leitura de dado pessoal.
+        identificar. O cadastro completo é de `GET /contacts/{id}`; expor aqui só
+        o resumo evita que a tela de oportunidade vire uma segunda porta de
+        leitura de dado pessoal — a ficha completa grava `pii_access_log`, o
+        resumo embutido no card não.
       properties:
         id:         { type: string, format: uuid }
         name:       { type: string }
@@ -6154,8 +7133,13 @@ components:
           format: uuid
           description: |
             O **orçamento vigente**: o último emitido para esta oportunidade, e o
-            que `/win` transforma em reserva. Emitir outro substitui este —
-            os anteriores continuam existindo em `/quotes`, mas só um está de pé.
+            que `/win` transforma em reserva. Emitir outro substitui este — os
+            anteriores continuam existindo (`quotes.opportunity_id` é N:1), mas só
+            um está de pé.
+
+            Aponta para `quotes(id)` desde `20260827130000`. Antes dela a coluna
+            referenciava `reservations(id)`, porque o orçamento ainda era uma
+            reserva em `quote`; é a mesma coluna, com outro destino.
         reservation_id:   { type: [string, "null"], format: uuid }
         reservation_code: { type: [string, "null"], example: WH-2026-0001 }
         amount_cents:
@@ -6437,9 +7421,14 @@ components:
           description: Ordenada do mais recente para o mais antigo.
           items: { $ref: "#/components/schemas/EventoDaOportunidade" }
         quote:
-          description: "O orçamento vigente, aberto noite a noite — é o que a tela mostra e o que `/win` converteria em reserva. `null` quando ainda não há orçamento."
+          description: |
+            O orçamento vigente **emitido**, aberto noite a noite — é o que a tela
+            mostra e o que `/win` converteria em reserva. `null` quando ainda não
+            há orçamento, e é exatamente esse `null` que faz o botão de ganhar
+            responder `422 QUOTE_REQUIRED_TO_WIN`: a tela pode desabilitá-lo antes
+            de o operador descobrir na resposta.
           oneOf:
-            - { $ref: "#/components/schemas/Orcamento" }
+            - { $ref: "#/components/schemas/OrcamentoSalvo" }
             - { type: "null" }
         reservation:
           description: "A reserva vinculada, quando existe (pré-reserva criada antes do fechamento, ou a reserva que `/win` criou)."
@@ -6492,10 +7481,16 @@ components:
           type: string
           format: uuid
           description: |
-            Ausente usa o orçamento vigente da oportunidade (`quote_id`).
-            Informado, tem de ser um orçamento **desta** oportunidade — senão
-            `422 VALIDATION_ERROR`. Sem nenhum dos dois,
-            `422 QUOTE_REQUIRED_TO_WIN`.
+            O `id` devolvido por `POST /quotes` com `persist: true` (uma linha de
+            `quotes`). Ausente, usa o orçamento vigente da oportunidade
+            (`crm_opportunities.quote_id`). Informado, tem de ser um orçamento
+            **desta** oportunidade — senão `422 VALIDATION_ERROR` — e ainda estar
+            de pé, não vencido e não convertido — senão `422 QUOTE_NOT_PENDING`.
+            Sem nenhum dos dois, `422 QUOTE_REQUIRED_TO_WIN`.
+
+            Informar um `quote_id` diferente do vigente **vincula** o escolhido à
+            oportunidade antes de ganhar: o card não pode dizer que ganhou com um
+            orçamento que ele nunca declarou ter.
         note: { type: [string, "null"], maxLength: 500, description: "Gravado no histórico de etapa e na linha do tempo." }
 
     ResultadoDeGanho:
@@ -6507,7 +7502,11 @@ components:
         opportunity: { $ref: "#/components/schemas/Oportunidade" }
         reservation:
           $ref: "#/components/schemas/Reserva"
-          description: "Criada como `hold`, com as unidades já alocadas. O sinal continua entrando por `POST /reservations/{id}/confirm`."
+          description: |
+            A reserva em `hold`, com as unidades já alocadas e os valores
+            **copiados do orçamento**, centavo a centavo — nada foi recalculado.
+            `quotes.reservation_id` passa a apontar para ela. O sinal continua
+            entrando por `POST /reservations/{id}/confirm`.
         reservation_created:
           type: boolean
           description: |

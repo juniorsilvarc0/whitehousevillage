@@ -103,6 +103,29 @@ func (r resposta) decodificar(t *testing.T, destino any) {
 	}
 }
 
+// chamarNaRaiz bate FORA de `/api/v1`. Existe só para as sondas, que moram na
+// raiz de propósito (ver `router.Rota.NaRaiz`): quem as chama é o healthcheck do
+// Compose e o proxy da frente, com caminho fixo de infraestrutura.
+func (a *ambiente) chamarNaRaiz(t *testing.T, metodo, caminho string) resposta {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(a.ctx, metodo, a.servidor.URL+caminho, nil)
+	if err != nil {
+		t.Fatalf("montando a requisição: %v", err)
+	}
+	resp, err := a.servidor.Client().Do(req)
+	if err != nil {
+		t.Fatalf("chamando %s %s: %v", metodo, caminho, err)
+	}
+	defer resp.Body.Close()
+
+	corpoLido, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("lendo o corpo de %s %s: %v", metodo, caminho, err)
+	}
+	return resposta{Status: resp.StatusCode, Corpo: corpoLido}
+}
+
 // chamada monta a requisição. `token` vazio manda sem Authorization.
 func (a *ambiente) chamar(t *testing.T, metodo, caminho, token string, corpo any) resposta {
 	t.Helper()
@@ -1177,7 +1200,7 @@ func TestMatrizRecusaAcaoForaDoCatalogoDoRecurso(t *testing.T) {
 func TestReadyzRespondeComAVersaoDoSchema(t *testing.T) {
 	a := subirAPI(t)
 
-	resp := a.chamar(t, http.MethodGet, "/readyz", "", nil)
+	resp := a.chamarNaRaiz(t, http.MethodGet, "/readyz")
 	if resp.Status != http.StatusOK {
 		t.Fatalf("status = %d, esperado 200 — corpo: %s", resp.Status, resp.Corpo)
 	}

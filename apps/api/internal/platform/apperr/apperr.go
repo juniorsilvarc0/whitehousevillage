@@ -64,6 +64,22 @@ var (
 	DiscountAboveLimit  = define("DISCOUNT_ABOVE_LIMIT", "Desconto acima da alçada.", http.StatusUnprocessableEntity)
 	HoldExpired         = define("HOLD_EXPIRED", "A pré-reserva expirou.", http.StatusConflict)
 	IdempotencyMismatch = define("IDEMPOTENCY_MISMATCH", "Chave de idempotência reutilizada com corpo diferente.", http.StatusConflict)
+
+	// Os dois abaixo existem aqui porque quem os levanta é a PLATAFORMA, e não
+	// um módulo: `db.MapError` traduz as constraint triggers do banco
+	// (`unit_types_consumes_com_venda_viva` e
+	// `reservation_units_composicao_completa`) e precisa de um erro que não
+	// dependa de importar módulo nenhum — o pacote db é importado por todos
+	// eles, e o ciclo seria imediato.
+	//
+	// Os módulos `inventario`, `tarifario`, `crm`, `contatos` e `reservas`
+	// declaram versões próprias destes mesmos códigos, com mensagem própria.
+	// É dívida conhecida e está registrada em docs/roadmap.md (D3): o código é
+	// o que o contrato fixa, a mensagem é livre, e o teste de espelho
+	// (`internal/router/contrato_de_erros_test.go`) garante que nenhuma das
+	// cópias invente um code fora do enum.
+	ResourceInUse         = define("RESOURCE_IN_USE", "Ainda há vínculo ativo neste registro.", http.StatusConflict)
+	CompositionIncomplete = define("COMPOSITION_INCOMPLETE", "A casa inteira não pode ser vendida pela metade.", http.StatusUnprocessableEntity)
 )
 
 // Erros de identidade e acesso.

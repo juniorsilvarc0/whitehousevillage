@@ -164,8 +164,7 @@ func TestGanhoRecusadoPelaDataOcupadaNaoFechaAOportunidade(t *testing.T) {
 		"contact_id": contato, "unit_type_id": completa,
 		"check_in": entrada, "check_out": saida,
 	})
-	orcamento := a.orcamentoDireto(t, completa, contato, entrada, saida, 10)
-	a.executar(t, `UPDATE crm_opportunities SET quote_id = $2 WHERE id = $1`, card.ID, orcamento)
+	orcamento := a.orcamentoEmitido(t, token, completa, contato, &card.ID, entrada, saida, 10)
 
 	antes := a.estadoDoCard(t, card.ID)
 
@@ -186,8 +185,15 @@ func TestGanhoRecusadoPelaDataOcupadaNaoFechaAOportunidade(t *testing.T) {
 	if depois != antes {
 		t.Fatalf("a oportunidade mudou apesar da recusa:\nantes:  %s\ndepois: %s", antes, depois)
 	}
-	if n := a.contar(t, `SELECT count(*) FROM reservations WHERE contact_id = $1 AND status <> 'quote'`, contato); n != 0 {
+	if n := a.contar(t, `SELECT count(*) FROM reservations WHERE contact_id = $1`, contato); n != 0 {
 		t.Fatalf("a recusa deixou %d reserva(s) para trás", n)
+	}
+	// O orçamento continua DE PÉ: a recusa foi da data, não do preço. Marcá-lo
+	// como convertido aqui obrigaria o operador a emitir outro só porque tentou
+	// ganhar num dia em que a casa estava cheia.
+	if convertido := a.contar(t,
+		`SELECT count(*) FROM quotes WHERE id = $1 AND reservation_id IS NOT NULL`, orcamento.ID); convertido != 0 {
+		t.Fatal("a recusa marcou o orçamento como convertido")
 	}
 	// A chave de idempotência da tentativa que falhou não pode ficar gravada:
 	// repetir depois de um 409 de data ocupada é uma tentativa nova e legítima.
@@ -213,11 +219,13 @@ func TestGanharCriaAReservaEmHoldEFechaAOportunidade(t *testing.T) {
 	// Uma tarefa automática pendente, para provar que o ganho a encerra.
 	a.moverEtapa(t, token, card.ID, etapas["Orçamento enviado"], nil)
 
-	orcamento := a.orcamentoDireto(t, produto, contato, entrada, saida, 4)
+	orcamento := a.orcamentoEmitido(t, token, produto, contato, &card.ID, entrada, saida, 4)
 
+	// Sem `quote_id` no corpo: o `/win` acha o VIGENTE pelo `opportunity_id` do
+	// orçamento — que é o caminho que o painel usa.
 	chave := "win-ok-" + sufixo()
 	resp := a.chamarIdem(t, http.MethodPost, "/crm/opportunities/"+card.ID.String()+"/win", token,
-		map[string]any{"quote_id": orcamento}, chave)
+		nil, chave)
 	if resp.Status != http.StatusCreated {
 		t.Fatalf("POST /win = %d (%s)", resp.Status, resp.Corpo)
 	}
@@ -248,10 +256,55 @@ func TestGanharCriaAReservaEmHoldEFechaAOportunidade(t *testing.T) {
 		t.Fatalf("o ganho deixou %d tarefa(s) automática(s) pendente(s): cobrar follow-up de negócio fechado é ruído", n)
 	}
 
+	// ── A conversão do funil, medida sem recálculo ──────────────────
+	if reserva := a.texto(t, `SELECT coalesce(reservation_id::text, '-') FROM quotes WHERE id = $1`,
+		orcamento.ID); reserva != ganho.Reserva.ID.String() {
+		t.Fatalf("quotes.reservation_id = %s, esperado %s", reserva, ganho.Reserva.ID)
+	}
+	if ganho.Oportunidade.ReservaID == nil || *ganho.Oportunidade.ReservaID != ganho.Reserva.ID {
+		t.Fatalf("a oportunidade não ficou vinculada à reserva: %v", ganho.Oportunidade.ReservaID)
+	}
+
+	// ── GANHAR TRANSCREVE, NÃO REFAZ ────────────────────────────────
+	//
+	// Os valores da reserva são os do ORÇAMENTO, centavo a centavo, e a tabela e
+	// a versão de política congeladas são as dele. Se o motor rodasse de novo,
+	// bastaria um `PUT /rates` no meio da negociação para o hóspede receber uma
+	// conta que ele nunca ouviu.
+	var (
+		total, sinal, subtotal int64
+		tabela                 uuid.UUID
+	)
+	if err := a.pool.QueryRow(a.ctx, `
+		SELECT subtotal_cents, total_cents, deposit_cents, rate_table_id
+		  FROM reservation_pricing WHERE reservation_id = $1`, ganho.Reserva.ID).
+		Scan(&subtotal, &total, &sinal, &tabela); err != nil {
+		t.Fatalf("lendo reservation_pricing: %v", err)
+	}
+	if subtotal != orcamento.Subtotal || total != orcamento.Total || sinal != orcamento.Sinal {
+		t.Fatalf("a reserva não copiou o orçamento: subtotal %d≠%d, total %d≠%d, sinal %d≠%d",
+			subtotal, orcamento.Subtotal, total, orcamento.Total, sinal, orcamento.Sinal)
+	}
+
+	// E noite a noite: `quote_nights` virou `reservation_nights` sem passar pelo
+	// motor. `EXCEPT` nos dois sentidos — uma diferença de qualquer lado aparece.
+	if divergentes := a.contar(t, `
+		SELECT count(*) FROM (
+		    (SELECT night, date_type, unit_type_id, price_cents FROM quote_nights WHERE quote_id = $1
+		     EXCEPT
+		     SELECT night, date_type, unit_type_id, price_cents FROM reservation_nights WHERE reservation_id = $2)
+		    UNION ALL
+		    (SELECT night, date_type, unit_type_id, price_cents FROM reservation_nights WHERE reservation_id = $2
+		     EXCEPT
+		     SELECT night, date_type, unit_type_id, price_cents FROM quote_nights WHERE quote_id = $1)
+		) AS d`, orcamento.ID, ganho.Reserva.ID); divergentes != 0 {
+		t.Fatalf("%d noite(s) da reserva não batem com as do orçamento", divergentes)
+	}
+
 	// A repetição da chave devolve a resposta ORIGINAL — 201, Location e corpo —
 	// e não cria uma segunda reserva das mesmas datas.
 	repetida := a.chamarIdem(t, http.MethodPost, "/crm/opportunities/"+card.ID.String()+"/win", token,
-		map[string]any{"quote_id": orcamento}, chave)
+		nil, chave)
 	if repetida.Status != http.StatusCreated {
 		t.Fatalf("a repetição da chave respondeu %d, esperado o 201 original (%s)", repetida.Status, repetida.Corpo)
 	}
@@ -273,11 +326,11 @@ func TestGanharComPreReservaVinculadaResponde200SemCriarOutra(t *testing.T) {
 		"contact_id": contato, "unit_type_id": produto,
 		"check_in": entrada, "check_out": saida,
 	})
-	orcamento := a.orcamentoDireto(t, produto, contato, entrada, saida, 2)
+	orcamento := a.orcamentoEmitido(t, token, produto, contato, &card.ID, entrada, saida, 2)
 
 	// Primeiro ganho: cria a reserva.
 	primeiro := a.chamarIdem(t, http.MethodPost, "/crm/opportunities/"+card.ID.String()+"/win", token,
-		map[string]any{"quote_id": orcamento}, "win-a-"+sufixo())
+		map[string]any{"quote_id": orcamento.ID}, "win-a-"+sufixo())
 	if primeiro.Status != http.StatusCreated {
 		t.Fatalf("primeiro /win = %d (%s)", primeiro.Status, primeiro.Corpo)
 	}
@@ -341,6 +394,189 @@ func TestGanharSemChaveDeIdempotenciaEhRecusado(t *testing.T) {
 	if resp.Status != http.StatusUnprocessableEntity {
 		t.Fatalf("esperava 422 sem Idempotency-Key, veio %d (%s)", resp.Status, resp.Corpo)
 	}
+}
+
+// Orçamento VENCIDO não vira venda. Preço vencido não se renova sozinho: reusar
+// o vencido é vender pelo número que a casa já retirou de circulação.
+func TestGanharComOrcamentoVencidoEhRecusadoSemFecharOCard(t *testing.T) {
+	a := subir(t)
+	_, token := a.gestor(t)
+	contato := a.contato(t)
+	produto := a.produto(t, "apto-2s")
+
+	entrada, saida := a.dia(230), a.dia(234)
+	card := a.criarOportunidade(t, token, map[string]any{
+		"contact_id": contato, "unit_type_id": produto,
+		"check_in": entrada, "check_out": saida,
+	})
+	orcamento := a.orcamentoEmitido(t, token, produto, contato, &card.ID, entrada, saida, 2)
+
+	// Envelhece a proposta. `created_at` anda junto porque o CHECK
+	// `quotes_validade` exige `valid_until > created_at` — um orçamento não pode
+	// nascer vencido nem no fixture.
+	a.executar(t, `UPDATE quotes
+	                  SET created_at = now() - interval '10 days',
+	                      valid_until = now() - interval '1 day'
+	                WHERE id = $1`, orcamento.ID)
+
+	antes := a.estadoDoCard(t, card.ID)
+	resp := a.chamarIdem(t, http.MethodPost, "/crm/opportunities/"+card.ID.String()+"/win", token,
+		nil, "win-vencido-"+sufixo())
+	if resp.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("esperava 422, veio %d (%s)", resp.Status, resp.Corpo)
+	}
+	if codigo := resp.codigoDoErro(); codigo != "QUOTE_NOT_PENDING" {
+		t.Fatalf("código = %q, esperado QUOTE_NOT_PENDING (%s)", codigo, resp.Corpo)
+	}
+	if depois := a.estadoDoCard(t, card.ID); depois != antes {
+		t.Fatalf("a oportunidade mudou apesar da recusa:\nantes:  %s\ndepois: %s", antes, depois)
+	}
+	if n := a.contar(t, `SELECT count(*) FROM reservations WHERE contact_id = $1`, contato); n != 0 {
+		t.Fatalf("a recusa criou %d reserva(s)", n)
+	}
+}
+
+// Orçamento JÁ CONVERTIDO não vira uma segunda venda. `quotes_reserva_uniq` diz
+// o mesmo do lado do banco; aqui a recusa chega com o nome da coisa.
+func TestGanharComOrcamentoJaConvertidoEhRecusado(t *testing.T) {
+	a := subir(t)
+	_, token := a.gestor(t)
+	contato := a.contato(t)
+	produto := a.produto(t, "suite-piscina")
+
+	entrada, saida := a.dia(240), a.dia(244)
+	card := a.criarOportunidade(t, token, map[string]any{
+		"contact_id": contato, "unit_type_id": produto,
+		"check_in": entrada, "check_out": saida,
+	})
+	orcamento := a.orcamentoEmitido(t, token, produto, contato, &card.ID, entrada, saida, 2)
+
+	primeiro := a.chamarIdem(t, http.MethodPost, "/crm/opportunities/"+card.ID.String()+"/win", token,
+		nil, "win-1-"+sufixo())
+	if primeiro.Status != http.StatusCreated {
+		t.Fatalf("primeiro /win = %d (%s)", primeiro.Status, primeiro.Corpo)
+	}
+	if convertido := a.contar(t,
+		`SELECT count(*) FROM quotes WHERE id = $1 AND reservation_id IS NOT NULL`, orcamento.ID); convertido != 1 {
+		t.Fatal("o ganho não gravou quotes.reservation_id")
+	}
+
+	// Reabre o card e SOLTA a reserva, para forçar o `/win` a procurar orçamento
+	// de novo. É o estado a que se chega cancelando a reserva e reabrindo a
+	// negociação — e o orçamento de então já foi gasto.
+	a.executar(t, `UPDATE crm_opportunities
+	                  SET status = 'aberto', closed_at = NULL, reservation_id = NULL
+	                WHERE id = $1`, card.ID)
+
+	segundo := a.chamarIdem(t, http.MethodPost, "/crm/opportunities/"+card.ID.String()+"/win", token,
+		nil, "win-2-"+sufixo())
+	if segundo.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("esperava 422, veio %d (%s)", segundo.Status, segundo.Corpo)
+	}
+	if codigo := segundo.codigoDoErro(); codigo != "QUOTE_NOT_PENDING" {
+		t.Fatalf("código = %q, esperado QUOTE_NOT_PENDING (%s)", codigo, segundo.Corpo)
+	}
+	if n := a.contar(t, `SELECT count(*) FROM reservations WHERE contact_id = $1`, contato); n != 1 {
+		t.Fatalf("%d reserva(s) para o contato, esperado 1: o segundo ganho vendeu de novo", n)
+	}
+}
+
+// O orçamento de OUTRA pessoa não fecha este card — é como o `/win` acabaria
+// criando reserva no nome errado.
+func TestGanharComOrcamentoDeOutroContatoEhRecusado(t *testing.T) {
+	a := subir(t)
+	_, token := a.gestor(t)
+	nosso := a.contato(t)
+	alheio := a.contato(t)
+	produto := a.produto(t, "apto-2s")
+
+	entrada, saida := a.dia(250), a.dia(254)
+	card := a.criarOportunidade(t, token, map[string]any{
+		"contact_id": nosso, "unit_type_id": produto,
+		"check_in": entrada, "check_out": saida,
+	})
+	// Emitido SEM oportunidade: é um orçamento solto, do outro contato.
+	deOutro := a.orcamentoEmitido(t, token, produto, alheio, nil, entrada, saida, 2)
+
+	resp := a.chamarIdem(t, http.MethodPost, "/crm/opportunities/"+card.ID.String()+"/win", token,
+		map[string]any{"quote_id": deOutro.ID}, "win-alheio-"+sufixo())
+	if resp.Status != http.StatusUnprocessableEntity {
+		t.Fatalf("esperava 422, veio %d (%s)", resp.Status, resp.Corpo)
+	}
+	if codigo := resp.codigoDoErro(); codigo != "VALIDATION_ERROR" {
+		t.Fatalf("código = %q, esperado VALIDATION_ERROR (%s)", codigo, resp.Corpo)
+	}
+	if status := a.texto(t, `SELECT status FROM crm_opportunities WHERE id = $1`, card.ID); status != "aberto" {
+		t.Fatalf("a oportunidade saiu de aberto: %q", status)
+	}
+	// E o orçamento do outro contato NÃO foi sequestrado pelo card.
+	if vinculado := a.contar(t,
+		`SELECT count(*) FROM quotes WHERE id = $1 AND opportunity_id IS NOT NULL`, deOutro.ID); vinculado != 0 {
+		t.Fatal("o orçamento alheio foi vinculado ao card mesmo com a recusa")
+	}
+}
+
+// O `/full` mostra o orçamento vigente aberto noite a noite — é dele que a tela
+// decide se o botão de ganhar acende.
+func TestFullTrazOOrcamentoVigenteEmitido(t *testing.T) {
+	a := subir(t)
+	_, token := a.gestor(t)
+	contato := a.contato(t)
+	produto := a.produto(t, "apto-2s")
+
+	entrada, saida := a.dia(260), a.dia(264)
+	card := a.criarOportunidade(t, token, map[string]any{
+		"contact_id": contato, "unit_type_id": produto,
+		"check_in": entrada, "check_out": saida,
+	})
+
+	// Antes de emitir, `quote` é nulo — e é esse nulo que faz o botão de ganhar
+	// responder 422 QUOTE_REQUIRED_TO_WIN.
+	vazio := a.chamar(t, http.MethodGet, "/crm/opportunities/"+card.ID.String()+"/full", token, nil)
+	if vazio.Status != http.StatusOK {
+		t.Fatalf("GET /full = %d (%s)", vazio.Status, vazio.Corpo)
+	}
+	if antes := dado[completaVista](t, vazio); antes.Orcamento != nil {
+		t.Fatalf("card sem orçamento veio com quote preenchido: %+v", antes.Orcamento)
+	}
+
+	primeiro := a.orcamentoEmitido(t, token, produto, contato, &card.ID, entrada, saida, 2)
+	// Emitir OUTRO substitui o vigente; o anterior continua existindo
+	// (`quotes.opportunity_id` é N:1) e é assim que se compara o que o cliente
+	// recusou com o que ele aceitou.
+	segundo := a.orcamentoEmitido(t, token, produto, contato, &card.ID, entrada, saida, 3)
+
+	resp := a.chamar(t, http.MethodGet, "/crm/opportunities/"+card.ID.String()+"/full", token, nil)
+	if resp.Status != http.StatusOK {
+		t.Fatalf("GET /full = %d (%s)", resp.Status, resp.Corpo)
+	}
+	completa := dado[completaVista](t, resp)
+	if completa.Orcamento == nil {
+		t.Fatalf("o card com orçamento veio com quote nulo: %s", resp.Corpo)
+	}
+	if completa.Orcamento.ID != segundo.ID {
+		t.Fatalf("o vigente é %s, esperado o ÚLTIMO emitido %s (o anterior era %s)",
+			completa.Orcamento.ID, segundo.ID, primeiro.ID)
+	}
+	if completa.Oportunidade.OrcamentoID == nil || *completa.Oportunidade.OrcamentoID != segundo.ID {
+		t.Fatalf("opportunity.quote_id = %v, esperado %s", completa.Oportunidade.OrcamentoID, segundo.ID)
+	}
+	if len(completa.Orcamento.Diarias) != 4 {
+		t.Fatalf("o orçamento veio com %d noites, esperado 4 abertas", len(completa.Orcamento.Diarias))
+	}
+	// `amount_cents` do card nasce do orçamento vigente, não da digitação.
+	if completa.Oportunidade.Valor != segundo.Total {
+		t.Fatalf("amount_cents = %d, esperado o total do orçamento vigente %d",
+			completa.Oportunidade.Valor, segundo.Total)
+	}
+	if n := a.contar(t, `SELECT count(*) FROM quotes WHERE opportunity_id = $1`, card.ID); n != 2 {
+		t.Fatalf("%d orçamento(s) no card, esperado 2: emitir outro não apaga o anterior", n)
+	}
+}
+
+type completaVista struct {
+	Oportunidade oportunidadeVista `json:"opportunity"`
+	Orcamento    *orcamentoSalvo   `json:"quote"`
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -1387,10 +1623,20 @@ func (a *ambiente) criarEtapa(t *testing.T, token string, funil uuid.UUID, nome 
 func (a *ambiente) estadoDoCard(t *testing.T, card uuid.UUID) string {
 	t.Helper()
 
+	// `quote` sai da tabela `quotes`, e não de uma coluna da oportunidade:
+	// `crm_opportunities.quote_id` foi removida em 20260827150000 por estar
+	// morta — ninguém a escrevia, e ela ainda apontava para `reservations`, de
+	// quando orçamento era reserva no estado `quote`. O orçamento vigente é o
+	// ÚLTIMO emitido para o card, que é a mesma subconsulta de
+	// `colunasDaOportunidade` no repositório. O fato comparado é o mesmo; o que
+	// mudou é de onde ele vem.
 	return a.texto(t, `
 		SELECT format('status=%s stage=%s reserva=%s quote=%s fechada=%s historico=%s',
 		              o.status, o.stage_id, coalesce(o.reservation_id::text, '-'),
-		              coalesce(o.quote_id::text, '-'), coalesce(o.closed_at::text, '-'),
+		              coalesce((SELECT q.id::text FROM quotes q
+		                         WHERE q.opportunity_id = o.id
+		                         ORDER BY q.created_at DESC, q.id DESC LIMIT 1), '-'),
+		              coalesce(o.closed_at::text, '-'),
 		              (SELECT count(*) FROM crm_stage_history h WHERE h.opportunity_id = o.id))
 		  FROM crm_opportunities o WHERE o.id = $1`, card)
 }

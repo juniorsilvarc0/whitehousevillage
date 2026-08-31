@@ -1017,6 +1017,11 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 		"/unit-types":   a.produtoDoSeed(t, propriedade, "apto-2s"),
 		"/units":        a.unidadeNova(t, u.Token, "varredura"),
 		"/reservations": reserva.ID,
+		// O contato do seed serve de alvo para `/contacts/{id}`: a varredura só
+		// manda campo desconhecido, então as três rotas com corpo do módulo
+		// (PUT, PATCH e /anonymize) param no 422 do decoder sem escrever nada —
+		// inclusive a anonimização, que é irreversível.
+		"/contacts": contato,
 	}
 	// O CRM entrou com 45 rotas; sem alvo aqui elas nasceriam fora da varredura,
 	// que é exatamente o que esta mensagem de erro existe para impedir.

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import type { Acao, Escopo, Permissao } from "@/lib/api/types";
-import { navigation } from "@/config/navigation";
+import { CATALOGO, navigation } from "@/config/navigation";
 import { can, escopoDe, navegacaoVisivel, porRecurso } from "@/lib/auth/permissions";
 import { RECURSOS_DO_CATALOGO } from "@/lib/auth/recursos";
 
@@ -141,18 +141,46 @@ describe("navegacaoVisivel", () => {
   const hrefs = (user: { role: string }, permissoes: Permissao[]) =>
     navegacaoVisivel(user, permissoes).map((item) => item.href);
 
-  it("o admin vê Mapa, Financeiro e Comissões", () => {
-    // O caso que reprovou a Fase 0: com código fantasma no mapa, estes três
-    // sumiam justamente para quem tem o catálogo inteiro.
+  it("o admin com o catálogo inteiro não perde NENHUM destino", () => {
+    // O caso que reprovou a Fase 0: `navigation.ts` citava `availability`,
+    // `finance` e `commissions` — três códigos que não existem em `resources`.
+    // Recurso inexistente não protege ninguém: como ninguém tem (nem pode ter)
+    // permissão nele, `can()` responde `false` para o admin também, e a tela
+    // some sem 403 nenhum para denunciar.
+    //
+    // A asserção deixou de nomear Mapa, Financeiro e Comissões e passou a ser
+    // universal — é a mesma garantia, mais forte, e não envelhece quando o
+    // catálogo cresce. Nomear três telas era o que fazia este caso reprovar em
+    // 27/08/2026 por um motivo diferente do que ele mede: Financeiro e Comissões
+    // saíram do menu porque as TELAS não existem (Fase 2), não porque o recurso
+    // sumiu. Distinguir os dois motivos é justamente o trabalho desta suíte.
     const doAdmin = hrefs({ role: "admin" }, PERMISSOES_DO_ADMIN);
 
+    expect(doAdmin).toEqual(navigation.map((item) => item.href));
     expect(doAdmin).toContain("/app/mapa");
-    expect(doAdmin).toContain("/app/financeiro");
-    expect(doAdmin).toContain("/app/comissoes");
   });
 
-  it("o admin com o catálogo inteiro vê o menu inteiro", () => {
-    expect(hrefs({ role: "admin" }, PERMISSOES_DO_ADMIN)).toHaveLength(13);
+  it("recurso concedido não basta: a tela precisa existir — e são checagens diferentes", () => {
+    // A composição instalada em 27/08/2026 (Dívida A): o menu é
+    // `telas entregues ∩ matriz`. As duas metades falham por motivos diferentes
+    // e a diferença importa, porque o conserto de cada uma é outro:
+    //
+    // - recurso ausente da matriz → a gestão marca em Configurações → Perfis;
+    // - tela ausente da pasta → alguém tem de escrevê-la, e permissão nenhuma
+    //   resolve.
+    //
+    // Sem este caso, "consertar" o menu voltando a listar `/app/chat` passaria
+    // despercebido — e o item voltaria a prefetchar um 404.
+    const comChat = hrefs({ role: "admin" }, permissoesDe(["dashboard", "chat"]));
+    expect(comChat, "chat está na matriz, mas a tela não existe").not.toContain("/app/chat");
+    expect(comChat).toEqual(["/app"]);
+
+    // E o contrapeso: a ausência é da TELA, não do recurso. `chat` continua no
+    // catálogo do banco, o item continua no `CATALOGO` do painel, e ele volta
+    // sozinho ao menu quando `app/(app)/app/chat/page.tsx` existir — é o que
+    // `navigation.test.ts` cobra contra o disco.
+    expect(CATALOGO.map((item) => item.href)).toContain("/app/chat");
+    expect(RECURSOS_DO_CATALOGO as readonly string[]).toContain("chat");
   });
 
   it("o corretor não vê Financeiro nem Configurações", () => {
@@ -162,22 +190,25 @@ describe("navegacaoVisivel", () => {
     expect(doCorretor).not.toContain("/app/configuracoes");
   });
 
-  it("o corretor vê o que é dele: painel, mapa, reservas, funil, chat, agenda e comissões", () => {
-    // `/app/agenda` entrou nesta lista porque sempre esteve na matriz: o seed dá
-    // `agenda` ao corretor em escopo `own` — é a agenda de visitas dele. Quem
-    // escondia era `allowedRoles: GESTAO`, no código, contra a matriz. É também
-    // a lista que docs/ui.md §7 descreve para a matriz do seed.
+  it("o corretor vê o que é dele — todas as telas que existem e a matriz concede", () => {
+    // Esta lista é a interseção de duas coisas, e as duas mudam com o tempo: a
+    // matriz do seed (docs/ui.md §7) e as telas entregues. `/app/chat`,
+    // `/app/agenda` e `/app/comissoes` estão na matriz do corretor e **não**
+    // estão aqui — as telas são de Fase 1g e Fase 2. Voltam ao menu dele sozinhas
+    // no dia em que existirem, sem tocar nesta suíte nem na matriz.
     expect(hrefs({ role: "corretor" }, PERMISSOES_DO_CORRETOR)).toEqual([
       "/app",
       "/app/mapa",
       "/app/reservas",
+      // Contatos e Orçamento nasceram na rodada de 27/08/2026: o seed já dava
+      // `contacts` (escopo `all` — a agenda é da casa) e `quotes` (`own`) ao
+      // corretor; o que faltava era a tela.
+      "/app/contatos",
+      "/app/orcamento",
       "/app/funil",
       // Leads entrou junto com o CRM: o seed dá `crm.leads` ao corretor em
       // escopo `own` — são os leads dele, e o menu é função só da matriz.
       "/app/leads",
-      "/app/chat",
-      "/app/agenda",
-      "/app/comissoes",
     ]);
   });
 
@@ -195,13 +226,13 @@ describe("navegacaoVisivel", () => {
     // nasce em /roles sem deploy. Não há mais lista de papéis para ele não estar
     // — o menu dele é exatamente o que a gestão marcou, nem mais nem menos.
     // Sem `dashboard` na matriz não há nem Painel: RBAC é dado (regra 8).
+    // `finance.receivables` e `reports` estão na matriz deste perfil e não
+    // aparecem: as telas são de Fase 2 e Fase 3. Não é decisão de permissão —
+    // é ausência de tela, e o caso acima ("recurso concedido não basta")
+    // separa os dois motivos.
     const permissoes = permissoesDe(["reservations", "finance.receivables", "reports"]);
 
-    expect(hrefs({ role: "gerente-de-eventos" }, permissoes)).toEqual([
-      "/app/reservas",
-      "/app/financeiro",
-      "/app/relatorios",
-    ]);
+    expect(hrefs({ role: "gerente-de-eventos" }, permissoes)).toEqual(["/app/reservas"]);
   });
 
   it("perfil desconhecido não ganha tela por omissão", () => {
@@ -210,7 +241,7 @@ describe("navegacaoVisivel", () => {
     const doNovo = hrefs({ role: "gerente-de-eventos" }, permissoesDe(["reservations"]));
 
     expect(doNovo).not.toContain("/app/configuracoes");
-    expect(doNovo).not.toContain("/app/comissoes");
+    expect(doNovo).not.toContain("/app/contatos");
   });
 });
 
@@ -248,10 +279,10 @@ describe("leitura da matriz", () => {
  * da ordem em que as permissões chegaram.
  *
  * Os casos acima são exemplos escolhidos a dedo — o corretor do seed, um perfil
- * novo, a matriz vazia. Estes aqui varrem **todas as 2^12 matrizes possíveis**
- * sobre os recursos que o menu consulta (4096 combinações), contra códigos de
- * perfil arbitrários. É barato porque o menu tem doze itens, e é o que fecha a
- * porta: nenhum `if role ==` sobrevive a uma varredura exaustiva.
+ * novo, a matriz vazia. Estes aqui varrem **todas as matrizes possíveis** sobre
+ * os recursos que o menu consulta (2^n combinações, uma por subconjunto),
+ * contra códigos de perfil arbitrários. É barato porque o menu é curto, e é o
+ * que fecha a porta: nenhum `if role ==` sobrevive a uma varredura exaustiva.
  */
 describe("propriedade: o menu é função só da matriz", () => {
   const RECURSOS_DO_MENU = navigation.map((item) => item.recurso);

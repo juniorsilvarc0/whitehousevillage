@@ -113,6 +113,11 @@ func NewRepository(pool db.DBTX) *Repository { return &Repository{pool: pool} }
 
 func (r *Repository) exec(ctx context.Context) db.DBTX { return db.From(ctx, r.pool) }
 
+// Pool devolve o executor de fora da transação. É o que a trilha de auditoria
+// exige: `audit_log` é gravado FORA da transação do trabalho, para o registro de
+// "alguém tentou" sobreviver ao rollback do que foi tentado.
+func (r *Repository) Pool() db.DBTX { return r.pool }
+
 // Contexto resolve, numa consulta só, o "hoje" da casa, a tabela de tarifas
 // vigente e a política comercial vigente.
 //

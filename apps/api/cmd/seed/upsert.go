@@ -92,3 +92,19 @@ func data(s string) time.Time {
 // centavos que o banco guarda. Existe para a conversão acontecer num lugar só:
 // gravar 850 num campo `_cents` seria uma diária de R$ 8,50.
 func reais(v int64) int64 { return v * 100 }
+
+// instante converte um literal RFC 3339 COM FUSO escrito neste pacote.
+//
+// Existe ao lado de `data` porque as duas coisas não são a mesma: estadia é
+// `date` e não tem fuso, mas consentimento, aceite e assinatura são INSTANTES —
+// e um instante escrito sem fuso vira meia-noite UTC, que em America/Fortaleza
+// é o dia anterior às 21h.
+//
+// Pânico pelo mesmo motivo de `data`: a string é constante do próprio pacote.
+func instante(s string) time.Time {
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		panic(fmt.Sprintf("seed: instante inválido %q: %v", s, err))
+	}
+	return t
+}

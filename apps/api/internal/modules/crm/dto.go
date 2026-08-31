@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
@@ -359,8 +360,12 @@ type OportunidadeCompleta struct {
 	Documentos   []DocumentoDaOportunidade `json:"documents"`
 	Alertas      []AlertaDaOportunidade    `json:"alerts"`
 	Timeline     []EventoDaOportunidade    `json:"timeline"`
-	Orcamento    *reservas.Reserva         `json:"quote"`
-	Reserva      *reservas.Reserva         `json:"reservation"`
+	// Orcamento é o orçamento vigente EMITIDO (`quotes`), aberto noite a noite —
+	// não mais uma reserva em `quote`. É `null` quando ainda não há orçamento, e
+	// é esse `null` que faz o botão de ganhar responder `422 QUOTE_REQUIRED_TO_WIN`:
+	// a tela pode desabilitá-lo antes de o operador descobrir na resposta.
+	Orcamento *disponibilidade.OrcamentoSalvo `json:"quote"`
+	Reserva   *reservas.Reserva               `json:"reservation"`
 }
 
 // ═══════════════════════════ Resultados das ações ═══════════════════

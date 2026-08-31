@@ -3,13 +3,17 @@ package disponibilidade
 import (
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
 )
 
-// Handler expõe os três endpoints do módulo.
+// Handler expõe os quatro endpoints do módulo: as duas leituras de calendário,
+// o orçamento (simulado ou emitido) e a releitura do orçamento emitido.
 type Handler struct {
 	svc *Servico
 }
@@ -17,9 +21,9 @@ type Handler struct {
 // NovoHandler monta o módulo. Assinatura combinada entre os módulos da Fase 1
 // para o main poder montar todos do mesmo jeito.
 //
-// `tx` chega e não é usado: as três rotas são de leitura, e POST /quotes calcula
-// sem gravar (o contrato diz, textualmente, "não grava nada"). Ele fica no
-// Servico para o dia em que o orçamento passar a persistir.
+// `tx` é usado desde 27/08/2026: `POST /quotes` com `persist: true` grava o
+// cabeçalho e as noites do orçamento, e as duas escritas só fazem sentido
+// comitadas juntas.
 func NovoHandler(pool *pgxpool.Pool, tx *db.TxManager) *Handler {
 	return &Handler{svc: NovoServico(NewRepository(pool), tx)}
 }
@@ -86,13 +90,48 @@ func (h *Handler) Orcar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Simular e emitir são a mesma conta com destinos diferentes, e é `persist`
+	// que separa os dois — não a presença de `contact_id`, não uma heurística.
+	if entrada.Persistir {
+		salvo, err := h.svc.Emitir(r.Context(), entrada)
+		if err != nil {
+			httpx.Error(w, r, err)
+			return
+		}
+		// 201 + Location: agora existe um recurso para buscar depois, e o
+		// cliente que confia no header sabe onde.
+		w.Header().Set("Location", "/api/v1/quotes/"+salvo.ID.String())
+		httpx.JSON(w, http.StatusCreated, salvo)
+		return
+	}
+
 	orcamento, err := h.svc.Orcar(r.Context(), entrada)
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
 	}
-	// 200 e não 201: nada foi criado. O orçamento não segura data nem grava
+	// 200 e não 201: nada foi criado. A simulação não segura data nem grava
 	// linha — devolver 201 faria o painel achar que existe um recurso para
 	// buscar depois.
 	httpx.JSON(w, http.StatusOK, orcamento)
+}
+
+// Orcamento — GET /quotes/{id}
+//
+// Devolve o que foi GRAVADO, não o que o motor calcularia hoje. É o ponto
+// inteiro de persistir: a única pergunta que se faz a um orçamento antigo —
+// "quanto foi que eu prometi?" — seria a única que ele não saberia responder se
+// a leitura recalculasse.
+func (h *Handler) Orcamento(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.Error(w, r, apperr.NotFound("Orçamento"))
+		return
+	}
+	salvo, err := h.svc.BuscarOrcamento(r.Context(), id)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, salvo)
 }

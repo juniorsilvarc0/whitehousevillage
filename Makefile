@@ -17,7 +17,15 @@ TESTES_CONCORRENCIA     ?= Overbooking|Concorren|Simultane|Corrida|Disputa
 # verde com o defeito presente), (2/3)^10 ~ 2% de chance de a falha atravessar.
 REPETICOES_CONCORRENCIA ?= 10
 
-.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed check lint fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
+# Endereços que a fumaça usa. SMOKE_URL continua sendo o argumento opcional do
+# `make smoke` (vazio = o padrão do próprio script); SMOKE_URL_OU_PADRAO é o que
+# o `smoke-stack` sonda, porque ele precisa de um endereço concreto.
+SMOKE_URL_OU_PADRAO ?= $(if $(SMOKE_URL),$(SMOKE_URL),http://localhost:$(ADMIN_PORT))
+SMOKE_API           ?= http://localhost:$(API_PORT)
+ADMIN_PORT          ?= 3100
+API_PORT            ?= 8080
+
+.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed smoke smoke-stack esperar check lint fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
 
 help: ## Lista os alvos
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -37,23 +45,68 @@ logs-api: ## Segue os logs só da API
 ps: ## Estado dos serviços
 	$(COMPOSE) ps
 
+# `--build` nos quatro alvos abaixo, e não só no `up`.
+#
+# Medido em 27/08/2026: `make up` reconstrói apenas `api` e `admin`, então
+# `migrate` e `seed` rodavam a imagem ANTIGA. O sintoma foi silencioso e
+# enganador — `make seed` respondeu "previstas 295 ... nada mudou" e deu o banco
+# por atualizado, enquanto o seed do commit já semeava 298 linhas; os três
+# contatos novos só apareceram depois de reconstruir a imagem à mão. O mesmo
+# vale, e é bem pior, para o `migrate`: aplicar schema com o binário de ontem é
+# como uma migration entregue "some" de um ambiente sem nenhuma linha vermelha.
+# O custo com cache quente é de segundos.
 migrate: ## Aplica as migrations (passo explícito — nunca no boot da API)
-	$(COMPOSE) run --rm migrate up
+	$(COMPOSE) run --rm --build migrate up
 
 migrate-down: ## Desfaz a última migration
-	$(COMPOSE) run --rm migrate down 1
+	$(COMPOSE) run --rm --build migrate down 1
 
 migrate-version: ## Versão aplicada do schema e estado dirty
-	$(COMPOSE) run --rm migrate version
+	$(COMPOSE) run --rm --build migrate version
 
 seed: ## Popula produtos, unidades, tarifas, perfis e usuários de teste
-	$(COMPOSE) run --rm seed
+	$(COMPOSE) run --rm --build seed
 
 smoke: ## Fumaça de aplicação: sobe o navegador, faz login e percorre as telas
 	# Existe porque a suíte inteira ficou verde enquanto o stack NÃO SUBIA:
 	# a imagem do painel morria no boot, o BFF respondia 502 e /crm/pipelines
 	# devolvia 500. Teste roda contra código; isto roda contra a aplicação servida.
+	#
+	# Roda contra o que JÁ ESTÁ no ar. Se o stack não estiver na versão da
+	# árvore, o alvo abaixo (`smoke-stack`) é o que sobe tudo antes.
 	cd apps/admin && node e2e/fumaca.mjs $(SMOKE_URL)
+
+smoke-stack: ## Sobe/atualiza o stack inteiro, migra, semeia e roda a fumaça
+	# A ordem importa e é a mesma de um deploy: imagem nova → schema → seed →
+	# fumaça. Sem o `up --build` a fumaça mede a imagem de ontem e dá por boa
+	# uma tela que a árvore nem contém — foi exatamente o que aconteceu nesta
+	# rodada com /app/reservas e /app/contatos, entregues e ausentes da imagem
+	# servida em :3100.
+	#
+	# É este alvo que o job `smoke` do CI executa: o CI não deve carregar uma
+	# segunda cópia da sequência (ver a nota do job `integration`).
+	$(MAKE) up
+	@$(MAKE) --no-print-directory esperar ALVO="$(SMOKE_API)/healthz" QUEM=api
+	$(MAKE) migrate
+	$(MAKE) seed
+	@$(MAKE) --no-print-directory esperar ALVO="$(SMOKE_URL_OU_PADRAO)/login" QUEM=admin
+	$(MAKE) smoke
+
+# esperar: sonda ALVO até responder, e despeja o log do serviço QUEM se desistir.
+# O log no fracasso é o que separa "a fumaça reprovou" de "a fumaça nem chegou
+# a abrir o navegador, e o motivo estava no boot do container".
+esperar:
+	@pronto=0; \
+	for _ in $$(seq 1 60); do \
+		if curl -fsS -o /dev/null "$(ALVO)"; then pronto=1; break; fi; \
+		sleep 2; \
+	done; \
+	if [ "$$pronto" != "1" ]; then \
+		echo "$(QUEM) não respondeu em $(ALVO) depois de 120s"; \
+		$(COMPOSE) logs --tail=60 $(QUEM); \
+		exit 1; \
+	fi; \
+	echo "==> $(QUEM) respondendo em $(ALVO)"
 
 check: lint test ## Lint + typecheck + testes (rode antes de reportar qualquer entrega)
 

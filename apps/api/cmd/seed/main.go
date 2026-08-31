@@ -63,7 +63,7 @@ func etapas() []etapa {
 		{"estadia_minima", estadiaMinima},
 		{"politica_comercial", politicaComercial},
 		{"politica_de_cancelamento", politicaDeCancelamento},
-		{"contato_de_demonstracao", contatoDeDemonstracao},
+		{"contatos_de_demonstracao", contatosDeDemonstracao},
 		{"catalogo_de_recursos", catalogoDeRecursos},
 		{"perfis", perfis},
 		{"permissoes", permissoes},

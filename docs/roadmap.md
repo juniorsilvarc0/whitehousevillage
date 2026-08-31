@@ -6,8 +6,8 @@
 
 | | |
 |---|---|
-| Fase corrente | **0 — Fundação** (auth/RBAC, seed e login entregues; **terceira** rodada de correção — duas revisões adversariais e o QA reprovaram) |
-| Última atualização | 20/08/2026, 22h30 |
+| Fase corrente | **1 — Núcleo ponta a ponta**, concluída; rodada de **quitação de dívida técnica** fechada em 27/08 |
+| Última atualização | 27/08/2026, 17h50 |
 | Repositório | `github.com/juniorsilvarc0/whitehousevillage` |
 
 ## Fase 0 — Fundação
@@ -56,9 +56,24 @@
 - [x] 1d Reservas: ciclo de vida completo, alocação de unidade, expiração real da pré-reserva
 - [x] Telas de configuração (inventário, tarifário, calendário, política) e o `QuoteBuilder` com semáforo de alçada
 - [x] Auditoria (`audit_log`) recebendo as escritas da fase, com IP e user-agent
-- [ ] 1e Mapa de ocupação em tempo real (SSE) — **não entrou**
-- [ ] 1f CRM (funil, oportunidade, atividades, SLA) — **não entrou**
-- [ ] 1g Chat WhatsApp via uazapi — **não entrou**
+- [x] 1e Mapa de ocupação em tempo real (SSE) — **entrou e está no ar** (`/app/mapa`, `LISTEN/NOTIFY` nos canais `whv_calendar` e `whv_crm`)
+- [x] 1f CRM (funil, oportunidade, atividades, SLA) — **entrou e está no ar** (`/app/funil`, `/app/leads`, 45 rotas)
+- [ ] 1g Chat WhatsApp via uazapi — **adiado por decisão do usuário**, não esquecido. Não tem fase marcada: volta quando o usuário pedir. O painel deixou de anunciar `/app/chat` no menu justamente para não prometer o que não existe
+
+### Rodada de dívida técnica — 27/08/2026
+
+Rodada dedicada, sem funcionalidade nova de produto, pedida com a frase "o que não pode é deixar passar débitos técnicos". O que foi **pago**:
+
+- **`/contacts` existia como tabela e não como API.** `GET`/`POST /contacts` respondiam 404 e `reservations.contact_id` é `NOT NULL` — não havia como vender pela API sem inserir contato por SQL. Agora são 8 rotas, contrato, módulo Go, tela (`/app/contatos`) e trilha em `audit_log` + `pii_access_log` (que existia desde 20/08 e **nunca havia recebido uma linha**)
+- **Orçamento não era persistido e `/win` era inexecutável.** `POST /quotes` devolvia 16 chaves e nenhuma era `id`; o `/win` respondia `422 QUOTE_REQUIRED_TO_WIN` com a dica "emita o orçamento e vincule-o à oportunidade" — instrução impossível de seguir. Agora há tabela `quotes`/`quote_nights`, `POST /quotes?persist`, `GET /quotes/{id}` (snapshot, nunca recalculado) e um `/win` que **transcreve** o orçamento em vez de repreçar
+- **Troca de `unit_types.consumes` com venda viva** ganhou constraint trigger adiável nas duas direções — a última das portas da invariante da Completa que dependia só da aplicação
+- **A guarda de composição contra venda concorrente** (a "brecha declarada e não fechada" da Fase 1) foi fechada no banco em `20260827100000`
+- **Tela de reservas** (`/app/reservas`), que era link morto a partir do próprio CRM
+- **O menu parou de mentir**: 13 destinos para 5 telas viraram 8 destinos para 8 telas, com teste que reprova nos dois sentidos. Medido: 9 requisições 404 de prefetch por visita ao `/app` caíram para 0
+- **A fumaça virou portão de verdade**: reprova em 404 (e não só em 5xx), em link de menu morto, em sessão perdida no meio da varredura, e passou a cobrir 10 telas em vez de 7. `make smoke-stack` sobe imagem, schema e seed antes; o job `smoke` do CI executa esse mesmo alvo
+- **O CI passou a rodar o que o portão local já rodava**: `pnpm lint`, os 334 testes do painel e `go vet -tags=integration`
+
+O que a rodada **não** pagou está abaixo, em D3 a D8 — cada um com efeito concreto e fase.
 
 ### Três revisões adversariais, e o que elas ensinaram
 
@@ -75,11 +90,13 @@
 - Portão completo **verde**: `gofmt`, `build`, `vet`, 15 pacotes unitários, 15 de integração serializada, `lint` (que **nunca havia rodado** — o script chamava `next lint`, removido no Next 16, e o eslint nem estava instalado), `tsc`, 104 testes do painel e build.
 - Seed idempotente conferido (278 previstas, 0 criadas na segunda execução).
 - **A rodada 3 não teve revisão adversarial independente**: os dois agentes de verificação bateram no limite de sessão. A verificação foi feita pelo tech-lead.
-- **Brecha declarada e não fechada**: a guarda de composição roda dentro da transação e serializa contra outra alteração de composição, **não contra uma venda concorrente**. Em `READ COMMITTED`, entre o `SELECT` e o commit cabe um `POST /reservations`. Sonda de concorrência escrita (`composicao_concorrente_integration_test.go`) **não reproduziu o buraco em 60 disputas** — o que não prova ausência. A garantia definitiva é uma invariante no banco (constraint adiável ou trigger exigindo `|reservation_units| = |composição|` para produto `all_members`), e é a **primeira tarefa da Fase 2**.
+- **Brecha declarada e não fechada — FECHADA em 27/08/2026.** A guarda de composição rodava dentro da transação e serializava contra outra alteração de composição, **não contra uma venda concorrente**: em `READ COMMITTED`, entre o `SELECT` e o commit cabia um `POST /reservations`. A sonda de concorrência (`composicao_concorrente_integration_test.go`) **não reproduziu o buraco em 60 disputas** — o que nunca provou ausência. A garantia definitiva era uma invariante no banco, e ela existe: `20260827100000_invariante_da_casa_inteira` traz a constraint trigger adiável `reservation_units_composicao_completa`, que exige `|reservation_units| = |composição|` no COMMIT para produto `all_members`. `20260827140000` fechou a última porta que sobrava, a troca de `consumes` com venda viva.
 
 ## Fase 2 — Dinheiro e rotina
 Financeiro (recebíveis, pagáveis, pagamentos, conciliação, caução), comissões, agenda operacional, hóspedes e LGPD.
 **Pronto quando**: confirmar reserva gera recebíveis e comissão sozinho, e o fechamento do mês bate com o razão.
+
+**Abre com a dívida, não com funcionalidade**: **D3** (consolidar os códigos de erro em `apperr`), **D5** (repontar ou remover `crm_opportunities.quote_id`), **D6** (`internal/platform/pii`, que a fase inteira vai usar), **D7** e **D8**. As cinco são mecânicas, sem regra de negócio nova, e cada uma fica mais cara depois que o financeiro passar a depender do que elas duplicam.
 
 ## Fase 3 — Escala comercial
 Portal do corretor, contratos em PDF, BI e KPIs (ocupação, ADR, RevPAR, conversão, motivos de perda).
@@ -114,9 +131,78 @@ Fica em memória na Fase 0 porque a alternativa hoje seria tabela nova + varredu
 
 **Definitivo (Fase 6)**: contador no Redis (`INCR` + `EXPIRE`, chave por par e-mail+IP, por e-mail e por IP de reset), com o limitador em memória como degradação quando o Redis não responde — limitador que cai não pode virar login sem limite nenhum. Enquanto não existir Redis, o `README` de operação diz o que já é verdade: **uma** instância da API.
 
-### D2 — `reservation_pricing` ainda dentro de `reservations`
+### D2 — `reservation_pricing` dentro de `reservations` — **PAGA em 26/08/2026**
 
-Registrada como a **primeira tarefa da Fase 1** (item **1a**), com prazo: antes de 1e (reservas) e antes de a tabela ganhar `channel_id` e as colunas de remarcação. Motivo de não fazer na Fase 0 está na tabela de decisões (mexer no schema agora acopla a versão de migration às correções em curso, e `/readyz` recusa servir com o schema fora da versão esperada).
+Quitada pela migration `20260826100000_reservation_pricing`. Conferido no `information_schema`: `reservation_pricing` existe com 12 colunas e `reservations` caiu de 32 para **23**, dentro da regra 9. Fica registrada aqui, e não apagada, porque a decisão de adiar está na tabela abaixo e a dívida quitada é a prova de que o adiamento tinha prazo.
+
+### D3 — Vinte dos 37 códigos de erro do contrato são declarados fora de `apperr`, e `RESOURCE_IN_USE` existe em cinco lugares → consolidar na Fase 2
+
+O `components.responses.Erro` da OpenAPI diz, textualmente, que o enum é "espelhado em `internal/platform/apperr`". Não é: 20 dos 37 códigos são declarados dentro dos módulos (`inventario/erros.go`, `tarifario/erros.go`, `crm/crm.go`, `reservas/erros.go`, `contatos/contatos.go`, `disponibilidade/erros.go`), cada um com a sua função local (`erro`, `conflito`, `invalido`) e a sua mensagem. `RESOURCE_IN_USE` está declarado **cinco** vezes, com cinco frases diferentes.
+
+Efeito concreto: o mesmo `code` chega ao painel com mensagens diferentes conforme a rota, e nada impede a sexta cópia de divergir também no **status HTTP** — aí o painel, que reage ao `code`, passa a receber 409 numa rota e 422 noutra para a mesma situação.
+
+Por que é aceitável até lá: a divergência é de *mensagem*, e o contrato fixa o `code`, que é o que o painel consome. E, desde esta rodada, `internal/router/contrato_de_erros_test.go` fecha o buraco que doía de verdade — nenhuma das cópias pode inventar um `code` fora do enum, nem o enum pode crescer sem um emissor em Go. Nasceu assim porque `internal/platform` não era pasta de nenhum dos agentes que precisaram do código.
+
+**Definitivo (Fase 2)**: um `apperr.Definir(code, mensagem, status)` por código, em `apperr`, e os módulos importando. É movimentação mecânica, sem mudança de comportamento — o que a torna candidata natural a uma fatia curta no começo da fase, e não a um item que espera funcionalidade.
+
+### D4 — O limitador de login colapsa num contador único atrás do BFF → junto com D1, na Fase 6
+
+**Medido em 27/08/2026, no stack de desenvolvimento.** `LimitadorDeLogin()` é `httpx.NovoLimitador(20, 15min)` com a chave `"ip:" + IPDoCliente(r)`, e conta **toda** requisição a `/auth/login`, inclusive as bem-sucedidas: 20 logins corretos seguidos do mesmo IP responderam `200`, e o **21º respondeu `429 RATE_LIMITED`**.
+
+O agravante não é a contagem, é a chave. O painel é um BFF: o navegador nunca fala com a API, quem fala é o servidor Next. No log da API, **todos** os logins vindos do painel aparecem com o mesmo IP — `172.24.0.4`, o do contêiner `admin` — contra os IPs variados de quem chama a API direto. O limitador "por IP" vira, na prática, um teto **global de 20 logins a cada 15 minutos para a instalação inteira**.
+
+Efeito concreto: numa troca de turno com sete pessoas entrando, mais um punhado de sessões expiradas reabrindo, a recepção inteira lê "Muitas requisições. Tente em instantes." por quinze minutos — e o log não diz que foi limitador de IP, diz 429 sem dono. Foi essa a causa provável da única reprovação intermitente da fumaça nesta rodada (1 em 10 execuções); a fumaça agora imprime o corpo da resposta do login, então a próxima ocorrência se explica sozinha.
+
+Por que é aceitável até lá: com uma instalação e poucos operadores o teto não é alcançado no uso normal, e um limitador frouxo é pior do que um limitador rude. A correção certa **não** é aumentar o número: é o BFF encaminhar o IP do navegador em `X-Forwarded-For` — `httpx.RealIP` já sabe consumi-lo quando o peer direto é rede interna, que é exatamente o caso do contêiner do painel. Enquanto o painel não encaminhar, aumentar o teto só adia o mesmo bloqueio coletivo.
+
+**Definitivo (Fase 6, com D1)**: contador no Redis, chave por par e-mail+IP **do usuário final**, e o painel encaminhando o IP de origem. Os dois passos vão juntos: contador distribuído com a chave errada distribui o mesmo erro.
+
+### D5 — `crm_opportunities.quote_id` aponta para `reservations`, e o orçamento agora é `quotes` → Fase 2
+
+A coluna nasceu em `20260827110000_crm.up.sql` quando "orçamento" era uma reserva em estado `quote`; a FK `crm_opportunities_quote_id_fkey` referencia `reservations(id)`, conferido no banco. A tabela `quotes` chegou em `20260827130000` e a FK **não** foi repontada, de propósito: repontar no meio da rodada quebraria o CRM que estava no ar.
+
+Efeito concreto: a coluna virou dado morto. O "orçamento vigente" do CRM é derivado de `quotes.opportunity_id` (`ORDER BY created_at DESC LIMIT 1`), e o `/win` funciona hoje sem migration pendente — mas o contrato afirma, no schema `Oportunidade`, que `quote_id` "aponta para `quotes(id)` desde `20260827130000`", e o banco não tem esse fato. Duas noções de "orçamento vigente" convivendo é como uma delas passa a ser lida por engano.
+
+Por que é aceitável até lá: nada escreve na coluna, então ela não mente — ela só não diz nada. A migration é de uma linha (`DROP CONSTRAINT` + `REFERENCES quotes(id) ON DELETE SET NULL`), ou a coluna some.
+
+### D6 — `pii_access_log` e a redação de PII moram dentro do módulo de contatos → Fase 2 (LGPD)
+
+`registrarAcessoPII` (`internal/modules/contatos/pii.go`) e o `semPII` da trilha (`contatos/auditoria.go`) são plataforma disfarçada de módulo: estão ali porque `internal/platform` não era pasta do agente que os escreveu. A Fase 2 traz financeiro, hóspedes de reserva e chat — as três telas que mostram dado pessoal e vão precisar dos dois.
+
+Efeito concreto: a próxima tela que mostrar PII vai importar o módulo de contatos para conseguir registrar o acesso, ou — pior e mais provável — não vai registrar. `audit.Redigir` protege **segredo** (filtro por substring: senha, token, hash) e não protege PII: `name` e `phone_e164` não casam com nada dele.
+
+Por que é aceitável até lá: hoje só contatos serve PII, e ali a obrigação é cumprida e testada (o acesso falha fechado — não conseguir registrar quem leu aborta a leitura). **Definitivo (Fase 2)**: `internal/platform/pii`, irmã de `audit`.
+
+### D7 — `commercial_policies` não tem `quote_validity_days` → Fase 2
+
+A validade de 7 dias do orçamento é constante de aplicação (`validadePadraoEmDias`, em `disponibilidade/dto_orcamento_salvo.go`), ao lado de `hold_hours` e `balance_due_days`, que são **dado versionado**. Contraria "toda regra comercial é dado versionado".
+
+Por que é aceitável até lá: `quotes.valid_until` é `NOT NULL` e gravada por quem emite, então o orçamento já congela a sua própria validade — mudar o padrão não reescreve o passado. E há um agravante que impede a correção pela metade: `PublicarPoliticaComercial` (`tarifario/repository_politicas.go`) copia as colunas **nome a nome**, então uma coluna nova nascida sem entrar nessa cópia voltaria ao `DEFAULT` a cada versão publicada, em silêncio. Os dois passos vão juntos.
+
+### D8 — Deduplicação de contato por documento sem índice único → **PAGA em 27/08/2026** (`20260827150000`)
+
+`contacts_phone_idx` é `UNIQUE` parcial, então o telefone é garantido pelo banco (`23505` → `409 CONTACT_DUPLICATE`, sem `SELECT` antes do `INSERT`). O documento não tem índice único: `contacts_doc_idx` é índice comum, e a proteção é um `pg_advisory_xact_lock(classe, hashtext(propriedade:tipo:numero))` no service.
+
+Efeito concreto: a corrida está fechada **para quem passa por esta API** — controle negativo medido, 5 falhas em 5 execuções sem a trava, verde com ela —, e **aberta** para `psql`, importação de planilha e qualquer outro processo. O contrato promete a garantia; o schema não a tem.
+
+**Como foi paga.** `contacts_doc_unico_idx` existe desde `20260827150000`. Nenhuma linha de Go mudou: `repository.go:traduzir` já esperava o nome, e o `23505` passou a disparar sozinho — a trava virou a redundância barata que estava prevista, nessa ordem, sem janela desprotegida.
+
+Medido antes: dois `INSERT` com o mesmo CPF, `count(*) = 2`. Medido depois: o segundo levanta `contacts_doc_unico_idx`, e pela API o segundo `POST /contacts` responde `409 CONTACT_DUPLICATE` com o `contact_id` de quem já existe.
+
+O índice é sobre `coalesce(doc_type, '')`, e não `doc_type` puro: a API já recusa número sem tipo, mas em índice único NULO é distinto de NULO, e dois documentos iguais **sem tipo** passariam pelo índice feito para impedi-los — justamente a escrita fora da API que motivou a dívida. Continua parcial (`WHERE doc_number IS NOT NULL`), porque anonimizar zera o documento e duas fichas anonimizadas não podem colidir. Os três casos foram medidos.
+
+### D9 — Miudezas com dono e sem fase marcada
+
+Cada uma é pequena, todas são reais, e a lista existe para que nenhuma volte a depender de alguém lembrar:
+
+- **`<Toaster/>` do `sonner` não está montado na casca** (nem em `app/layout.tsx`, nem no `DashboardShell`). São **duas** montagens locais (`components/crm/avisos.tsx` e `components/contatos/avisos.tsx`), hoje mutuamente exclusivas na árvore — no dia em que duas coexistirem, cada `toast()` aparece em duplicata. Montar uma na casca é o conserto; exige apagar as duas locais **na mesma mudança**.
+- **Duas cópias do controle de idempotência** (`reservas/idempotencia.go` e `crm/idempotencia.go`), pelo mesmo impedimento de pasta que gerou D3 e D6. O lugar é `internal/platform/idempotencia`.
+- **A cópia do snapshot do orçamento é feita por fixação no contexto** (`disponibilidade/snapshot.go`), porque `reservas` não era pasta de quem escreveu o `/win`. O desenho final é `reservas.Servico.EmitirDoOrcamento` recebendo o snapshot como argumento. Junto disso: `reservation_pricing.cancellation_policy_id` vem da política **vigente hoje**, e não de `quotes.cancellation_policy_id` — coincidem hoje, divergem no dia em que uma política nova for publicada entre a emissão e o ganho.
+- **`lib/crm/idempotencia.ts` e `lib/crm/datas.ts` são usados por reservas**, e `lib/mapa/expiracao.ts` é a contagem regressiva da pré-reserva, usada fora do mapa. Helper de fuso com dois lugares para consertar é o que quebra no dia em que Fortaleza mudar de regra.
+- **`lib/api/codigos.ts` (painel) não conhece `CONTACT_DUPLICATE`, `CONTACT_ANONYMIZED` nem `QUOTE_NOT_PENDING`**: medido, `normalizarCodigo("CONTACT_DUPLICATE", 409) === "INTERNAL"`. Contornado com espelhos locais em `lib/contatos/codigos.ts` e `lib/crm/codigos.ts`; quando o espelho central crescer, três arquivos encolhem.
+- **`GET /unit-types/{id}/members` exige `inventory:ver`** e é quem alimenta o diálogo de realocação de reserva. Quem tem `reservations:editar` e não tem inventário vê a tela degradada com a explicação. Ou a matriz do seed concede, ou `/reassign-unit` ganha rota própria de destinos possíveis — é decisão de contrato, não de código.
+- **As três derivações do painel inicial** (`calcularOcupacao`, `movimentoDoDia`, `alertasDeConfiguracao`) são puras e vivem dentro de `app/(app)/app/page.tsx`, sem teste unitário. O lugar é `src/lib/painel/`.
+- **`golangci-lint` não está instalado nesta máquina**, e `make lint` para nele. O CI também não o roda. Ou o portão passa a instalá-lo, ou `make check` está prometendo uma etapa que ninguém executa.
 
 ---
 
@@ -141,6 +227,15 @@ Registrada como a **primeira tarefa da Fase 1** (item **1a**), com prazo: antes 
 | 20/08/2026 | **Ninguém edita a matriz do próprio perfil, e a matriz concedida nunca excede a do ator** | São as duas metades da mesma escalada. Editar o próprio perfil é se dar permissão sozinho; conceder a terceiro o que não se tem é se dar permissão por interposta pessoa (crio um perfil `all`, atribuo a um usuário meu, entro com ele). A trava do próprio perfil também evita o tiro no pé de se rebaixar e travar a instalação. `all` **contém** `own`: quem enxerga tudo pode delegar o recorte do dono |
 | 20/08/2026 | **A navegação do painel é função apenas da matriz de permissões**; `allowedRoles` por papel foi removido | Era uma segunda fonte de verdade do RBAC, contra a regra 8: perfil novo criado por configuração não aparecia em lista nenhuma e navegava vazio, e mudar a matriz de um perfil não mudava o menu. Menu que não bate com o que a API concede engana os dois lados — esconde o que a pessoa pode e oferece o que ela não pode |
 | 20/08/2026 | **Conflito de datas responde 409 de forma determinística, inclusive sob contenção** | A regra 2 do CLAUDE.md não admite "409 quando dá tempo". Sob disputa real o Postgres pode devolver `40P01` (impasse) em vez de `23P01`, e traduzir isso para 500 quebra a promessa exatamente na véspera de Réveillon, que é quando ela importa. Determinístico quer dizer: o perdedor ouve "essas datas acabaram de ser ocupadas", com quantos concorrentes forem |
+| 27/08/2026 | **Orçamento é tabela própria (`quotes`), não reserva em estado `quote`** | Era o desenho do `docs/db.md` §7 e foi revisto na entrega: orçamento não ocupa unidade (não referencia `stay_blocks`), o funil emite N orçamentos por negociação e cada um gastaria um código `WH-2026-…` de reserva, e `reservations` já estava em 23 das 25 colunas da regra 9. Orçamento é **imutável**: sem `PUT`/`PATCH`/`DELETE` e sem coleção `GET /quotes`, porque reprecificar é emitir outro — e porque um par GET+POST na coleção acionaria o teste dos seis verbos, que exigiria justamente os verbos que não devem existir |
+| 27/08/2026 | **`/win` transcreve o orçamento; o motor de preço não roda de novo** | Medido: com a tarifa reajustada em +R$1.000/noite entre a emissão e o ganho, a reserva nasceu com o preço do orçamento (subtotal, total, sinal, `rate_table_id` e `policy_version` idênticos, 4 noites iguais). O contrário — recalcular no ganho — é vender por um preço e cobrar outro. A contrapartida é `409 DATE_CONFLICT` como desfecho **normal** do `/win`: orçamento não bloqueia data, e quem emitiu não reservou |
+| 27/08/2026 | **A mensagem da constraint trigger vai para o usuário, por allowlist** | As invariantes de negócio vivem em constraint trigger e já levantam a frase certa em `pg.Message`/`pg.Hint` ("a Completa tem 1 reserva de pé..."), e tudo isso virava `422 "valor fora do permitido pela regra do banco."` — que não diz o que houve nem o que fazer, e ainda discordava do contrato, que documenta `409 RESOURCE_IN_USE` para o mesmo caso. A tradução é **allowlist nomeada**, nunca automática: repassar `pg.Message` de qualquer `23514` publicaria texto de banco que ninguém revisou. E a invariante que só o nosso código pode violar (`quote_nights_fecham_o_orcamento`) vira **500**, não 422 — mandar o operador procurar erro num formulário que estava certo é pior do que assumir o defeito |
+| 27/08/2026 | **A fumaça reprova em 404, não só em 5xx** | Tela que não existe responde 404, desenha o "This page could not be found" do Next — que não é 5xx e não tem aviso do painel — e passava por boa. Era literalmente o caso de `/app/reservas`, entregue numa rodada em que a fumaça ficou verde sem a tela existir na imagem servida. Junto: prefetch RSC 404 (link de menu morto) e volta involuntária para `/login` também reprovam |
+| 27/08/2026 | **`make migrate` e `make seed` reconstroem a imagem** | `make up` reconstruía só `api` e `admin`, e os dois rodavam o binário de ontem. O sintoma foi silencioso: `make seed` respondeu "previstas 295 ... nada mudou" e deu o banco por atualizado enquanto o seed do commit semeava 298. Aplicar **schema** com o binário de ontem é a mesma falha com consequência muito maior |
+| 27/08/2026 | **A identidade de um valor default de parâmetro não é dependência de efeito confiável** | `useSSE` recebia a fábrica da conexão por `criarFonte = fonteDoNavegador` e a listava nas dependências. Em `next dev` o default resolvia para a mesma referência e o efeito rodava uma vez; no build minificado passou a valer uma função nova a cada render, e a conexão reabria a cada repintura — **medido: 1957 aberturas em 9 s contra 1 em dev**, com o painel parado no mapa, e 22.738 acumuladas. A suíte ficou verde o tempo todo porque todos os 13 testes passavam um `criarFonte` estável de módulo, a única forma que não podia falhar. A fábrica virou Effect Event, como as outras três callbacks do arquivo, e o teste que faltava re-renderiza com identidade nova |
+| 27/08/2026 | **Sonda de saúde mora na raiz, fora de `/api/v1`** | As duas nasceram sob o prefixo e `curl localhost:8080/readyz` devolvia 404, contra o plano e contra o que qualquer runbook tenta primeiro. Quem chama sonda é o healthcheck do Compose, o proxy da frente e o orquestrador, com caminho fixo escrito na infraestrutura: no dia do `/api/v2` esse caminho não pode ser reescrito junto nem passar a existir em duas versões. Servi-las nos dois caminhos seria pior que escolher errado — dois endereços para o mesmo fato. `TestSondasSoExistemNaRaiz` cobra a escolha **nos dois sentidos**, e a OpenAPI declara `servers` próprio nesses dois paths |
+| 27/08/2026 | **Healthcheck de imagem distroless exige flag no próprio binário** | O Compose já invocava `["CMD", "/app/api", "-healthcheck"]` e o comentário admitia por escrito que a flag estava "pendente no backend-go". Sem ela o binário caía no caminho normal e **subia uma segunda API a cada 10 s**, que morria em `address already in use` e ainda abria uma conexão de banco antes de sair. O container passou a vida `unhealthy` — 272 falhas seguidas, medidas — e nenhum `depends_on: service_healthy` apontado para a API teria liberado nada. A sonda é de VIDA e não de prontidão: um `/readyz` aqui marcaria o container como doente sempre que o banco piscasse, e a resposta do orquestrador a "doente" é derrubar quem estava de pé |
+| 27/08/2026 | **Coluna morta com FK errada some, em vez de ser repontada** | `crm_opportunities.quote_id` nasceu apontando para `reservations(id)`, de quando orçamento era reserva no estado `quote`. Ninguém a escrevia (a oportunidade ganha pelo `/win` ficava com `NULL`) e ninguém a lia — quem responde "qual é o orçamento vigente" é a subconsulta sobre `quotes`. Repontar manteria uma coluna morta com o alvo certo, e a próxima pessoa suporia que ela significa alguma coisa. Se um dia o produto quiser "o orçamento ESCOLHIDO", ela volta apontando para `quotes(id)` — e aí com quem a escreva |
 | 20/08/2026 | O job de integração do CI **semeia o banco** e **repete os testes de concorrência** (`-count=10`) | Sem seed, `resources` fica vazio: parte dos testes bate em FK e o do perfil Corretor semeado se **pula** — teste pulado conta como verde. E o defeito das datas é probabilístico: medido nesta rodada, `-count=1` passou verde e `-count=10` reprovou. Uma execução por PR deixava ~67% de chance de a falha atravessar; dez deixam ~2% |
 
 ## Fora de escopo por enquanto

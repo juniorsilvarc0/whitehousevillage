@@ -25,7 +25,7 @@ import (
 //
 // O juiz aqui não é o código de resposta: é o banco. Para toda reserva viva de
 // produto `all_members`, |reservation_units| tem de ser igual a |composição|.
-func TestComposicaoCrescendoDuranteAVendaNaoAbreBuracoNaCasaInteira(t *testing.T) {
+func TestComposicaoCrescendoEmDisputaComAVendaNaoAbreBuracoNaCasaInteira(t *testing.T) {
 	a := subirAPI(t)
 
 	admin := a.criarUsuario(t, "concorrencia-composicao", a.perfilRaiz(t))

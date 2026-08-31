@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -183,5 +184,89 @@ func TestEhTransienteNaoRepeteSobreposicaoJaTraduzida(t *testing.T) {
 	}
 	if !ehTransiente(MapError(pgErro("40P01", "", ""))) {
 		t.Fatal("40P01 traduzido continua transiente — é o embrulho que escondia a repetição")
+	}
+}
+
+// pgCheck monta o 23514 como as constraint triggers do projeto o levantam:
+// mensagem de negócio em `Message` e a saída em `Hint`.
+func pgCheck(constraint, mensagem, dica string) error {
+	return fmt.Errorf("gravando: %w", &pgconn.PgError{
+		Code:           "23514",
+		ConstraintName: constraint,
+		Message:        mensagem,
+		Hint:           dica,
+	})
+}
+
+// As invariantes de negócio vivem em constraint trigger e já levantam a frase
+// certa. Até esta rodada MapError descartava `Message` e `Hint` e devolvia
+// "valor fora do permitido pela regra do banco." para todas — inclusive para a
+// troca de `consumes` com venda viva, que o contrato documenta como
+// 409 RESOURCE_IN_USE.
+func TestCheckNomeadoChegaComACodigoEAFraseDoContrato(t *testing.T) {
+	const mensagem = `White House Completa tem 1 reserva(s) de pé (WH-2026-0001): ` +
+		`mudar de "all_members" para "one_member" mudaria o que já foi vendido a essas pessoas`
+	const dica = "espere as estadias terminarem, cancele-as com a gestão, ou cadastre um produto NOVO"
+
+	e := apperr.From(MapError(pgCheck("unit_types_consumes_com_venda_viva", mensagem, dica)))
+
+	if e.Code != "RESOURCE_IN_USE" || e.Status() != 409 {
+		t.Fatalf("code/status = %s/%d, esperado RESOURCE_IN_USE/409", e.Code, e.Status())
+	}
+	if e.Message != mensagem {
+		t.Fatalf("a mensagem do banco foi descartada: %q", e.Message)
+	}
+	d, ok := e.Details.(map[string]any)
+	if !ok || d["hint"] != dica || d["constraint"] != "unit_types_consumes_com_venda_viva" {
+		t.Fatalf("details = %#v, esperado constraint + hint", e.Details)
+	}
+}
+
+func TestComposicaoIncompletaDoBancoUsaOMesmoCodigoDaAplicacao(t *testing.T) {
+	e := apperr.From(MapError(pgCheck("reservation_units_composicao_completa",
+		"reserva WH-2026-0001 do produto completa ocupa 7 de 8 unidades", "")))
+
+	if e.Code != "COMPOSITION_INCOMPLETE" || e.Status() != 422 {
+		t.Fatalf("code/status = %s/%d, esperado COMPOSITION_INCOMPLETE/422", e.Code, e.Status())
+	}
+	if d, _ := e.Details.(map[string]any); d["hint"] != nil {
+		t.Fatalf("hint vazio não deve entrar em details: %#v", e.Details)
+	}
+}
+
+// Orçamento cujas noites não fecham é defeito NOSSO: quem monta quote_nights é
+// o nosso código. Responder 422 mandaria o operador procurar erro num
+// formulário que estava certo — e a mensagem do banco é instrução para
+// programador. Vira 500, e a frase do banco fica só na causa (log).
+func TestOrcamentoQueNaoFechaEhErroInternoENaoDeValidacao(t *testing.T) {
+	const mensagem = "orçamento de 2026-06-15 a 2026-06-18 precisa de 3 noite(s) detalhada(s) e tem 0: o preço não se explica"
+
+	e := apperr.From(MapError(pgCheck("quote_nights_fecham_o_orcamento", mensagem,
+		"grave uma linha em quote_nights para cada noite")))
+
+	if e.Code != "INTERNAL" || e.Status() != 500 {
+		t.Fatalf("code/status = %s/%d, esperado INTERNAL/500", e.Code, e.Status())
+	}
+	if e.Message == mensagem || e.Details != nil {
+		t.Fatalf("a instrução para programador vazou na resposta: message=%q details=%#v", e.Message, e.Details)
+	}
+	// Mas o log precisa dela: é a única pista de qual das três verificações
+	// da trigger disparou.
+	if !strings.Contains(e.Error(), "o preço não se explica") {
+		t.Fatalf("a mensagem do banco sumiu também da causa: %v", e.Error())
+	}
+}
+
+// Constraint fora da allowlist NÃO ganha tradução: repassar a mensagem de
+// qualquer 23514 publicaria texto de banco que ninguém revisou.
+func TestCheckDesconhecidoNaoVazaAMensagemDoBanco(t *testing.T) {
+	e := apperr.From(MapError(pgCheck("reservations_guests_check", "new row violates check constraint", "")))
+
+	if e.Code != "VALIDATION_ERROR" || e.Status() != 422 {
+		t.Fatalf("code/status = %s/%d, esperado VALIDATION_ERROR/422", e.Code, e.Status())
+	}
+	d, _ := e.Details.(map[string]any)
+	if d["message"] != "valor fora do permitido pela regra do banco." {
+		t.Fatalf("details = %#v, esperado a frase genérica", e.Details)
 	}
 }

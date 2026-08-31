@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Permissao } from "@/lib/api/types";
+import { CATALOGO } from "@/config/navigation";
 import { navegacaoVisivel } from "@/lib/auth/permissions";
 
 /**
@@ -70,10 +71,30 @@ describe("o menu é derivado da matriz, não do nome do perfil", () => {
     const concedidos = MATRIZ_DO_CORRETOR.map((p) => p.resource);
     const visiveis = hrefs("corretor", MATRIZ_DO_CORRETOR);
 
+    // A âncora era `/app/agenda`, que é onde o defeito de `allowedRoles`
+    // aparecia. Ela mudou em 27/08/2026 por um motivo que **não** é o defeito:
+    // a tela de agenda não existe (Fase 2), e o menu passou a esconder o que
+    // leva a 404 — oito dos treze destinos levavam, e o Next ainda os
+    // prefetchava. `/app/reservas` é a mesma prova com uma tela que existe: o
+    // corretor tem `reservations` em escopo `own`, e escopo restringe o QUE se
+    // vê dentro da tela, nunca se a tela aparece.
     expect(
       visiveis,
       `o corretor tem ${concedidos.join(", ")} na matriz, mas o menu dele é ${visiveis.join(", ")}`,
-    ).toContain("/app/agenda");
+    ).toContain("/app/reservas");
+  });
+
+  it("a agenda continua ausente por falta de TELA, não por causa do papel", () => {
+    // O contrapeso do caso acima, e o que impede a troca de âncora de virar um
+    // afrouxamento: `/app/agenda` some do menu do corretor, sim — mas some do
+    // menu de todo mundo, inclusive do admin, porque não há `page.tsx`. Se
+    // algum dia ela sumir só para o corretor, este caso continua verde e o de
+    // cima fica vermelho, que é a divisão certa de trabalho entre os dois.
+    const agenda = CATALOGO.find((item) => item.href === "/app/agenda");
+
+    expect(agenda, "o destino saiu do catálogo — deveria continuar lá, marcado").toBeDefined();
+    expect(agenda?.emConstrucao, "a agenda voltou a existir: reescreva a âncora deste teste").toBe(true);
+    expect(hrefs("admin", MATRIZ_DO_CORRETOR)).not.toContain("/app/agenda");
   });
 
   /**
@@ -86,14 +107,16 @@ describe("o menu é derivado da matriz, não do nome do perfil", () => {
   it("continua escondendo o que a matriz não concede", () => {
     const visiveis = hrefs("corretor", MATRIZ_DO_CORRETOR);
 
-    for (const proibido of [
-      "/app/financeiro",
-      "/app/configuracoes",
-      "/app/relatorios",
-      "/app/inventario",
-      "/app/canais",
-    ]) {
-      expect(visiveis).not.toContain(proibido);
-    }
+    // A lista encolheu para UM destino, e o encolhimento é a asserção ficando
+    // mais honesta, não mais fraca. `/app/financeiro`, `/app/relatorios`,
+    // `/app/inventario` e `/app/canais` saíram porque essas telas **não
+    // existem** (Fases 2 a 5): a ausência delas do menu não prova nada sobre
+    // permissão — elas somem para o admin também. Um caso que "passa" por falta
+    // de tela é um verde vazio, e ele ficaria verde mesmo no dia em que o
+    // filtro por matriz quebrasse.
+    //
+    // Configurações é a única tela que EXISTE e que a spec §11 mantém fora do
+    // alcance do corretor — é sobre ela, portanto, que a garantia se afirma.
+    expect(visiveis).not.toContain("/app/configuracoes");
   });
 });

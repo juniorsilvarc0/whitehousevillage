@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -36,8 +37,9 @@ import (
 	"syscall"
 
 	"github.com/golang-migrate/migrate/v4"
-	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/golang-migrate/migrate/v4/database/postgres"
+	"github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/lib/pq"
 )
 
 const (
@@ -74,9 +76,9 @@ func run(args []string) error {
 		return err
 	}
 
-	m, err := migrate.New(origem, dbURL)
+	m, err := abrir(origem, dbURL)
 	if err != nil {
-		return fmt.Errorf("abrindo migrations em %s: %w", origem, err)
+		return err
 	}
 	defer func() {
 		// Close devolve dois erros (source e database) e ambos importam: um
@@ -114,6 +116,70 @@ func run(args []string) error {
 		imprimirUso()
 		return fmt.Errorf("subcomando desconhecido: %q", args[0])
 	}
+}
+
+// abrir monta o migrate com uma conexão que ENXERGA os avisos do servidor.
+//
+// `migrate.New(origem, url)` — que era o que estava aqui — abre a conexão por
+// dentro da biblioteca, e essa conexão não instala tratador de notice. O efeito
+// medido: `RAISE NOTICE` e `RAISE WARNING` de dentro de uma migration são
+// ENGOLIDOS no cliente e só existem no log do servidor Postgres, onde ninguém
+// que roda `make migrate` está olhando.
+//
+// Isso não é detalhe cosmético neste projeto. Duas migrations desta rodada
+// usam WARNING como a ÚNICA saída de diagnóstico, de propósito, porque o estado
+// legado que elas encontram não deve abortar o deploy nem ser reparado às
+// escondidas: 20260827100000 (composição da casa inteira) e 20260827140000
+// (`unit_types.consumes` trocado com venda viva) avisam "existe dado fora da
+// invariante, decida o que fazer" — e o aviso chegava a ninguém. Migration que
+// diagnostica em silêncio é migration que passou verde escondendo o problema
+// que ela existe para mostrar.
+//
+// A montagem manual é o preço: o driver `postgres` do golang-migrate aceita um
+// *sql.DB pronto (`WithInstance`), e o `lib/pq` — que é o driver que ele usa —
+// expõe `ConnectorWithNoticeHandler`. Config vazia mantém EXATAMENTE os padrões
+// de `migrate.New` (tabela `schema_migrations`, sem multi-statement).
+func abrir(origem, dbURL string) (*migrate.Migrate, error) {
+	conector, err := pq.NewConnector(dbURL)
+	if err != nil {
+		return nil, fmt.Errorf("conectando ao banco: %w", err)
+	}
+
+	comAvisos := pq.ConnectorWithNoticeHandler(conector, func(aviso *pq.Error) {
+		if aviso == nil {
+			return
+		}
+		// Nível do slog espelha o do Postgres: WARNING é o que a migration usa
+		// para dizer "há dado legado fora da invariante" e precisa saltar aos
+		// olhos; NOTICE é narrativa de progresso.
+		registrar := slog.Info
+		if strings.EqualFold(aviso.Severity, "WARNING") {
+			registrar = slog.Warn
+		}
+		registrar("postgres: "+aviso.Message,
+			"severidade", aviso.Severity, "detalhe", aviso.Detail, "dica", aviso.Hint)
+	})
+
+	banco := sql.OpenDB(comAvisos)
+
+	driver, err := postgres.WithInstance(banco, &postgres.Config{})
+	if err != nil {
+		banco.Close()
+		return nil, fmt.Errorf("abrindo o driver de migration: %w", err)
+	}
+
+	fonte, err := (&file.File{}).Open(origem)
+	if err != nil {
+		banco.Close()
+		return nil, fmt.Errorf("abrindo migrations em %s: %w", origem, err)
+	}
+
+	m, err := migrate.NewWithInstance("file", fonte, "postgres", driver)
+	if err != nil {
+		banco.Close()
+		return nil, fmt.Errorf("montando o migrate: %w", err)
+	}
+	return m, nil
 }
 
 // aplicar traduz o ErrNoChange — que não é erro — em sucesso silencioso.

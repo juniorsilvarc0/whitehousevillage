@@ -31,6 +31,7 @@ import (
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 )
 
@@ -87,6 +88,13 @@ func subir(t *testing.T) *ambiente {
 	autenticador := auth.NewAutenticador(emissor, auth.NewRepository(pool))
 	h := crm.NovoHandler(pool, db.NewTxManager(pool))
 
+	// `POST /quotes` entra no roteador do teste como FIXTURE, e não como rota do
+	// CRM: desde 27/08/2026 é por ele que nasce o orçamento que o `/win`
+	// consome, e montá-lo aqui é o que faz a suíte exercitar a jornada INTEIRA
+	// pela API. Antes disso o fixture inseria a linha por SQL direto — e um
+	// endpoint que só o teste consegue alimentar não está no ar.
+	orcamentos := disponibilidade.NovoHandler(pool, db.NewTxManager(pool))
+
 	r := chi.NewRouter()
 	r.Route(prefixoDaAPI, func(api chi.Router) {
 		api.Use(autenticador.Middleware)
@@ -94,6 +102,8 @@ func subir(t *testing.T) *ambiente {
 			api.Method(rota.metodo, rota.path,
 				auth.Middleware(rota.recurso, rota.acao)(http.HandlerFunc(rota.handler)))
 		}
+		api.Method(http.MethodPost, "/quotes",
+			auth.Middleware(recursoOrcamentos, auth.AcaoCriar)(http.HandlerFunc(orcamentos.Orcar)))
 	})
 
 	srv := httptest.NewServer(r)
@@ -324,7 +334,15 @@ func (a *ambiente) perfilComEscopo(t *testing.T, prefixo, escopo string, celulas
 	return id
 }
 
+// recursoOrcamentos é o recurso RBAC de `POST /quotes` — o mesmo código do
+// catálogo semeado por cmd/seed/acesso.go.
+const recursoOrcamentos = "quotes"
+
 // celulasDoCRM é o conjunto completo — é o que o gestor recebe.
+//
+// `quotes` entra junto porque o orçamento é PARTE da jornada do funil: quem
+// pode ganhar a oportunidade tem de poder emitir a proposta que ela ganha. É
+// também o que o seed concede aos três perfis.
 func celulasDoCRM() []string {
 	var out []string
 	for _, recurso := range []string{
@@ -334,7 +352,7 @@ func celulasDoCRM() []string {
 			out = append(out, recurso+":"+acao)
 		}
 	}
-	return out
+	return append(out, recursoOrcamentos+":"+auth.AcaoVer, recursoOrcamentos+":"+auth.AcaoCriar)
 }
 
 // gestor é o perfil da maioria dos testes: escopo `all` em todo o CRM.
@@ -389,6 +407,10 @@ func (a *ambiente) usuario(t *testing.T, perfilID uuid.UUID) (uuid.UUID, string)
 		a.executar(t, `DELETE FROM crm_stage_history WHERE user_id = $1`, id)
 		a.executar(t, `DELETE FROM crm_opportunities WHERE owner_id = $1 OR created_by = $1`, id)
 		a.executar(t, `DELETE FROM crm_leads WHERE owner_id = $1 OR created_by = $1`, id)
+		// `quotes` referencia `users` por `owner_id`/`created_by` e não
+		// cascateia — e precisa sair ANTES das reservas, senão o DELETE de
+		// reservations esbarra em `quotes.reservation_id`.
+		a.executar(t, `DELETE FROM quotes WHERE owner_id = $1 OR created_by = $1`, id)
 		a.executar(t, `DELETE FROM reservations WHERE created_by = $1 OR owner_id = $1`, id)
 		a.executar(t, `DELETE FROM stay_blocks WHERE created_by = $1 OR owner_id = $1`, id)
 		a.executar(t, `DELETE FROM idempotency_keys WHERE actor_id = $1`, id)
@@ -424,6 +446,7 @@ func (a *ambiente) contato(t *testing.T) uuid.UUID {
 		a.executar(t, `DELETE FROM crm_opportunities WHERE contact_id = $1`, id)
 		a.executar(t, `DELETE FROM crm_leads WHERE contact_id = $1`, id)
 		a.executar(t, `DELETE FROM reservation_guests WHERE contact_id = $1`, id)
+		a.executar(t, `DELETE FROM quotes WHERE contact_id = $1`, id)
 		a.executar(t, `DELETE FROM reservations WHERE contact_id = $1`, id)
 		a.executar(t, `DELETE FROM contacts WHERE id = $1`, id)
 	})
@@ -497,35 +520,59 @@ func (a *ambiente) motivoDePerda(t *testing.T) uuid.UUID {
 	return id
 }
 
-// orcamentoDireto cria uma reserva em `quote` PELO BANCO.
+// orcamentoEmitido emite um orçamento PELA API — `POST /quotes` com
+// `persist: true`.
 //
-// Pelo banco, e não pela API, por um motivo que vale registrar: nenhum endpoint
-// desta fase cria reserva em `quote` — `POST /quotes` é cálculo puro e não
-// persiste, e `POST /reservations` nasce em `hold`. O `/win` do contrato exige
-// orçamento vigente, então o fixture monta o estado que a API ainda não sabe
-// produzir. Ver "PARA O INTEGRADOR" no relatório.
-func (a *ambiente) orcamentoDireto(t *testing.T, produto, contato uuid.UUID, checkIn, checkOut string, hospedes int) uuid.UUID {
+// Pela API, e não por SQL direto, e a diferença é o assunto desta rodada: até
+// 27/08/2026 este fixture inseria uma reserva em `reservations` com status
+// `quote`, porque `POST /quotes` era cálculo puro e não persistia. Um `/win` que
+// só o fixture conseguia alimentar não estava no ar — e não estava mesmo: contra
+// o stack de desenvolvimento, `/win` respondia SEMPRE `422 QUOTE_REQUIRED_TO_WIN`.
+//
+// `opportunity_id` faz dele o orçamento VIGENTE do card, que é o que o `/win`
+// consome sem `quote_id` no corpo.
+func (a *ambiente) orcamentoEmitido(t *testing.T, token string, produto, contato uuid.UUID,
+	oportunidade *uuid.UUID, checkIn, checkOut string, hospedes int) orcamentoSalvo {
 	t.Helper()
 
-	var id uuid.UUID
-	if err := a.pool.QueryRow(a.ctx, `
-		INSERT INTO reservations (property_id, code, unit_type_id, contact_id, status,
-		                          check_in, check_out, guests_count)
-		VALUES ($1, $2, $3, $4, 'quote', $5::date, $6::date, $7)
-		RETURNING id`,
-		a.propriedade, "WHQ-"+sufixo(), produto, contato, checkIn, checkOut, hospedes).Scan(&id); err != nil {
-		t.Fatalf("criando orçamento: %v", err)
+	corpo := map[string]any{
+		"unit_type_id": produto,
+		"check_in":     checkIn,
+		"check_out":    checkOut,
+		"guests_count": hospedes,
+		"contact_id":   contato,
+		"persist":      true,
 	}
-	// O preço mora no satélite `reservation_pricing` desde a migration
-	// 20260826100000 — sem esta linha o orçamento existe sem valor, e o
-	// `amount_cents` que o ganho copia para a oportunidade sairia zerado.
-	if _, err := a.pool.Exec(a.ctx, `
-		INSERT INTO reservation_pricing (reservation_id, subtotal_cents, total_cents)
-		VALUES ($1, 250000, 250000)`, id); err != nil {
-		t.Fatalf("gravando o preço do orçamento: %v", err)
+	if oportunidade != nil {
+		corpo["opportunity_id"] = *oportunidade
 	}
-	t.Cleanup(func() { a.executar(t, `DELETE FROM reservations WHERE id = $1`, id) })
-	return id
+
+	resp := a.chamar(t, http.MethodPost, "/quotes", token, corpo)
+	if resp.Status != http.StatusCreated {
+		t.Fatalf("POST /quotes (persist) = %d (%s)", resp.Status, resp.Corpo)
+	}
+	salvo := dado[orcamentoSalvo](t, resp)
+	if salvo.ID == uuid.Nil {
+		t.Fatalf("o orçamento emitido voltou sem id: %s", resp.Corpo)
+	}
+	t.Cleanup(func() { a.executar(t, `DELETE FROM quotes WHERE id = $1`, salvo.ID) })
+	return salvo
+}
+
+// orcamentoSalvo é o schema `OrcamentoSalvo` visto pelo teste.
+type orcamentoSalvo struct {
+	ID             uuid.UUID  `json:"id"`
+	Total          int64      `json:"total_cents"`
+	Subtotal       int64      `json:"subtotal_cents"`
+	Sinal          int64      `json:"deposit_cents"`
+	Noites         int        `json:"night_count"`
+	OportunidadeID *uuid.UUID `json:"opportunity_id"`
+	ReservaID      *uuid.UUID `json:"reservation_id"`
+	Vencido        bool       `json:"expired"`
+	Diarias        []struct {
+		Data  string `json:"date"`
+		Preco int64  `json:"price_cents"`
+	} `json:"nights"`
 }
 
 // bloqueioDireto ocupa uma unidade pelo banco — é assim que o teste do `/win`

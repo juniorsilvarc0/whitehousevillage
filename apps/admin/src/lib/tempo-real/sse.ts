@@ -141,6 +141,21 @@ export function useSSE({
   });
   const renovar = React.useEffectEvent(() => renovarSessao());
 
+  // `criarFonte` entra como Effect Event pelo mesmo motivo das três de cima, e
+  // por um a mais que custou caro: **a identidade do valor default de um
+  // parâmetro não sobrevive garantidamente à minificação**. Em `next dev` o
+  // default resolvia para a MESMA `fonteDoNavegador` a cada render e o efeito
+  // rodava uma vez; no build de produção ele passou a valer uma função nova a
+  // cada render, e como estava na lista de dependências o efeito reabria a
+  // conexão a cada repintura — medido em ~220 aberturas por segundo, com o
+  // painel aberto no mapa, contra a API.
+  //
+  // Foi invisível para a suíte porque TODO teste daqui passa um `criarFonte`
+  // estável de módulo: a única forma que não podia falhar. Por isso existe
+  // `sse.test.tsx` › "não reabre a conexão quando só a identidade de criarFonte
+  // muda", que re-renderiza com uma função nova e cobra uma conexão só.
+  const abrirFonte = React.useEffectEvent((url: string) => criarFonte(url));
+
   const ultimoIdRef = React.useRef<string | null>(null);
   const dedupRef = React.useRef(new Deduplicador());
 
@@ -174,7 +189,7 @@ export function useSSE({
     // erro) é mais verdadeiro do que voltar a "conectando" — quem confirma que
     // a conexão vale é o `ready`, que é o primeiro evento que o servidor manda,
     // com os tópicos efetivamente aceitos.
-    const fonte = criarFonte(`/api/stream?${busca.toString()}`);
+    const fonte = abrirFonte(`/api/stream?${busca.toString()}`);
 
     function marcarEvento(topico: Topico) {
       return (evento: MessageEvent<string>) => {
@@ -284,7 +299,8 @@ export function useSSE({
       fonte.close();
     };
     // `tentativa` entra de propósito: incrementá-lo é o gesto de reabrir.
-  }, [chaveDosTopicos, ligavel, criarFonte, reconectar, tentativa]);
+    // `criarFonte` NÃO entra — ver `abrirFonte` acima.
+  }, [chaveDosTopicos, ligavel, reconectar, tentativa]);
 
   return { estado, ultimoEventoEm, topicosAceitos, reconectar };
 }

@@ -73,6 +73,23 @@ Duas rodadas seguidas produziram **tarefa órfã** — trabalho que todo mundo e
 
 Sem esse papel, posse por pasta vira desculpa: cada agente entrega o seu, e o buraco entre eles fica de pé até a revisão adversarial cobrar.
 
+## 4.2 O que a rodada de 27/08 ensinou: órfão avisado continua órfão
+
+O papel de `integrador` funcionou — as oito rotas de contatos foram ligadas, `SchemaVersionEsperada` subiu, as migrations foram aplicadas e o stack voltou a servir o que a árvore contém. Mas o mecanismo continua sendo **um humano (ou um agente) lendo relatórios**, e nesta rodada os relatórios traziam mais de trinta itens "PARA O INTEGRADOR". Aviso em prosa não escala e não vence uma sessão que termina antes da hora.
+
+A conclusão prática: **todo órfão recorrente vira teste, e o teste mora na pasta do `integrador`**. Foi o que se fez aqui, e cada um deles nasceu de um defeito que já tinha atravessado ao menos uma rodada:
+
+| Órfão que se repetia | Guarda que passou a pegá-lo sozinho |
+|---|---|
+| `SchemaVersionEsperada` atrás da migration (3 rodadas) | `TestSchemaVersionEsperadaAcompanhaAUltimaMigration`, que já existia — o que faltava era o CI olhar para ele |
+| Código de erro no contrato sem espelho em Go, e vice-versa | `internal/router/contrato_de_erros_test.go` — varre o enum da OpenAPI e os literais do Go **nos dois sentidos** |
+| Rota nova nascendo fora da varredura de campo desconhecido | a própria varredura já falhava pedindo o alvo; o alvo de `/contacts` entrou |
+| Tela entregue e ausente da imagem servida | `make smoke-stack` (constrói, migra, semeia e percorre) e a fumaça reprovando em **404**, não só em 5xx |
+| Item de menu apontando para tela que não existe | `navigation.test.ts` (painel) + a fumaça reprovando prefetch RSC 404 |
+| Painel com lint e 334 testes que o CI nunca rodava | job `admin` do CI passou a rodar `pnpm lint` e `pnpm test --run` |
+
+A regra que sai daí, para a próxima rodada: **quem escrever "PARA O INTEGRADOR" sobre algo que já apareceu num relatório anterior deve propor a guarda automática junto**, e não só o conserto. Item que só existe em prosa volta.
+
 ## 5. Regras comuns a todos
 
 - Rodar `make check` (lint + typecheck + testes do próprio escopo) **antes** de reportar.
@@ -87,7 +104,9 @@ Sem esse papel, posse por pasta vira desculpa: cada agente entrega o seu, e o bu
 Uma entrega só está pronta quando:
 
 - [ ] `make check` passa
+- [ ] `make smoke` passa com o stack no ar — e, quando a entrega muda imagem, schema ou seed, `make smoke-stack`, que sobe tudo antes. Suíte verde não prova aplicação servida: já houve rodada com tudo verde e o painel morrendo no boot
 - [ ] A rota está na OpenAPI e o teste de contrato aceita
+- [ ] Todo `code` de erro novo está nos DOIS lados (enum do `openapi.yaml` e literal em Go); `internal/router/contrato_de_erros_test.go` confere
 - [ ] Há teste automatizado cobrindo o caminho feliz e ao menos um erro de regra de negócio
 - [ ] Migrations têm `down` e o CI validou o ciclo completo
 - [ ] Permissão e escopo (`all|own`) foram verificados para os três perfis

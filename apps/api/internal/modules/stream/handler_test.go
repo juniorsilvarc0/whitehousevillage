@@ -214,6 +214,20 @@ func (a *ambiente) abrir(t *testing.T, consulta string, cabecalhos map[string]st
 		t.Fatalf("GET /stream: %v", err)
 	}
 	t.Cleanup(func() { _ = resp.Body.Close() })
+
+	// O leitor SSE só é ligado quando a resposta É um stream.
+	//
+	// `novoLeitorSSE` sobe uma goroutine que DRENA `resp.Body`. Quando a
+	// resposta é uma recusa (422, 403, 429), o corpo é o envelope de erro em
+	// JSON, e essa goroutine disputava a leitura com `corpoDeErro` — quem
+	// chegasse primeiro levava os bytes. Sob carga (a suíte inteira com
+	// `-race`) a goroutine ganhava e o teste morria em "lendo o erro: EOF",
+	// com o status 429 JÁ conferido na linha anterior: intermitência do
+	// arreio, não do produto. Reproduzido 3 em 3 injetando 50 ms de espera
+	// antes de ler o corpo, e 0 em 40 depois desta guarda.
+	if resp.StatusCode != http.StatusOK {
+		return resp, nil, cancelar
+	}
 	return resp, novoLeitorSSE(resp.Body), cancelar
 }
 
@@ -659,8 +673,16 @@ func TestLimiteDeConexoesPorUsuarioResponde429(t *testing.T) {
 	defer cancelar()
 	leitor.proximoDeDados(t, 2*time.Second)
 
-	resp, _, cancelar2 := a.abrir(t, "topics=calendar", nil)
+	resp, leitor2, cancelar2 := a.abrir(t, "topics=calendar", nil)
 	defer cancelar2()
+	// A recusa NÃO pode vir com leitor SSE ligado: a goroutine dele drenaria o
+	// envelope de erro antes de `corpoDeErro` e o teste morreria em EOF com o
+	// produto certo. A política da casa proíbe `sleep`, então a guarda é esta
+	// asserção estrutural, e não uma espera adversária.
+	if leitor2 != nil {
+		t.Fatal("a segunda conexão foi recusada e mesmo assim ganhou leitor SSE: " +
+			"o corpo do erro será drenado por baixo de quem for lê-lo")
+	}
 	if resp.StatusCode != http.StatusTooManyRequests {
 		t.Fatalf("status da segunda conexão = %d, esperado 429", resp.StatusCode)
 	}

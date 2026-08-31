@@ -35,7 +35,7 @@ func NovoHandler(pool *pgxpool.Pool, tx *db.TxManager) *Handler {
 	orcamentos := disponibilidade.NovoServico(disponibilidade.NewRepository(pool), tx)
 	reservasRepo := reservas.NewRepository(pool)
 	vendas := reservas.NovoServico(reservasRepo, orcamentos, tx)
-	return &Handler{svc: NovoServico(NewRepository(pool), vendas, reservasRepo, tx)}
+	return &Handler{svc: NovoServico(NewRepository(pool), vendas, reservasRepo, orcamentos, tx)}
 }
 
 // NovoHandlerCom existe para o teste montar o handler sobre um service já

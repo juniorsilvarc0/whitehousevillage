@@ -2,21 +2,39 @@
 
 > O que roda, o que cada suíte protege e as regras que valem para todo teste do repositório. O dono deste documento e de todo arquivo `*_test.go`, `*.test.tsx` e `tests/e2e/**` é o agente `qa-testes`.
 
-## 1. As três camadas
+## 1. As quatro camadas
 
-| Camada | Comando | Precisa de banco? | Tempo |
+| Camada | Comando | Precisa de quê? | Tempo |
 |---|---|---|---|
-| Unidade (Go) | `make test-api` | não | ~35 s |
-| Componente (painel) | `make test-admin` | não | ~4 s |
-| Integração (Go + Postgres) | `make test-integration` | **sim**, efêmero | ~3 min (serializada com `-p 1`) |
+| Unidade (Go) | `make test-api` | nada | ~50 s |
+| Componente (painel) | `make test-admin` | nada | ~6 s |
+| Integração (Go + Postgres) | `make test-integration` | Postgres efêmero | ~4 min (serializada com `-p 1`) |
+| **Fumaça (navegador)** | `make smoke` / `make smoke-stack` | **stack no ar** | ~30 s |
 
-`make check` roda lint + typecheck + as duas primeiras. A integração é alvo próprio porque sobe um container.
+`make check` roda lint + typecheck + as duas primeiras. A integração e a fumaça
+são alvos próprios porque uma sobe um container e a outra exige a aplicação
+servida.
 
-> **`make check` exige `golangci-lint`, e nada no repositório o instala.** Sem
-> ele o alvo morre em `command not found` no primeiro passo, antes de rodar um
-> teste. Não há `.golangci.yml` nem alvo de ferramentas; o CI também não o roda.
-> Para exercitá-lo hoje: `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6`
+A quarta camada não é redundante com as três: ela é a única que roda contra a
+**aplicação servida**, e existe porque a suíte inteira já ficou verde com o
+stack morto. `make smoke` mede o que já está no ar; `make smoke-stack` sobe a
+imagem nova, migra, semeia e só então mede — que é a ordem de um deploy, e a
+única que impede a fumaça de dar por boa uma tela que a árvore contém e a
+imagem não.
+
+> **`make check` continua sem se completar, e agora por duas razões.** A
+> primeira é a de sempre: `golangci-lint` não está instalado e nada no
+> repositório o instala — o alvo morre no primeiro passo, antes de rodar um
+> teste. Para exercitá-lo:
+> `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6`
 > **de fora do módulo** (`cd /tmp`), para não encostar no `go.mod` da API.
+>
+> A segunda apareceu quando ele foi instalado à mão: `make check` **reprova
+> com 11 problemas** (§3.3), todos em código de produção. Como `lint` é a
+> primeira dependência de `check`, o portão nunca chega aos testes. Hoje
+> `make check` não é executável de ponta a ponta em nenhuma máquina, com ou sem
+> a ferramenta: **"o portão passou" continua sendo uma frase que ninguém pode
+> dizer honestamente.**
 
 ### Unidade
 
@@ -202,22 +220,24 @@ a noite de 2026-11-20 foi reprecificada para 300000 — ela foi VENDIDA por 2400
 
 (com `-race`, que é o caso pessimista; sem ele o mapa carregado responde em 5,7 ms). Folga de 9× no mapa e de 30× no orçamento.
 
-**Remedido em 26/08/2026, na rodada de correção.** O teste passa a régua no mapa
-e na disponibilidade e só então morre no orçamento, por causa do defeito 1 da
-§3.2 — então os dois primeiros números saem do próprio teste e o do orçamento
-teve de ser medido por fora, com a API de pé e `curl`, mandando o campo que a
-implementação hoje aceita:
+**Remedido em 27/08/2026**, agora com as três medições saindo do próprio teste
+(em 26/08 o orçamento tinha de ser medido por fora com `curl`, porque o teste
+morria antes de chegar nele — era o defeito do nome do campo `guests`, desde
+então corrigido):
 
-| Medição | Teto | Medido | Folga |
+| Medição | Teto | Medido (`-race`) | Folga |
 |---|---|---|---|
-| Mapa, 90 dias × 8 unidades (`-race`, dentro do teste) | 300 ms | **18,8 ms** | 16× |
-| Disponibilidade, 90 dias × 4 produtos (`-race`, dentro do teste) | 300 ms | **12,3 ms** | 24× |
-| Mapa, por HTTP, sem `-race` | 300 ms | **3,9 ms** | 77× |
-| Orçamento de 3 noites, por HTTP, sem `-race` | 150 ms | **2,8 ms** | 53× |
+| Mapa, 90 dias × 8 unidades | 300 ms | **13,3 ms** | 22× |
+| Disponibilidade, 90 dias × 4 produtos | 300 ms | **10,8 ms** | 28× |
+| Orçamento de 3 noites | 150 ms | **2,8 ms** | 53× |
 
-O orçamento medido por fora fecha em `total 705000 / sinal 352500` — os
-R$ 7.050 e os R$ 3.525 da Tabela V1. **O motor de preço está certo; o que está
-quebrado é o nome do campo na porta.**
+E o barramento de tempo real, medido por
+`TestAlteracaoNoBancoChegaNoStreamEmMenosDeDoisSegundos` — o caminho inteiro,
+`INSERT` → gatilho → `pg_notify` → `LISTEN` do hub → fan-out → SSE no cliente:
+
+| Medição | Teto do aceite | Medido | Folga |
+|---|---|---|---|
+| Escrita no banco → evento na conexão SSE | 2 s | **7 ms** | 285× |
 
 ### `internal/router/regressao_fase1_integration_test.go` — os achados da revisão, na COSTURA
 
@@ -248,6 +268,138 @@ predicado. O teste provava o predicado que o mapa **deveria** usar, não o que
 ele usa — verde legítimo sobre defeito vivo. Quando a asserção é sobre um
 comportamento que o usuário observa, a pergunta vai para o endpoint.
 
+### `internal/router/jornada_rodada4_integration_test.go` — a jornada que a dívida bloqueava
+
+A jornada da Fase 1 (acima) prova a venda. O que ela **não** provava é que a
+venda é possível **por uma API só** — porque ela cria o hóspede com um `INSERT`
+de fixture, e era exatamente esse o passo que não existia. Este arquivo tem uma
+regra própria, e ela vale como asserção: **as sete escritas saem todas de
+`a.chamar`/`a.chamarComChave`**; o `pool` aparece só em `exigirSeed` e no
+`t.Cleanup`. Se um dia a jornada precisar de SQL para andar, a dívida voltou.
+
+O estado de partida, medido pelos três agentes desta rodada e reproduzido aqui:
+`POST /contacts` → **404**, `POST /quotes` → 200 com 16 chaves e **nenhuma
+`id`**, `GET /quotes/{id}` → **404**, `/win` → **422 `QUOTE_REQUIRED_TO_WIN`**
+com a dica *"emita o orçamento e vincule-o à oportunidade"* — uma instrução
+impossível de seguir.
+
+| Passo | O que a asserção protege |
+|---|---|
+| `POST /contacts` | O contato nasce com `id` e é **encontrável por telefone E.164** — não basta gravar, tem de gravar onde alguém acha, que é o caminho do inbound de WhatsApp. |
+| `POST /crm/opportunities` | O card nasce `aberta` (feminino: o banco guarda o masculino, a porta publica o feminino). |
+| `POST /quotes {persist:true}` | **201 com `id`**, vinculado ao contato e ao card, não vencido, `subtotal + limpeza = total`. Sem `persist` o comportamento de hoje fica intacto — a tela dispara a rota a cada tecla. |
+| `GET /quotes/{id}` | Reabrir a proposta devolve o mesmo total, o mesmo sinal e as três diárias detalhadas. |
+| `POST /win` | Reserva em `hold` com prazo, código `WH-…`, card em `ganha` apontando para a reserva — e a reserva **transcreve** o orçamento centavo a centavo. O orçamento passa a apontar para a reserva, que é o que o torna consumido. |
+| `POST /confirm` | Vira `confirmed`, o prazo de pré-reserva **some**, o total não é recalculado. |
+| `POST /cancel?dry_run=1` → `POST /cancel` | A simulação se declara simulação, calcula sobre o sinal **efetivamente pago**, fecha a conta (devolve + retém = pago) e **a reserva continua de pé depois dela**; a execução dá o mesmo número. |
+| `GET /availability` | O estoque volta ao **número exato** de antes da venda. |
+
+`TestADicaDoGanhoSemOrcamentoEhExecutavel` mora ao lado e cobra outra coisa: o
+`/win` sem orçamento responde 422 com uma dica, e o teste **segue a dica ao pé
+da letra** e exige que ela funcione. Um teste que só conferisse o `code` passa
+com a dica mentindo — que é literalmente o que acontecia antes desta rodada.
+
+**Poder de detecção verificado por mutação, e a primeira mutação encontrou um
+defeito no próprio teste.** A versão inicial do passo 7 dizia "sobrou pelo menos
+uma unidade"; injetando o estado do cancelamento que esquece de liberar o
+calendário (`UPDATE stay_blocks SET status='confirmed'`), ela **passou verde** —
+o `apto-2s` tem três unidades, e uma presa ainda deixa duas livres. A asserção
+foi trocada por "o estoque volta ao número medido antes da venda", e a mesma
+mutação passou a acusar:
+
+```
+2031-03-10: antes da venda havia 3 unidade(s) disponível(is) e depois do
+    cancelamento há 2 — a data não voltou inteira ao estoque
+```
+
+A segunda mutação, o `/win` recalculando o preço (`UPDATE reservation_pricing`),
+também dispara:
+
+```
+a reserva não copiou o orçamento: proposta total 273000 / subtotal 255000 /
+    sinal 136500, reserva total 373000 / subtotal 355000 / sinal 136500 —
+    o preço foi recalculado no /win
+```
+
+### `internal/router/guarda_de_concorrencia_test.go` — o teste que vigia a repetição
+
+`make it-concorrencia` repete os testes de disputa 10 vezes e escolhe quais
+**por nome**, porque Go não tem categoria de teste. O Makefile já avisava por
+escrito que quem escrevesse uma disputa nova tinha de batizá-la com uma das
+palavras — e a guarda que existia lá só reprova quando o regex não casa com
+**nada**, ou seja, é cega para o caso real.
+
+O caso real aconteceu. Medido em 27/08/2026: a etapa respondeu
+`internal/router ... [no tests to run]` enquanto o pacote guardava dois dos
+testes de disputa mais caros da casa — a composição crescendo no meio de uma
+venda `all_members` e a troca de `consumes` contra uma venda em voo. Os dois
+rodavam **uma vez** na suíte normal, que é exatamente a passada em que uma
+corrida intermitente se esconde.
+
+Este teste roda **sem banco e sem a tag `integration`**, de propósito: a omissão
+é de nome, e tem de aparecer no `make check` de quem escreveu o teste. Ele lê o
+`TESTES_CONCORRENCIA` do próprio Makefile (copiar o valor aqui reintroduziria a
+divergência que ele existe para pegar) e exige que **todo `func Test` num
+arquivo batizado de disputa** case com o regex. O critério é o do arquivo, e é
+conservador de propósito: adivinhar pelo corpo (`go func`, `sync.WaitGroup`)
+apanharia helper de fixture e a guarda seria desligada por barulho. Um piso de
+quatro arquivos impede que renomear os arquivos para fora do vocabulário
+devolva o buraco.
+
+Controle negativo: desfazendo um dos dois rebatismos, ele acusa nomeando
+arquivo, teste e o que fazer —
+
+```
+teste(s) de disputa que a etapa `make it-concorrencia` NUNCA repete — eles rodam
+UMA vez e uma corrida intermitente atravessa:
+  apps/api/internal/router/troca_de_consumes_concorrente_integration_test.go:
+      TestTrocaDeConsumesEsperaVendaEmVooEDepoisRecusa
+o nome do teste precisa casar com TESTES_CONCORRENCIA (…) — rebatize o teste,
+não afrouxe o regex
+```
+
+Os dois testes rebatizados passaram a rodar na repetição e sobreviveram a
+`-count=10 -race`.
+
+### `apps/admin/e2e/fumaca.mjs` — a aplicação servida, e todo link dela
+
+A fumaça é a única coisa que roda contra a **aplicação servida**, e é por isso
+que ela existe: a suíte inteira já ficou verde com o stack morto. Ela reprova em
+5xx, em **404 do documento**, em prefetch RSC 404, em aviso de erro visível e
+quando uma tela **volta para `/login`**.
+
+Nesta rodada ela ganhou a conferência que faltava: **nenhum link do painel pode
+levar a 404**. A conferência de prefetch que já existia só pega o link que o
+Next resolveu buscar — e ele só prefetcha o que entra no viewport, então destino
+morto em menu recolhido, aba não aberta ou linha de tabela abaixo da dobra
+atravessava. Agora a fumaça pergunta ao DOM quais links **existem** em cada tela
+visitada e bate em todos, reaproveitando os cookies da sessão.
+
+Foi assim que `/app/reservas/{id}` passou uma rodada inteira como link morto no
+meio do fluxo de venda: o card do CRM já apontava para ele e a tela não existia.
+
+Medido contra o stack no ar: 10 telas navegadas + **15 links internos**
+conferidos, incluindo `/app/reservas/{id}`, `/app/contatos/{id}`,
+`/app/oportunidades/{id}` e duas subtelas de configuração
+(`/app/configuracoes/calendario`, `/app/configuracoes/politica`) que **não
+estão na lista `TELAS`** — a lista deixou de ser a única fonte de cobertura.
+Controle negativo: injetando um destino para `/app/chat`, a suíte reprova com
+`link morto: … oferece /app/chat, que responde 404`.
+
+Para não crescer com o volume do banco, a lista é ordenada **por forma de rota**
+(`/app/contatos/{id}` é uma rota, não vinte) e tem teto de 60: o corte nunca
+tira uma rota inteira, só repetição.
+
+**O login também foi endurecido, e por uma falha observada.** Numa execução em
+que o contêiner do painel tinha acabado de reiniciar, os dois `fill` rodaram, o
+clique saiu, **nenhuma requisição para `/api/auth/login` foi observada** e a tela
+mostrava *"Informe o e-mail. Informe a senha."*: `domcontentloaded` chega antes
+da hidratação do React, e o input controlado hidratado depois volta ao valor
+inicial — vazio. A fumaça agora **confere que os campos ficaram preenchidos**
+(até 3 tentativas) antes de clicar, e diz isso por extenso quando não ficam.
+Sem essa conferência o sintoma é sempre o mesmo — *"o login não saiu de
+/login"* — para meia dúzia de causas diferentes.
+
 ### `internal/router/contract_test.go` — teste de contrato (roda sem banco)
 
 Varre a tabela declarativa de `routes.go` e a compara com `openapi/openapi.yaml`:
@@ -262,7 +414,20 @@ Varre a tabela declarativa de `routes.go` e a compara com `openapi/openapi.yaml`
 
 O menu do corretor: sem Configurações, sem Relatórios, sem Inventário, sem Canais e sem Financeiro — recebíveis, pagáveis e conciliação são o "financeiro global" que a spec §11 fecha para ele. **Comissões aparece**, e é assim mesmo: a matriz dá `finance.commissions` em escopo `own`, que é o painel de comissões previstas e pagas prometido no §11. Também garante que a filtragem só **tira** itens — perfil nenhum ganha acesso por omissão — e que as abas do celular apontam para telas que os três perfis alcançam.
 
-> A nota de defeito que vivia aqui saiu: `allowedRoles` deixou de existir em `navigation.ts`, cada item passou a declarar **um recurso do catálogo**, e `/app/agenda` entrou na lista de destinos do corretor — que é onde a matriz do seed sempre disse que ela estava.
+> A nota de defeito que vivia aqui saiu: `allowedRoles` deixou de existir em `navigation.ts` e cada item passou a declarar **um recurso do catálogo**.
+
+**Na rodada de 27/08 este teste ganhou a metade que faltava, e ela pegou um caso
+de verdade no meio da rodada.** Ele agora varre `src/app/(app)/**/page.tsx` e
+compara com o menu **nos dois sentidos**: item de menu sem tela reprova, e tela
+que existe marcada como `emConstrucao` reprova nomeando a linha e a palavra a
+apagar. `/app/reservas` foi marcada como em construção e, minutos depois, a tela
+chegou — a suíte ficou vermelha sozinha dizendo `"Reservas → /app/reservas: a
+tela existe; apague `emConstrucao: true` da linha dele"`.
+
+O que isso protege é concreto e foi medido: o menu inteiro fica na barra do
+desktop, então cada visita ao `/app` disparava a rajada de prefetch. Com 13
+destinos para 5 telas eram **9 respostas 404 por visita**; com o menu honesto,
+**0**. A fumaça deixou de tolerar esse ruído e passou a reprovar nele.
 
 ### `apps/admin/src/lib/auth/permissions.test.ts`
 
@@ -273,7 +438,7 @@ Guarda o vocabulário: todo código de recurso citado pelo painel — no mapa de
 A regra 8 dita como propriedade: **o menu é função da matriz, não do nome do perfil**. Os três casos passam:
 
 - *dois perfis com a mesma matriz enxergam o mesmo menu* — duas pessoas com matriz idêntica, diferentes só no `code`, recebem o mesmo menu. Era a prova mais curta do defeito antigo;
-- *não esconde tela que a matriz concedeu* — o corretor tem `agenda` em `own` e **vê** o item;
+- *não esconde tela que a matriz concedeu* — reancorado em `/app/reservas` na rodada de 27/08. Ele cobrava `/app/agenda`, que saiu do menu quando o menu passou a anunciar só o que existe; a âncora nova é a mesma prova com uma tela que existe. Ao lado dele entrou o contrapeso — *"a agenda continua ausente por falta de TELA, não por causa do papel"* —, que é o que impede a próxima ausência de ser confundida com permissão faltando;
 - *continua escondendo o que a matriz não concede* — o controle, que separa "o menu obedece à matriz" de "o menu mostra tudo para todo mundo". Passava antes do conserto e continua passando depois, que é exatamente o que se pedia dele.
 
 O teste continua no lugar como **regressão**: ele é a única coisa que impede `allowedRoles` de voltar disfarçado na próxima tela nova.
@@ -282,115 +447,116 @@ O teste continua no lugar como **regressão**: ele é a única coisa que impede 
 
 A tela de login como componente de decisão: a mensagem de erro é **a mesma** para e-mail inexistente, senha errada e bloqueio (o contrato usa um único `INVALID_CREDENTIALS`; distinguir na tela devolveria a enumeração de usuários que a API fecha de propósito), a validação segura o envio antes de gastar uma das cinco tentativas, e a tela reage ao `code`, nunca ao texto que a API mandou.
 
-## 3. Estado atual: o portão, e nove testes vermelhos em quatro defeitos
+## 3. Estado atual: o portão verde, menos o `lint` que ninguém consegue passar
 
-Medido em 26/08/2026, ao fim da rodada de correção, contra Postgres 16 efêmero
-próprio com migrations `20260826120000` e seed completo.
+Medido em 27/08/2026, ao fim da rodada de quitação de dívida técnica, contra
+Postgres 16 efêmero próprio (`whv-qa-r5`, porta 55490, `PGDATA` em `tmpfs`),
+migrations até `20260827140000` e seed completo. O stack de desenvolvimento
+ficou de pé o tempo todo e não foi tocado.
 
 ### 3.1 O portão, passo a passo
 
 | Passo de `make check` | Resultado |
 |---|---|
-| `golangci-lint run ./...` | **3 problemas** — para o `make check` aqui |
-| `pnpm lint` (`eslint src --max-warnings 0`) | ✅ zero |
+| `gofmt -l .` | ✅ vazio |
+| `go vet ./...` e `go vet -tags=integration ./...` | ✅ limpos |
+| `golangci-lint run ./...` | ❌ **11 problemas** — e `make check` **para aqui** |
+| `pnpm lint` (`eslint src --max-warnings 0`) | ✅ zero erros, zero avisos |
 | `pnpm exec tsc --noEmit` | ✅ zero |
-| `go test ./... -race -count=1` | **3 falhas** (2 pacotes) |
-| `pnpm test --run` | ✅ 13 arquivos, 93 testes |
+| `go test ./... -race -count=1` | ✅ **20 pacotes**, verde em 3 execuções seguidas |
+| `pnpm test --run` | ✅ **40 arquivos, 334 testes** |
 
-Fora do `make check`, medidos à parte:
+Como `lint` é a primeira dependência de `check`, **os testes nunca são
+alcançados por `make check`** — foram rodados um a um. Os 11 problemas estão
+todos em código de produção e nenhum em arquivo de teste (§3.3).
+
+Fora do `make check`:
 
 | | Resultado |
 |---|---|
-| `pnpm build` | ✅ 6/6 páginas, 13 rotas |
-| `migrate up` (do zero) | ✅ 6/6, `20260826120000 dirty=false` |
-| `seed` 1ª / 2ª | ✅ 278 criadas / **0 criadas, 278 inalteradas** — "nada mudou" |
-| Integração `-p 1 -race` | ✅ **14 pacotes verdes**, 1 vermelho (`internal/router`) |
-| Concorrência `-count=10` | ✅ 8 testes × 10 repetições, verde (2 min 26 s) |
+| `pnpm build` | ✅ **21 rotas**, incluindo `/app/reservas/[id]` e `/app/contatos/[id]` |
+| `migrate up` (do zero) | ✅ `20260827140000`, `dirty=false` |
+| `seed` 1ª / 2ª | ✅ `previstas 298, criadas 298` / `criadas 0, atualizadas 0, inalteradas 298` — *"nada mudou"* |
+| Integração `-p 1 -race` | ✅ **20 pacotes**, **874 testes**, **0 falhas e 0 `SKIP`** |
+| Concorrência `-count=10` | ✅ 10 testes × 10 repetições, verde |
+| `make smoke` (stack no ar) | ✅ 10 telas + **15 links internos**, sem 5xx, sem 404, sem aviso |
 
-**`golangci-lint` não está instalado na máquina de desenvolvimento e nada no
-repositório o instala** — não há `.golangci.yml`, não há alvo de ferramentas, e
-o `make check` morre em `command not found` antes de rodar um teste sequer. Foi
-preciso instalá-lo à mão (`go install …/golangci-lint@v2.1.6`) para saber o que
-ele diz. Os 3 problemas que ele encontrou estão na tabela de defeitos abaixo.
+**Zero `SKIP` é um número que vale ler.** A suíte de integração pula por
+`t.Skip` quando falta `DATABASE_URL` ou seed, e um `skip` ali é cobertura
+perdida disfarçada de verde. Rodada com `-v`, nenhum dos 874 casos foi pulado.
 
-**O CI não é o portão.** `.github/workflows/ci.yml` roda `gofmt`, `go vet`,
-`go test`, migrations, integração, `tsc --noEmit` e `pnpm build`. Ele **não**
-roda `golangci-lint`, **não** roda `pnpm lint` e **não** roda `pnpm test --run`.
-Ou seja: os 93 testes do painel e os dois lints nunca rodaram em CI, e o
-`make check` cobre coisas que o CI não cobre — e vice-versa. Enquanto os dois
-divergirem, "passou no CI" e "passou no portão" são frases diferentes.
+### 3.2 O que esta rodada mudou na suíte
 
-### 3.2 Os defeitos abertos
+**A jornada que a dívida bloqueava roda inteira pela API.** As sete escritas —
+contato, oportunidade, orçamento persistido, `/win`, confirmação, `dry_run` e
+cancelamento — passam por HTTP, sem um `INSERT` sequer. Antes da rodada, três
+das sete respondiam 404 ou não gravavam. **A dívida está quitada nesse eixo**, e
+o teste é a prova executável disso (§2).
 
-Nove testes vermelhos, **quatro causas**. Nenhum é do QA consertar.
+**Um teste de disputa que nunca era repetido virou dois testes repetidos, e a
+omissão virou guarda automática.** Os dois testes de corrida de
+`internal/router` estavam fora do regex de `TESTES_CONCORRENCIA` e rodavam uma
+vez só. Foram rebatizados e agora entram no `-count=10`; um teste novo (§2)
+impede que a próxima disputa nasça de fora da lista.
 
-| # | Defeito | Testes que derruba | De quem |
-|---|---|---|---|
-| **1** | `POST /quotes` exige `guests`; o contrato e o painel mandam `guests_count` (`disponibilidade/dto.go:182`) | 6: `TestOrcamentoAceitaOCampoQueOContratoEOPainelMandam`, `TestJornadaDaFase1DaConsultaAoCancelamento`, `TestReajusteDeTarifaNaoAlcancaVendaJaEmitida`, `TestTempoDeRespostaDoMapaEDoOrcamento`, `TestDecodeDoPedidoAcusaOsCamposObrigatorios`, `TestOrcarResponde200ENaoGravaNada` | `disponibilidade` |
-| **2** | O mapa usa `hold, confirmed` como predicado de **exibição** (`disponibilidade/repository.go:27`, usado na linha 490) | `TestOMapaContinuaMostrandoQueHouveHospedeDepoisDoCheckOut` | `disponibilidade` |
-| **3** | `audit.Middleware` não está montado em `router.go` | `TestTodaEscritaDaFase1DeixaTrilhaCompletaNoSistemaMontado` | `tech-lead` |
-| **4** | `SchemaVersionEsperada = 20260826110000`, última migration `20260826120000` | `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` | `tech-lead` |
+**Uma intermitência de três rodadas foi diagnosticada e fechada — e era do
+arreio, não do produto.** `TestLimiteDeConexoesPorUsuarioResponde429` falhava em
+`handler_test.go:667` com `lendo o erro: EOF`, sempre depois de o `429` já ter
+passado. Causa: o helper `abrir` liga incondicionalmente o leitor SSE, que sobe
+uma goroutine para **drenar `resp.Body`** — e numa resposta de recusa esse corpo
+é o envelope de erro em JSON. As duas leituras disputavam os mesmos bytes.
+Reproduzido **3 em 3** injetando 50 ms de espera antes de ler o corpo. O helper
+passou a devolver leitor **só quando a resposta é um stream** (status 200), e o
+teste ganhou a asserção estrutural correspondente. Verde em `-count=40`
+isolado, `-count=3` do pacote inteiro e três suítes completas.
 
-**O defeito 1 é o mais caro, e nasceu nesta rodada.** Não é divergência de
-documento: a tela de orçamento do painel manda `guests_count`, a API responde
-`422 {"guests":"é obrigatório."}`, e **a Fase 1 não calcula orçamento nenhum**.
-O rename foi aplicado no contrato, no painel e em `reservas`; ficou de fora o
-único lugar que atende `/quotes`. Como campo desconhecido passou a ser recusado,
-os dois lados agora se recusam mutuamente.
+**A fumaça deixou de depender da lista `TELAS`.** Ela agora bate em todo link
+`/app` que qualquer tela oferecer. Medido: 15 links além das 10 telas, entre
+eles duas subtelas de configuração que ninguém tinha posto na lista.
 
-Os dois últimos testes da linha 1 são **de unidade e eram verdes**:
-`disponibilidade/dto_test.go` e `handler_test.go` mandavam `guests` porque foi
-assim que o DTO nasceu. Teste escrito a partir da implementação em vez do
-contrato não acusa a divergência — ele a certifica. Os dois passaram a mandar
-`guests_count` e ficaram vermelhos junto com os outros quatro.
-
-**Os quatro consertos foram medidos, não deduzidos.** Aplicando as quatro
-linhas prescritas nesta tabela — o predicado de exibição separado na consulta do
-mapa, a tag `json:"guests_count"`, `r.Use(audit.Middleware)` e a constante do
-schema — e rodando a suíte: **`internal/router` inteiro fica verde**. Os
-arquivos de produção foram devolvidos byte a byte (conferido por `shasum`); o
-experimento serviu só para provar que cada teste vermelho aponta para um
-conserto real e do tamanho anunciado, e não para um requisito inventado.
-
-**O defeito 2 mostra por que a asserção vai ao endpoint.** A suíte de `reservas`
-prova a estadia preservada com uma consulta que ela mesma escreve, com o
-predicado certo — e passa. O mapa continua devolvendo `livre`.
-
-**O defeito 3 mostra a mesma armadilha na auditoria.** Cada módulo monta
-`audit.Middleware` à mão para provar que `ip` e `user_agent` chegam. Nenhum
-monta o `router.New` que roda em produção, onde as duas colunas saem `NULL`.
-
-### 3.3 Os três achados do `golangci-lint`
+### 3.3 Os 11 achados do `golangci-lint` — nenhum é de teste, nenhum é bug
 
 | Onde | O que | Juízo |
 |---|---|---|
-| `router.go:87` | `middleware.RealIP` está **deprecado por vulnerabilidade** (GHSA-3fxj-6jh8-hvhx e outros dois): ele reescreve `r.RemoteAddr` com o `X-Forwarded-For` mais à esquerda, que o cliente controla | O mais sério dos três, e fica pior com a auditoria: é exatamente esse valor que vai para `audit_log.ip`. Trilha com IP escolhido por quem se quer esconder é pior que trilha sem IP. |
-| `reservas/handler.go:150,297` | `dado := Reserva{}` sobrescrito em todos os ramos | Cosmético, sem defeito de comportamento. |
+| `cmd/api/main.go:41,165` | `os.Stderr.WriteString` e `resp.Body.Close` sem checar retorno (errcheck) | Cosmético. |
+| `cmd/migrate/main.go:167,173,179` | `banco.Close()` sem checar retorno (errcheck) — os três nasceram no `NoticeHandler` desta rodada | Cosmético, mas é código novo: fecha barato. |
+| `crm/handler.go:464,683,902` · `crm/service_oportunidades.go:1018` | atribuição inicial sobrescrita em todos os ramos (ineffassign) | Cosmético, sem defeito de comportamento. |
+| `crm/dto.go:1099` · `crm/service.go:246` | De Morgan aplicável (staticcheck) | Estilo. |
 
-### 3.4 Dois defeitos de higiene da própria suíte, corrigidos aqui
+**Nenhum deles justifica o portão estar quebrado, e é isso que os torna caros:**
+são 11 correções triviais entre a equipe e um `make check` que se completa. Está
+registrado como **D9** no roadmap.
 
-Os dois eram invisíveis num banco efêmero e destrutivos num banco de
-desenvolvimento — que é onde a suíte também roda.
+### 3.4 Os dois defeitos abertos que a suíte não pode fechar sozinha
 
-- **A suíte desativava as três contas do seed e não devolvia.**
-  `corrida_matriz_integration_test.go` e `corrida_ultimo_admin_integration_test.go`
-  faziam `UPDATE users SET active = false` **sem `WHERE` e sem `t.Cleanup`**,
-  para tornar determinística a contagem de administradores. Medido: depois de
-  uma passada, `admin@wh.local`, `gestao@wh.local` e `corretor@wh.local`
-  ficavam com `active = false` e ninguém mais entrava. **O seed não conserta**:
-  ele é idempotente por chave natural e não toca em quem já existe, então
-  rodá-lo de novo responde "nada mudou" com o ambiente quebrado. Agora passa por
-  `silenciarPopulacao`, que fotografa quem estava ativo e devolve no fim —
-  reativando **só** quem estava ativo, senão ressuscitaria as contas que o
-  próprio teste desativou de propósito. Verificado: as três sobrevivem à suíte.
-- **A limpeza engolia o erro e vazava fixture.** `audit_log.actor_id` referencia
-  `users` sem `ON DELETE` (e está certo: apagar a pessoa não pode apagar a prova
-  do que ela fez). Desde que a Fase 1 passou a auditar, o `DELETE` do usuário
-  descartável estoura `23503` — e o `_, _ =` do `t.Cleanup` escondia isso.
-  Medido: 7 usuários e 9 perfis órfãos por passada. A limpeza agora apaga a
-  trilha do usuário de teste antes de apagá-lo, e **reporta** o que não
-  conseguiu levar.
+| # | Defeito | Efeito | De quem |
+|---|---|---|---|
+| **1** | `crm_opportunities.quote_id` referencia `reservations(id)`, e a persistência de orçamento é `quotes` | A coluna virou dado morto: o `/win` funciona porque deriva o orçamento vigente de `quotes.opportunity_id`, mas o contrato afirma um fato que o schema não tem. **Nenhum teste pode acusar isso** — o comportamento está certo; o que está errado é a declaração. | `db-migrations` + `tech-lead` |
+| **2** | `contacts(property_id, doc_type, doc_number)` não tem índice único | A deduplicação por documento é garantida por `pg_advisory_xact_lock`, que protege quem passa pela API e **não** protege `psql`, importação ou outro serviço. `TestCorridaDeDocumentoNaoCriaDuasPessoas` passa — ele mede o caminho da API, e o caminho da API está certo. | `db-migrations` |
 
+Os dois são dívida **declarada**, com dono e com o passo escrito. Não escrevi
+teste vermelho para nenhum: o QA guarda comportamento observável, e nos dois
+casos o comportamento observável pela API está correto. Um teste vermelho ali
+seria teatro.
+
+### 3.5 Higiene da própria suíte
+
+Continuam valendo as duas correções da rodada anterior (a suíte devolvendo as
+contas do seed que desativa, e a limpeza que reporta o que não conseguiu levar).
+Desta rodada, três medições sobre o custo de rodar a suíte:
+
+- **Cache de build corrompido em execuções concorrentes.** Rodando
+  `go test -tags=integration` em segundo plano ao mesmo tempo que
+  `golangci-lint`, o pacote `internal/router` reprovou com
+  `could not import errors (open : no such file or directory)` — falha do
+  cache do toolchain, não do produto. Reexecutado sozinho: verde. **Não rode
+  duas ferramentas Go pesadas na mesma árvore ao mesmo tempo**; a mensagem não
+  se parece nem um pouco com a causa.
+- **Container próprio, porta própria, `tmpfs`.** As portas 55432, 55440, 55441,
+  55447, 55450, 55461, 55481 e 55484 já foram usadas por agentes desta e das
+  rodadas anteriores; a desta foi a 55490. Derrubado no fim.
+- **A suíte não encosta no banco de desenvolvimento.** Conferido depois de tudo:
+  `/api/v1/readyz` continua `schema_version 20260827140000`.
 
 ## 4. Política
 
@@ -398,10 +564,12 @@ desenvolvimento — que é onde a suíte também roda.
 - **Datas determinísticas.** Nada de `time.Now()` solto. Os cenários de calendário usam datas fixas e distantes (2031), para não colidirem com dado real nem entre si.
 - **Dinheiro em centavos inteiros.** Comparação de valor é `int64`; float em asserção de dinheiro é o mesmo bug de produção, só que no teste.
 - **Integração contra Postgres real, nunca mock de banco.** Constraint, `daterange`, escopo `own` no `WHERE` e violação de unicidade não existem fora do Postgres. Um dublê de repositório só prova que o dublê concorda com o service.
-- **Comportamento observável se pergunta ao endpoint, não ao banco.** Quando a promessa é "o mapa mostra", a asserção chama o mapa. Escrever no teste a consulta que o endpoint *deveria* fazer prova que o teste sabe a regra, não que o produto a cumpre — e o teste fica verde por cima do defeito vivo. Foi o que aconteceu com o MÉDIO 7 desta rodada (§3.2). Vale igual para middleware: suíte que monta a cadeia à mão prova o pacote, não o produto.
+- **Comportamento observável se pergunta ao endpoint, não ao banco.** Quando a promessa é "o mapa mostra", a asserção chama o mapa. Escrever no teste a consulta que o endpoint *deveria* fazer prova que o teste sabe a regra, não que o produto a cumpre — e o teste fica verde por cima do defeito vivo. Foi o que aconteceu com o MÉDIO 7 da rodada de 26/08, e é a lição de método mais cara que esta suíte já pagou. Vale igual para middleware: suíte que monta a cadeia à mão prova o pacote, não o produto.
 - **Toda asserção de recusa vem com o controle positivo ao lado.** "Recusa sinal acima do total" é satisfeito por um sistema que recusa todo sinal; "recusa reativar a unidade" é satisfeito por um sistema que nunca reativa nada. O caso legítimo que **tem** de passar mora no mesmo teste, e é ele que separa a trava certa da trava burra.
 - **Teste contra o contrato, não contra a implementação.** As asserções são sobre status, `code` de erro, envelope e efeito observável. Teste que só passa porque conhece o caminho interno do service não protege ninguém e quebra na primeira refatoração honesta.
 - **Fixture própria e limpeza própria.** Cada teste cria o que precisa com sufixo único e apaga no `t.Cleanup`. Teste que depende do estado deixado por outro falha na ordem errada.
+- **O arreio de teste é código, e erra igual.** Antes de acusar o produto por uma falha intermitente, pergunte se o helper não é a causa. A intermitência de três rodadas do `stream` era o helper `abrir` drenando o corpo da resposta por baixo de quem ia lê-lo — e o produto estava certo desde o começo. O que separou uma coisa da outra foi um experimento: injetar 50 ms de espera tornou a falha determinística (3 em 3) e apontou a corrida.
+- **Asserção frouxa passa em mutação.** "Sobrou pelo menos uma unidade" e "voltou ao número de antes" parecem a mesma frase e não são: a primeira sobrevive a um cancelamento que não libera nada, num produto com três unidades. **Toda asserção sobre estoque, saldo ou contagem compara com o valor medido antes**, nunca com um piso. A mutação é o que revela a diferença, e é por isso que ela não é opcional em teste de jornada.
 - **Defeito encontrado vira teste vermelho, não conserto.** O `qa-testes` não edita código de produção: escreve o teste que expõe o defeito, deixa falhando com mensagem em linguagem de negócio e reporta. Todo teste vermelho por defeito de produção carrega, no próprio arquivo, um bloco `⚠ ESTE TESTE ESTÁ VERMELHO E É DEFEITO DE PRODUÇÃO` dizendo a causa e de quem é o conserto.
 
 ## 5. Como ler uma falha
@@ -410,8 +578,9 @@ A mensagem de falha é escrita para quem **não** está com o código aberto. `"
 
 ## 6. O que ainda não existe
 
-- **e2e (Playwright)** — `tests/e2e/` continua sem suíte. As telas da Fase 1 existem (inventário, tarifário, calendário, política, orçamento), mas nenhuma delas fala com uma API montada: os módulos só foram ligados ao `router.New` no fim desta rodada. A suíte e2e entra quando houver um ambiente com API e painel de pé ao mesmo tempo — login por perfil, emitir pré-reserva pela tela, cancelar aplicando política.
+- **e2e de jornada (Playwright)** — `apps/admin/e2e/` hoje tem a **fumaça**, que percorre 10 telas e 15 links com o navegador de verdade, mas ela **não executa nenhuma escrita**: navega, lê e confere. Continua faltando a jornada pela TELA — emitir a pré-reserva clicando, confirmar o sinal no diálogo, cancelar lendo o número da simulação. Ela é a única camada que provaria que a Server Action, o BFF e a API concordam sobre o corpo de escrita; hoje isso é conferido por um teste de forma (`corpo-de-escrita.test.ts`), que é **one-way** (painel → Go) e por construção não vê campo novo que só existe do lado Go. O ambiente para escrevê-la já existe (`make smoke-stack`); o que falta é a escrita ser reversível — uma venda de teste na tela deixa reserva no banco de desenvolvimento, e a fumaça é rodada em cima do ambiente de todo mundo.
 - **Mesa de 20 cenários de tarifa e teste de propriedade** (spec §4) — o motor de `internal/domain/booking` está implementado e a jornada confere os valores da Tabela V1 ponta a ponta, mas a mesa completa de 20 combinações (feriado × fim de semana × período especial × evento × desconto) ainda não foi escrita. É o próximo alvo natural: é teste puro, sem banco, e cada linha da mesa é uma conversa de venda que já aconteceu.
 - **O limite comercial de bloqueio (8 unidades × 364 dias) não tem teste porque não tem dono.** A revisão mediu o corretor fechando a Cobertura por dois meses de alta temporada com um `POST /blocks`. O `db-migrations` decidiu, com razão, que tamanho de bloqueio é regra de negócio e pertence a `internal/domain`, não a um `CHECK`; `reservas` não o implementou por ser pasta alheia. Ninguém o pegou. **Não escrevi teste vermelho para ele**: o QA guarda requisito acordado, e este ainda é proposta — a spec §11 não fixa limite nenhum. Precisa de decisão comercial antes de virar teste.
-- **`pii_access_log`** (trilha de LEITURA de dado pessoal, LGPD, spec §16) não existe nem em código nem em teste. O `audit_log` cobre escrita; quem consultou o telefone de um hóspede não deixa rastro.
+- ~~**`pii_access_log`**~~ — **pago nesta rodada.** A tabela existia desde `20260820120000` e nunca havia sido escrita por linha nenhuma de Go; agora `GET /contacts/{id}` e `/contacts/{id}/export` gravam, e o módulo de contatos tem teste de integração para isso. O que **falta** é o helper morar em `internal/platform/pii`, irmão de `audit`: hoje ele vive dentro de `contatos/pii.go`, e a próxima tela que mostrar dado pessoal (financeiro, hóspedes de uma reserva, chat) teria de importar o módulo de contatos para conseguir a trilha. É dívida com dono declarado.
+- **A mesa de PII na auditoria não tem controle negativo em `internal/router`.** `contatos/auditoria.go` mascara nome e telefone antes de gravar em `audit_log`, e o próprio módulo prova isso. O que não existe é a varredura no **sistema montado** — o equivalente de `TestTodaEscritaDaFase1DeixaTrilhaCompletaNoSistemaMontado` para PII: uma passada por `audit_log` inteiro atrás de telefone em formato E.164 e de nome de contato em claro. É teste barato e é o tipo de coisa que só quebra quando um módulo novo esquece de mascarar.
 - **Carga sustentada.** O desempenho está medido por requisição isolada (§2). Ninguém mediu ainda o comportamento com dezenas de operadores simultâneos no mapa durante a véspera de Réveillon.

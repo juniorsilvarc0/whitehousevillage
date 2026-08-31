@@ -39,15 +39,30 @@ type repositorio interface {
 type Servico struct {
 	repo repositorio
 
-	// tx entra pelo contrato de construtor combinado entre os módulos. As três
-	// rotas deste módulo são de LEITURA — POST /quotes calcula e não grava —
-	// então nenhuma abre transação. Fica guardado para o dia em que o orçamento
-	// passar a persistir (ver relatório: a tabela `quotes` não existe).
+	// escrita é o MESMO repositório, no tipo concreto. Ela existe porque a
+	// emissão do orçamento (`POST /quotes` com `persist: true`) grava, e escrita
+	// não tem dublê: o que a interface `repositorio` protege é a MONTAGEM da
+	// resposta de calendário, que é onde a lógica de tela mora e onde o teste
+	// sem Postgres tem valor. Obrigar `repoFalso` a fingir dez métodos de
+	// gravação para nunca serem chamados só encheria o dublê de ruído.
+	//
+	// Quem monta o Servico com um dublê simplesmente não tem as rotas de
+	// orçamento persistido — e elas respondem erro nomeado, não nil pointer.
+	escrita *Repository
+
+	// tx é a transação do módulo. As rotas de calendário são de leitura e não
+	// abrem nenhuma; a EMISSÃO abre, porque o cabeçalho e as noites do orçamento
+	// só fazem sentido comitados juntos — e é no COMMIT que a constraint
+	// `quote_nights_fecham_o_orcamento` confere que o snapshot fecha.
 	tx *db.TxManager
 }
 
 func NovoServico(repo repositorio, tx *db.TxManager) *Servico {
-	return &Servico{repo: repo, tx: tx}
+	s := &Servico{repo: repo, tx: tx}
+	if concreto, ok := repo.(*Repository); ok {
+		s.escrita = concreto
+	}
+	return s
 }
 
 // propriedade devolve a casa do requisitante. Toda consulta deste módulo é
@@ -317,6 +332,17 @@ func statusDaCelula(c CelulaBruta) string {
 // (POST /reservations) insere em stay_blocks. Por isso um orçamento pode virar
 // 409 DATE_CONFLICT na hora de virar reserva, e isso é correto.
 func (s *Servico) Orcar(ctx context.Context, e Entrada) (Orcamento, error) {
+	// GANHAR TRANSCREVE, NÃO REFAZ. Quando há um orçamento FIXADO no contexto,
+	// esta chamada devolve o snapshot emitido e o motor não roda — é assim que
+	// `/win` copia os valores congelados para a reserva em vez de reprecificar
+	// com a tabela de hoje. Ver snapshot.go, que explica o mecanismo inteiro.
+	if fixo, ok := orcamentoFixado(ctx); ok {
+		if err := conferirOFixado(fixo, e); err != nil {
+			return Orcamento{}, err
+		}
+		return fixo.Orcamento, nil
+	}
+
 	casa, err := propriedade(ctx)
 	if err != nil {
 		return Orcamento{}, err

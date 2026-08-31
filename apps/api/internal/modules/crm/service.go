@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
@@ -56,11 +57,17 @@ type Servico struct {
 	// o `/full`, o `/win` e o `/lose` devolverem exatamente o que o módulo dono
 	// dela devolve.
 	reservasRepo *reservas.Repository
-	tx           *db.TxManager
+	// orcamentos é o módulo dono da tabela `quotes`. O CRM NÃO fala SQL de
+	// orçamento: ele pergunta qual é o vigente, lê o snapshot e manda gravar a
+	// conversão. Uma tabela, um dono — e o `/win` continua sem saber calcular
+	// preço, que é o ponto da regra 1 do CLAUDE.md.
+	orcamentos *disponibilidade.Servico
+	tx         *db.TxManager
 }
 
-func NovoServico(repo *Repository, vendas *reservas.Servico, reservasRepo *reservas.Repository, tx *db.TxManager) *Servico {
-	return &Servico{repo: repo, vendas: vendas, reservasRepo: reservasRepo, tx: tx}
+func NovoServico(repo *Repository, vendas *reservas.Servico, reservasRepo *reservas.Repository,
+	orcamentos *disponibilidade.Servico, tx *db.TxManager) *Servico {
+	return &Servico{repo: repo, vendas: vendas, reservasRepo: reservasRepo, orcamentos: orcamentos, tx: tx}
 }
 
 // Resultado é o que o handler escreve nas rotas idempotentes. Existe pela mesma

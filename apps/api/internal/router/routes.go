@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
@@ -48,6 +49,23 @@ type Rota struct {
 	// permissão de uma rota tem de escrever por quê, e o revisor lê.
 	Motivo string
 
+	// NaRaiz tira a rota do prefixo `/api/v1` e a monta em `/`.
+	//
+	// Serve às SONDAS, e só a elas. Sonda de saúde não é contrato de negócio:
+	// quem a chama é o Docker, o Traefik e o orquestrador, com um caminho fixo
+	// escrito na configuração de infraestrutura — e no dia em que a API ganhar
+	// um `/api/v2`, o healthcheck do Compose não pode ter de ser reescrito
+	// junto, nem existir em duas versões.
+	//
+	// O custo de não ter isto foi medido: `curl localhost:8080/readyz` devolvia
+	// 404, contra o que o plano do projeto especifica e contra o que qualquer
+	// runbook tenta primeiro.
+	//
+	// O `Path` da tabela continua sendo `/healthz`, que é o que o teste de
+	// contrato compara com a OpenAPI — lá as duas sondas declaram `servers`
+	// próprio, apontando a raiz.
+	NaRaiz bool
+
 	Handler http.HandlerFunc
 }
 
@@ -68,6 +86,7 @@ type Deps struct {
 	Reservas        *reservas.Handler
 	CRM             *crm.Handler
 	Stream          *stream.Handler
+	Contatos        *contatos.Handler
 }
 
 // Rotas devolve a tabela completa da API v1, concatenando os grupos.
@@ -85,6 +104,11 @@ func Rotas(d Deps) []Rota {
 		rotasReservas,
 		rotasCRM,
 		rotasStream,
+		// Adaptador de uma linha: `rotasContatos` recebe o handler direto, e não
+		// `Deps`, porque foi escrito antes de o campo existir (ver o cabeçalho de
+		// rotas_contatos.go). Manter a assinatura como está custa esta linha e
+		// evita reescrever um arquivo de outro agente.
+		func(d Deps) []Rota { return rotasContatos(d.Contatos) },
 	} {
 		todas = append(todas, grupo(d)...)
 	}
@@ -96,8 +120,8 @@ func Rotas(d Deps) []Rota {
 func rotasNucleo(d Deps) []Rota {
 	return []Rota{
 		// ───────── Saúde ─────────
-		{Metodo: http.MethodGet, Path: "/healthz", Acesso: AcessoPublico, Handler: d.Saude.Vivo},
-		{Metodo: http.MethodGet, Path: "/readyz", Acesso: AcessoPublico, Handler: d.Saude.Pronto},
+		{Metodo: http.MethodGet, Path: "/healthz", Acesso: AcessoPublico, NaRaiz: true, Handler: d.Saude.Vivo},
+		{Metodo: http.MethodGet, Path: "/readyz", Acesso: AcessoPublico, NaRaiz: true, Handler: d.Saude.Pronto},
 
 		// ───────── Autenticação ─────────
 		{Metodo: http.MethodPost, Path: "/auth/login", Acesso: AcessoPublico, Handler: d.Auth.Login},

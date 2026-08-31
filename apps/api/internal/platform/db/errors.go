@@ -82,10 +82,7 @@ func MapError(err error) error {
 		return apperr.Validation(map[string]string{campo: "referência inexistente."}).WithCause(err)
 
 	case sqlstateCheck:
-		return apperr.Validation(map[string]any{
-			"constraint": pg.ConstraintName,
-			"message":    "valor fora do permitido pela regra do banco.",
-		}).WithCause(err)
+		return traduzirCheck(pg, err)
 
 	case sqlstateNotNull:
 		return apperr.Validation(map[string]string{colunaOu(pg.ColumnName, "campo"): "é obrigatório."}).WithCause(err)
@@ -120,6 +117,86 @@ func MapError(err error) error {
 	default:
 		return apperr.Internal.WithCause(err)
 	}
+}
+
+// invarianteDoBanco descreve como UMA constraint nomeada deve chegar ao cliente.
+//
+// Existe porque as invariantes de negócio deste sistema moram em constraint
+// trigger, e elas já levantam a frase certa: `pg.Message` traz o texto de
+// negócio ("White House Completa tem 1 reserva(s) de pé (WH-2026-0001): mudar
+// de all_members para one_member mudaria o que já foi vendido a essas pessoas")
+// e `pg.Hint` traz a saída. Até esta rodada tudo isso era descartado e virava
+// `422 VALIDATION_ERROR: "valor fora do permitido pela regra do banco."` — uma
+// frase que não diz o que houve nem o que fazer, e que ainda por cima
+// DISCORDAVA do contrato, que documenta 409 RESOURCE_IN_USE para o mesmo caso.
+type invarianteDoBanco struct {
+	// modelo é o erro base: define code e status. Nulo significa "isto é
+	// defeito nosso, não do pedido" — vira INTERNAL e a mensagem do banco fica
+	// só na causa (log), nunca na resposta.
+	modelo *apperr.Error
+
+	// porque explica a escolha para quem revisar. Não vai para a resposta.
+	porque string
+}
+
+// invariantesConhecidas é ALLOWLIST, e não tradução automática de toda
+// constraint. A diferença é de segurança: repassar `pg.Message` de qualquer
+// 23514 publicaria mensagem de banco que ninguém revisou — nome de coluna,
+// valor de outra linha, texto em inglês do Postgres. Aqui cada entrada foi lida
+// à mão e casa com o que a OpenAPI já promete para aquela situação.
+var invariantesConhecidas = map[string]invarianteDoBanco{
+	"unit_types_consumes_com_venda_viva": {
+		modelo: apperr.ResourceInUse,
+		porque: "trocar `consumes` com estadia viva. O contrato (PUT/PATCH /unit-types/{id}) " +
+			"documenta 409 RESOURCE_IN_USE para exatamente isto, e a guarda da aplicação já " +
+			"responde assim; a constraint é a rede embaixo dela — que precisa dar a MESMA resposta, " +
+			"senão a rede de baixo contradiz o contrato justamente quando a de cima falha.",
+	},
+	"reservation_units_composicao_completa": {
+		modelo: apperr.CompositionIncomplete,
+		porque: "casa inteira alocada pela metade. Mesmo desenho: a aplicação já devolve " +
+			"422 COMPOSITION_INCOMPLETE e a constraint adiada é a rede. O texto do banco nomeia a " +
+			"reserva e a contagem, que é mais do que a aplicação sabe dizer no momento do COMMIT.",
+	},
+	"quote_nights_fecham_o_orcamento": {
+		modelo: nil,
+		porque: "as noites gravadas não fecham com o total do orçamento. Diferente das duas " +
+			"acima, NÃO há nada que o usuário possa corrigir: quem monta quote_nights é o nosso " +
+			"código, e a mensagem do banco é instrução para o programador (\"grave uma linha em " +
+			"quote_nights para cada noite\"). Devolver 422 aqui mandaria o operador procurar erro " +
+			"num formulário que estava certo — 500 é a resposta honesta, e é o que faz `make smoke` " +
+			"reprovar em vez de deixar o defeito passar como recusa de validação.",
+	},
+}
+
+// traduzirCheck converte o 23514 em erro da aplicação.
+//
+// Constraint fora da allowlist mantém o comportamento antigo (422 genérico com
+// o nome da constraint em `details`): é o caso dos CHECKs de coluna, onde o
+// nome já é a pista e a mensagem do Postgres é inglês cru.
+func traduzirCheck(pg *pgconn.PgError, err error) error {
+	invariante, conhecida := invariantesConhecidas[pg.ConstraintName]
+	if !conhecida {
+		return apperr.Validation(map[string]any{
+			"constraint": pg.ConstraintName,
+			"message":    "valor fora do permitido pela regra do banco.",
+		}).WithCause(err)
+	}
+
+	if invariante.modelo == nil {
+		// A causa carrega Message e Hint para o log; a resposta fica com o
+		// "Erro interno." padrão.
+		return apperr.Internal.WithCause(err)
+	}
+
+	detalhes := map[string]any{"constraint": pg.ConstraintName}
+	if pg.Hint != "" {
+		detalhes["hint"] = pg.Hint
+	}
+	return invariante.modelo.
+		WithMessage(primeiroNaoVazio(pg.Message, invariante.modelo.Message)).
+		WithDetails(detalhes).
+		WithCause(err)
 }
 
 // IsUniqueViolation diz se o erro é 23505 e, quando constraints são informadas,

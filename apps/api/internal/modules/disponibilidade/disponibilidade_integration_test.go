@@ -64,6 +64,9 @@ func subir(t *testing.T, escopo string) *ambiente {
 		Permissoes: auth.NovoConjunto([]auth.Permissao{
 			{Resource: "calendar", Action: auth.AcaoVer, Scope: escopo},
 			{Resource: "quotes", Action: auth.AcaoCriar, Scope: escopo},
+			// `ver` entrou com o orçamento persistido: `GET /quotes/{id}`
+			// responde por ele, e o escopo dele é o que filtra por `owner_id`.
+			{Resource: "quotes", Action: auth.AcaoVer, Scope: escopo},
 		}),
 	}
 

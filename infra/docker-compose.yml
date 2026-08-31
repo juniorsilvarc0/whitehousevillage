@@ -81,8 +81,14 @@ services:
     ports:
       - "${API_PORT:-8080}:8080"
     # A imagem é distroless (sem shell, sem curl), então o healthcheck só pode
-    # ser o próprio binário. Depende de `cmd/api` aceitar -healthcheck e sair
-    # 0/1 contra /healthz — pendente no backend-go (ver relatório).
+    # ser o próprio binário. `cmd/api -healthcheck` sonda o /healthz local e sai
+    # 0/1 sem abrir pool nem tentar escutar porta.
+    #
+    # Enquanto a flag não existiu, esta mesma linha caía no caminho normal do
+    # binário: cada sonda SUBIA UMA SEGUNDA API, que morria em
+    # `address already in use` e saía 1. O container passou a vida `unhealthy`
+    # (272 falhas seguidas, medidas) e nenhum `depends_on: service_healthy`
+    # apontado para a API teria liberado nada.
     healthcheck:
       test: ["CMD", "/app/api", "-healthcheck"]
       interval: 10s

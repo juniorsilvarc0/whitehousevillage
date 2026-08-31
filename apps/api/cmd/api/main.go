@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,6 +21,29 @@ import (
 )
 
 func main() {
+	// `-healthcheck` roda ANTES de qualquer coisa: sonda o próprio processo por
+	// HTTP e sai 0/1, sem abrir pool, sem ler config de banco e sem tentar
+	// escutar porta.
+	//
+	// Existe porque a imagem é distroless — não há shell nem curl lá dentro, e
+	// o healthcheck do Compose só pode invocar o próprio binário. Enquanto a
+	// flag não existiu, `["CMD", "/app/api", "-healthcheck"]` caía no caminho
+	// normal: o binário SUBIA UMA SEGUNDA API a cada 10 s, ela batia em
+	// `address already in use` e saía 1. Resultado medido nesta árvore: o
+	// container ficou `unhealthy` desde o primeiro segundo, com 272 falhas
+	// seguidas, e cada sonda ainda abria uma conexão de banco antes de morrer.
+	// Um `depends_on: service_healthy` apontado para a API nunca teria liberado
+	// nada.
+	if len(os.Args) > 1 && (os.Args[1] == "-healthcheck" || os.Args[1] == "--healthcheck") {
+		if err := sondar(); err != nil {
+			// Sem logger estruturado de propósito: quem lê isto é o
+			// `docker inspect`, e ele mostra a saída crua.
+			os.Stderr.WriteString("healthcheck: " + err.Error() + "\n")
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	if err := executar(); err != nil {
 		slog.Error("api não subiu", "err", err)
 		os.Exit(1)
@@ -107,4 +131,41 @@ func nivelDeLog(nome string) slog.Level {
 		return slog.LevelInfo
 	}
 	return nivel
+}
+
+// sondar bate no /healthz do processo local e devolve erro se ele não estiver
+// servindo. É a sonda de VIDA, não de prontidão: um `/readyz` aqui marcaria o
+// container como doente sempre que o banco piscasse, e a resposta do
+// orquestrador a "doente" é derrubar quem estava de pé — trocar uma
+// indisponibilidade de segundos por uma de minutos. Quem tira a instância do
+// balanceamento com o banco defasado continua sendo o /readyz, lido pelo
+// proxy da frente.
+func sondar() error {
+	porta := os.Getenv("API_PORT")
+	if porta == "" {
+		porta = "8080"
+	}
+
+	// 127.0.0.1 e não localhost: resolver nome dentro de distroless depende de
+	// um /etc/nsswitch.conf que a imagem não tem.
+	alvo := "http://127.0.0.1:" + porta + "/healthz"
+
+	ctx, cancelar := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelar()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, alvo, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s respondeu %d", alvo, resp.StatusCode)
+	}
+	return nil
 }

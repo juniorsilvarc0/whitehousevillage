@@ -52,6 +52,39 @@ const fonte = () => FonteFalsa.ultima!;
 const CALENDAR = '{"entity":"stay_block","id":"b1","unit_id":"u1","v":7}';
 
 describe("useSSE", () => {
+  it("não reabre a conexão quando só a identidade de criarFonte muda", () => {
+    // Este teste existe por um defeito medido em produção, e não por zelo.
+    //
+    // `criarFonte` chegava ao efeito pelo valor default de um parâmetro
+    // (`criarFonte = fonteDoNavegador`). Em `next dev` esse default resolvia
+    // para a mesma referência a cada render e o efeito rodava uma vez. No build
+    // minificado ele passou a valer uma função NOVA a cada render e, por estar
+    // na lista de dependências, o efeito reabria a conexão a cada repintura:
+    // ~220 aberturas por segundo contra a API, com o painel parado no mapa.
+    //
+    // Todo o resto da suíte passa a MESMA `criarFonte` de módulo — a única
+    // forma que não podia falhar, e por isso a suíte ficou verde durante o
+    // defeito. Aqui a fábrica muda de identidade de propósito, que é o que a
+    // minificação faz, e a cobrança é uma conexão só.
+    let abertas = 0;
+    const { rerender } = renderHook(() =>
+      useSSE({
+        topicos: ["calendar"],
+        aoEvento: vi.fn(),
+        // Nova a cada render, de propósito.
+        criarFonte: (url: string) => {
+          abertas++;
+          return new FonteFalsa(url);
+        },
+      }),
+    );
+
+    for (let i = 0; i < 5; i++) rerender();
+
+    expect(abertas).toBe(1);
+  });
+
+
   it("assina os tópicos pedidos, na URL do BFF — nunca a API direto", () => {
     // `EventSource` não manda cabeçalho, e o contrato recusa token em query
     // string (ele pararia no log do proxy). O cookie httpOnly só chega em mesma

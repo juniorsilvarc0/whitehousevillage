@@ -17,8 +17,14 @@ import (
 // constante lá é editar arquivo compartilhado — e recurso é DADO (regra 8),
 // não vocabulário do Go.
 //
-// Nenhuma das três é coleção CRUD (`/availability` só tem GET, `/quotes` só tem
-// POST), então o teste dos seis verbos não as alcança — e não deve.
+// Nenhuma delas é coleção CRUD, e no caso de `/quotes` isso é ESCOLHA: a rota
+// tem POST e não GET, e `/quotes/{id}` tem só GET. Um `GET /quotes` de coleção
+// faria o par (GET+POST) virar recurso CRUD aos olhos de
+// `TestTodoRecursoCRUDExpoeOsSeisVerbos`, que passaria a exigir PUT, PATCH e
+// DELETE em `/quotes/{id}` — exatamente os três verbos que NÃO podem existir.
+// Orçamento emitido é imutável: reprecificar é emitir outro, e o anterior
+// continua legível e vence sozinho pelo `valid_until`. Está escrito assim no
+// contrato.
 func rotasDisponibilidade(d Deps) []Rota {
 	if d.Disponibilidade == nil {
 		return nil
@@ -42,6 +48,14 @@ func rotasDisponibilidade(d Deps) []Rota {
 			Metodo: http.MethodPost, Path: "/quotes",
 			Acesso: AcessoPermissao, Recurso: "quotes", Acao: auth.AcaoCriar,
 			Handler: d.Disponibilidade.Orcar,
+		},
+		// `ver` e não `criar`: reabrir um orçamento emitido é leitura. O escopo
+		// `own` do recurso `quotes` vira `AND owner_id = $usuario` no SQL — o
+		// corretor lê os orçamentos de que é dono.
+		{
+			Metodo: http.MethodGet, Path: "/quotes/{id}",
+			Acesso: AcessoPermissao, Recurso: "quotes", Acao: auth.AcaoVer,
+			Handler: d.Disponibilidade.Orcamento,
 		},
 	}
 }
