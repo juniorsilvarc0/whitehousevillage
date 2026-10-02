@@ -105,7 +105,10 @@ Configuração, uma vez só:
 2. **Chave SSH do deploy** (na sua máquina):
    ```bash
    ssh-keygen -t ed25519 -N "" -C "github-deploy-whv" -f whv_deploy
-   ssh-copy-id -i whv_deploy.pub deploy@82.29.59.229     # ou cole o .pub em ~deploy/.ssh/authorized_keys
+   # `deploy` não tem senha (--disabled-password), então ssh-copy-id não serve:
+   # quem instala a chave é o root, que já entra na VPS.
+   cat whv_deploy.pub | ssh root@82.29.59.229 'install -d -m 700 -o deploy -g deploy /home/deploy/.ssh && cat >> /home/deploy/.ssh/authorized_keys && chown deploy:deploy /home/deploy/.ssh/authorized_keys && chmod 600 /home/deploy/.ssh/authorized_keys'
+   ssh -i whv_deploy deploy@82.29.59.229 'id && docker ps --format "{{.Names}}" | head -3'   # tem de entrar sem senha
    ssh-keyscan -t ed25519 82.29.59.229                    # confira contra: sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
    ```
 3. **Leitura do repositório pela VPS** (o repositório é privado): como `deploy`,
