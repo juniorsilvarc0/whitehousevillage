@@ -1,15 +1,89 @@
 # Infraestrutura
 
-> **Leia antes: este documento descreve o ALVO de produção, e boa parte dele ainda
-> não existe.** Conferido em 02/10/2026: `infra/` tem só `docker-compose.yml` (de
-> desenvolvimento), `api.Dockerfile` e `admin.Dockerfile` (o do site está em
-> `apps/site/Dockerfile`). **Não existem** `docker-compose.prod.yml` (embora o
-> compose o cite na primeira linha), Traefik, `acme.json`, serviço de `backup`,
-> restore verificado, `/metrics`, HSTS, push de imagem para registry nem deploy.
-> O backup que existe é `make backup`, manual (reprova se o dump falhar ou vier
-> incompleto); `make restore` reprova de propósito. O worker **não** usa River: é
-> um loop próprio com um job (`holds.expire`), e desde 02/10 sobe no compose
-> padrão, sem profile. As seções 2, 3, 5, 6 e 7 são plano; a 4 é o estado.
+> **Leia antes: parte deste documento é ALVO, não estado.** Conferido em 02/10/2026.
+> **Existe**: `infra/docker-compose.prod.yml` e `infra/deploy.sh` (§0 abaixo) —
+> escritos e validados com `docker compose config`, mas **ainda não executados
+> numa VPS**. **Não existem**: serviço de `backup` automático, restore verificado,
+> `/metrics`, push de imagem para registry. O backup que existe é `make backup`,
+> manual; `make restore` reprova de propósito. O worker **não** usa River: é um
+> loop próprio com um job (`holds.expire`). As seções 2, 3, 5, 6 e 7 são plano.
+
+## 0. Deploy na VPS (82.29.59.229) sem afetar o que já roda nela
+
+A VPS já atende outros serviços. O stack de produção foi desenhado para **não
+encostar em nenhum deles**:
+
+| Garantia | Como |
+|---|---|
+| Nada fora do projeto é tocado | Nome de projeto `whv-gestao`: containers, redes, volumes e imagens com prefixo próprio. O `deploy.sh` nunca roda `down`, `prune` nem `--remove-orphans` |
+| Nenhuma porta pública | Painel e site escutam só em `127.0.0.1` (`WHV_ADMIN_PORT`, padrão 3110; `WHV_SITE_PORT`, padrão 3210). Postgres e API não publicam porta nenhuma |
+| Porta ocupada não é tomada | O `deploy.sh` confere com `ss` e **para** se a porta for de outro serviço |
+| 80/443 continuam do proxy atual | O Traefik do compose só sobe com `--proxy-proprio`, e o script recusa essa opção se 80 ou 443 estiverem ocupadas |
+
+DNS (já configurado): `www`, `gestor` e `corretor` `.whitehousevillage.com.br` → 82.29.59.229.
+`gestor` e `corretor` são o **mesmo painel**: o que cada perfil vê sai da matriz de
+permissões, não do endereço.
+
+**Primeiro deploy**, na VPS:
+
+```bash
+git clone https://github.com/juniorsilvarc0/whitehousevillage.git /opt/whv-gestao && cd /opt/whv-gestao
+cp infra/.env.production.example infra/.env.production && chmod 600 infra/.env.production
+# preencha: senhas (openssl rand -base64 48), JWT_SECRET, portas livres.
+# Para a apresentação, SEED_DEV_USERS=true cria admin/gestao/corretor @wh.local
+# com a senha de desenvolvimento — troque as senhas logo depois e volte para false.
+bash infra/deploy.sh
+```
+
+**O que já roda na VPS (medido em 02/10/2026 com `docker ps`)**: crmsup, escalakids,
+rdguara, spinchat e supabase, com estas portas no loopback: 3001, 3010, 3020, 3201,
+3203, 5433, 8001, 8080, 8090, 9000, 9001, 9010, 9011. Nenhum container publica 80/443,
+então o HTTPS é de um proxy **no host** (nginx, presumivelmente). Daí os padrões
+3110 e 3210 — e a `3201`, a primeira escolha, era justamente a do `crmsup-gateway`.
+Nomes de container deste stack começam com `whv-gestao-`, que não colide com nenhum.
+
+O script termina com uma fumaça em `127.0.0.1` (site 200, `/admin/` 404, login do
+painel 200 nos dois nomes). Falta então **o proxy que já atende 80/443** encaminhar
+os três nomes. Exemplos para os proxies mais comuns:
+
+No nginx do host, **um arquivo novo, só nosso** — nada dos sites existentes é editado:
+
+```bash
+sudo nano /etc/nginx/sites-available/whv-gestao      # conteúdo abaixo
+sudo ln -s /etc/nginx/sites-available/whv-gestao /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx         # reload, não restart: conexões vivas seguem
+sudo certbot --nginx -d www.whitehousevillage.com.br -d gestor.whitehousevillage.com.br -d corretor.whitehousevillage.com.br
+```
+
+`nginx -t` reprova antes de qualquer coisa mudar se o arquivo tiver erro, e o
+`certbot --nginx -d ...` só edita os blocos desses três nomes.
+
+```nginx
+# /etc/nginx/sites-available/whv-gestao
+server { listen 80; server_name www.whitehousevillage.com.br;
+  location / { proxy_pass http://127.0.0.1:3210; proxy_set_header Host $host;
+               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+               proxy_set_header X-Forwarded-Proto $scheme; } }
+server { listen 80; server_name gestor.whitehousevillage.com.br corretor.whitehousevillage.com.br;
+  location / { proxy_pass http://127.0.0.1:3110; proxy_set_header Host $host;
+               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+               proxy_set_header X-Forwarded-Proto $scheme;
+               # o mapa usa SSE: sem buffer e com leitura longa
+               proxy_buffering off; proxy_read_timeout 1h; } }
+```
+
+```caddy
+# Caddy (emite o certificado sozinho)
+www.whitehousevillage.com.br { reverse_proxy 127.0.0.1:3210 }
+gestor.whitehousevillage.com.br, corretor.whitehousevillage.com.br { reverse_proxy 127.0.0.1:3110 }
+```
+
+Se o proxy da VPS for um Traefik em container, ele não alcança `127.0.0.1` do
+host: use um roteador de arquivo apontando para o IP da bridge do Docker
+(`172.17.0.1:3110` / `:3210`), ou mude as portas para escutar nessa bridge.
+
+**Redeploy**: `git pull && bash infra/deploy.sh` — idempotente; migrations e seed
+só aplicam o que falta.
 
 ## 1. Ambientes
 

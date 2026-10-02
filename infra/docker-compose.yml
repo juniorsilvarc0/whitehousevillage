@@ -1,5 +1,5 @@
-# Ambiente de desenvolvimento. Produção acrescenta infra/docker-compose.prod.yml
-# (Traefik + labels + réplicas).
+# Ambiente de desenvolvimento. Produção é infra/docker-compose.prod.yml, um arquivo
+# autônomo (não override) — ver docs/infra.md §0.
 name: whitehousevillage
 
 # api, worker, migrate e seed são a MESMA imagem, trocando só o entrypoint.

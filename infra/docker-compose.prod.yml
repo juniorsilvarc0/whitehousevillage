@@ -1,0 +1,199 @@
+# Produção na VPS (82.29.59.229). Arquivo AUTÔNOMO, não um override do
+# docker-compose.yml de desenvolvimento: o de dev publica portas no host (5433,
+# 8080, 3100, 3200) e monta o código como volume, e um override do compose
+# SOMA listas de `ports` e `volumes` — não há como "tirar" uma porta publicada
+# por override. Herdar o dev seria pôr o Postgres na internet por acidente.
+#
+# A VPS JÁ RODA OUTRAS COISAS, e este stack não pode afetar nenhuma delas:
+#   - nome de projeto próprio (`whv-gestao`): containers, redes e volumes com
+#     prefixo próprio — nenhum `down`/`up` daqui alcança outro projeto;
+#   - NENHUMA porta pública por padrão: painel e site escutam só em 127.0.0.1,
+#     em portas altas configuráveis (WHV_ADMIN_PORT, WHV_SITE_PORT), e o proxy
+#     que já atende 80/443 na VPS encaminha os três nomes para elas;
+#   - o Traefik deste arquivo só sobe com `--profile proxy-proprio`, para uma
+#     VPS sem proxy nenhum. O deploy.sh se recusa a ligá-lo se 80 ou 443 já
+#     estiverem ocupadas.
+#
+# Roteamento por nome (feito pelo proxy da VPS, ou pelo Traefik opcional):
+#
+#   www.whitehousevillage.com.br       → site     (apps/site, nginx)
+#   gestor.whitehousevillage.com.br    → admin    (apps/admin, Next)
+#   corretor.whitehousevillage.com.br  → admin    (o MESMO painel)
+#
+# Gestor e corretor são o mesmo app de propósito: o que cada um vê sai da
+# matriz de permissões (regra 8 do CLAUDE.md), não do endereço. Dois nomes dão
+# a cada público o seu link sem duplicar código — e sem a ilusão de que o
+# subdomínio do corretor é uma fronteira de segurança. Não é: a fronteira é o
+# RBAC da API.
+#
+# A API NÃO é publicada. O painel é BFF (o navegador nunca fala com a API) e o
+# site ainda não chama a API (passo A2 do docs/unificacao-site-crm.md). Rota
+# que ninguém precisa alcançar de fora não ganha nome no DNS.
+#
+# Uso: infra/deploy.sh (na VPS). Variáveis em infra/.env.production (modelo em
+# infra/.env.production.example), nunca no repositório.
+name: whv-gestao
+
+x-imagem-api: &imagem-api
+  build:
+    context: ..
+    dockerfile: infra/api.Dockerfile
+  image: whv-gestao-api:prod
+  env_file: .env.production
+  environment:
+    APP_ENV: production
+    TZ: America/Fortaleza
+  networks: [interna]
+  logging: &logs
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  traefik:
+    # Opcional: só para VPS SEM proxy próprio (ver o topo do arquivo).
+    profiles: ["proxy-proprio"]
+    # >= v3.6: as anteriores falham com o Docker Engine 29 ("client version too old").
+    image: traefik:v3.6
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=whv-gestao_borda
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL:?defina ACME_EMAIL no .env.production}
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - acme:/acme
+    networks: [borda]
+    logging: *logs
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env.production
+    environment:
+      TZ: America/Fortaleza
+    # Sem `ports`: o banco só existe na rede interna.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [interna]
+    logging: *logs
+    restart: unless-stopped
+
+  # Passo explícito, chamado pelo deploy.sh — nunca no boot da API (regra 3).
+  migrate:
+    <<: *imagem-api
+    profiles: ["tools"]
+    entrypoint: ["/app/migrate"]
+    command: ["up"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  seed:
+    <<: *imagem-api
+    profiles: ["tools"]
+    entrypoint: ["/app/seed"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    <<: *imagem-api
+    environment:
+      APP_ENV: production
+      API_PORT: "8080"
+      TZ: America/Fortaleza
+    healthcheck:
+      test: ["CMD", "/app/api", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  worker:
+    <<: *imagem-api
+    entrypoint: ["/app/worker"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  admin:
+    build:
+      context: ..
+      dockerfile: infra/admin.Dockerfile
+    image: whv-gestao-admin:prod
+    environment:
+      API_INTERNAL_URL: http://api:8080
+      # Next standalone escuta em $HOSTNAME, e o Docker preenche HOSTNAME com o
+      # id do container. Fixar 0.0.0.0 tira a dependência dessa coincidência.
+      HOSTNAME: 0.0.0.0
+      TZ: America/Fortaleza
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [interna, borda]
+    # Só no loopback: o proxy da VPS chega aqui; a internet não.
+    ports:
+      - "127.0.0.1:${WHV_ADMIN_PORT:-3110}:3000"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.painel.rule=Host(`gestor.whitehousevillage.com.br`) || Host(`corretor.whitehousevillage.com.br`)
+      - traefik.http.routers.painel.entrypoints=websecure
+      - traefik.http.routers.painel.tls.certresolver=le
+      - traefik.http.routers.painel.middlewares=seguranca@docker
+      - traefik.http.services.painel.loadbalancer.server.port=3000
+      # Cabeçalhos de segurança, definidos uma vez e usados pelos dois roteadores.
+      - traefik.http.middlewares.seguranca.headers.stsSeconds=31536000
+      - traefik.http.middlewares.seguranca.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.seguranca.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.seguranca.headers.frameDeny=true
+      - traefik.http.middlewares.seguranca.headers.referrerPolicy=strict-origin-when-cross-origin
+    logging: *logs
+    restart: unless-stopped
+
+  site:
+    build:
+      context: ..
+      dockerfile: apps/site/Dockerfile
+    image: whv-gestao-site:prod
+    environment:
+      TZ: America/Fortaleza
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks: [borda]
+    ports:
+      - "127.0.0.1:${WHV_SITE_PORT:-3210}:80"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.site.rule=Host(`www.whitehousevillage.com.br`)
+      - traefik.http.routers.site.entrypoints=websecure
+      - traefik.http.routers.site.tls.certresolver=le
+      - traefik.http.routers.site.middlewares=seguranca@docker
+      - traefik.http.services.site.loadbalancer.server.port=80
+    logging: *logs
+    restart: unless-stopped
+
+networks:
+  # `interna` não tem saída para o Traefik: Postgres, API e worker vivem aqui.
+  interna:
+  # `borda` é onde o Traefik enxerga quem ele publica: só painel e site.
+  borda:
+
+volumes:
+  pgdata:
+  acme:

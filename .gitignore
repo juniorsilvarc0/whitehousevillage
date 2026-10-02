@@ -35,3 +35,6 @@ infra/backups/
 # Artefatos locais
 /tmp/
 /scratch/
+
+# Segredos de produção (modelo em infra/.env.production.example)
+infra/.env.production
