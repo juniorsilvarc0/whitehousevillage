@@ -462,7 +462,7 @@ func (h *Handler) gravarLead(w http.ResponseWriter, r *http.Request, substituir 
 		return
 	}
 
-	dado := Lead{}
+	var dado Lead
 	if substituir {
 		dado, err = h.svc.SubstituirLead(r.Context(), id, corpo)
 	} else {
@@ -681,7 +681,7 @@ func (h *Handler) gravarOportunidade(w http.ResponseWriter, r *http.Request, sub
 		return
 	}
 
-	dado := Oportunidade{}
+	var dado Oportunidade
 	if substituir {
 		dado, err = h.svc.SubstituirOportunidade(r.Context(), id, corpo)
 	} else {
@@ -900,7 +900,7 @@ func (h *Handler) gravarAtividade(w http.ResponseWriter, r *http.Request, substi
 		return
 	}
 
-	dado := Atividade{}
+	var dado Atividade
 	if substituir {
 		dado, err = h.svc.SubstituirAtividade(r.Context(), id, corpo)
 	} else {

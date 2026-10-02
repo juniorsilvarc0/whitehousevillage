@@ -148,7 +148,7 @@ func (h *Handler) gravarCadastro(w http.ResponseWriter, r *http.Request, substit
 		return
 	}
 
-	dado := Reserva{}
+	var dado Reserva
 	if substituir {
 		dado, err = h.svc.Substituir(r.Context(), id, corpo)
 	} else {
@@ -295,7 +295,7 @@ func (h *Handler) registrarEstadia(w http.ResponseWriter, r *http.Request, entra
 		return
 	}
 
-	dado := Reserva{}
+	var dado Reserva
 	if entrada {
 		dado, err = h.svc.RegistrarCheckIn(r.Context(), id, corpo)
 	} else {

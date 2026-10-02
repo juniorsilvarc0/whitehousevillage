@@ -1016,7 +1016,7 @@ func (s *Servico) Kanban(ctx context.Context, f FiltroDoKanban) (QuadroKanban, e
 	}
 	f.SomenteMinhas, f.Usuario = somenteMinhas(ctx, RecursoOportunidades, auth.AcaoVer), u.ID
 
-	funilID := uuid.Nil
+	var funilID uuid.UUID // uuid.Nil é o valor zero; atribuir aqui seria descartado abaixo
 	if f.FunilID != nil {
 		funilID = *f.FunilID
 	} else if funilID, err = s.repo.FunilPadrao(ctx, u.PropertyID); err != nil {

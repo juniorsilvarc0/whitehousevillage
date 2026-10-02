@@ -164,19 +164,19 @@ func abrir(origem, dbURL string) (*migrate.Migrate, error) {
 
 	driver, err := postgres.WithInstance(banco, &postgres.Config{})
 	if err != nil {
-		banco.Close()
+		_ = banco.Close()
 		return nil, fmt.Errorf("abrindo o driver de migration: %w", err)
 	}
 
 	fonte, err := (&file.File{}).Open(origem)
 	if err != nil {
-		banco.Close()
+		_ = banco.Close()
 		return nil, fmt.Errorf("abrindo migrations em %s: %w", origem, err)
 	}
 
 	m, err := migrate.NewWithInstance("file", fonte, "postgres", driver)
 	if err != nil {
-		banco.Close()
+		_ = banco.Close()
 		return nil, fmt.Errorf("montando o migrate: %w", err)
 	}
 	return m, nil

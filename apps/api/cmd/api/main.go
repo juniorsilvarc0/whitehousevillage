@@ -38,7 +38,9 @@ func main() {
 		if err := sondar(); err != nil {
 			// Sem logger estruturado de propósito: quem lê isto é o
 			// `docker inspect`, e ele mostra a saída crua.
-			os.Stderr.WriteString("healthcheck: " + err.Error() + "\n")
+			// Descarte explícito: se nem escrever em stderr der, o os.Exit(1)
+			// abaixo já é o sinal que o Docker lê.
+			_, _ = os.Stderr.WriteString("healthcheck: " + err.Error() + "\n")
 			os.Exit(1)
 		}
 		os.Exit(0)
@@ -162,7 +164,7 @@ func sondar() error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("%s respondeu %d", alvo, resp.StatusCode)

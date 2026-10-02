@@ -243,6 +243,8 @@ func (s *Servico) gravarFunil(ctx context.Context, id uuid.UUID, corpo FunilAtua
 		// permitido se sobrar outro padrão ativo. Sem isso, `POST
 		// /crm/opportunities` sem `pipeline_id` passaria a falhar num endpoint
 		// que ninguém tocou — o erro apareceria longe daqui.
+		// nolint:staticcheck // QF1001: a condição diz "era o padrão e deixou de ser
+		// padrão-e-ativo"; a forma distribuída esconde essa leitura.
 		if antes.Padrao && !(padrao && ativo) {
 			outro, err := s.repo.OutroPadraoAtivo(ctx, u.PropertyID, id)
 			if err != nil {

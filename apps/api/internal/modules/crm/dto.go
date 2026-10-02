@@ -1096,6 +1096,8 @@ func corHexadecimal(v string) bool {
 		return false
 	}
 	for _, c := range v[1:] {
+		// nolint:staticcheck // QF1001: "não é dígito hexadecimal" se lê de uma vez na
+		// forma negada; aplicar De Morgan viraria uma corrente de seis comparações.
 		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
 			return false
 		}
