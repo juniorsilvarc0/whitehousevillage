@@ -82,6 +82,47 @@ Se o proxy da VPS for um Traefik em container, ele não alcança `127.0.0.1` do
 host: use um roteador de arquivo apontando para o IP da bridge do Docker
 (`172.17.0.1:3110` / `:3210`), ou mude as portas para escutar nessa bridge.
 
+### CD pelo GitHub
+
+`.github/workflows/deploy.yml`: quando o CI passa num push na `main`, o GitHub entra
+por SSH e roda o **mesmo** `infra/deploy.sh`, no commit exato que o CI aprovou. CI
+vermelho não chega na VPS; dois deploys nunca rodam juntos; há também o botão
+*Run workflow* para redeploy manual. Os segredos da aplicação **não** passam pelo
+GitHub: ficam em `infra/.env.production`, só na VPS.
+
+Configuração, uma vez só:
+
+1. **Na VPS, um usuário só para deploy** (não o root), com acesso ao Docker:
+   ```bash
+   sudo adduser --disabled-password --gecos "" deploy
+   sudo usermod -aG docker deploy
+   sudo mkdir -p /opt/whv-gestao && sudo chown deploy: /opt/whv-gestao
+   ```
+   Estar no grupo `docker` equivale a poder administrar o Docker da VPS inteira
+   (inclusive os outros projetos). Quem protege os outros projetos é o
+   `deploy.sh`, que só mexe em `whv-gestao` — e por isso o workflow não roda
+   outro comando além dele.
+2. **Chave SSH do deploy** (na sua máquina):
+   ```bash
+   ssh-keygen -t ed25519 -N "" -C "github-deploy-whv" -f whv_deploy
+   ssh-copy-id -i whv_deploy.pub deploy@82.29.59.229     # ou cole o .pub em ~deploy/.ssh/authorized_keys
+   ssh-keyscan -t ed25519 82.29.59.229                    # confira contra: sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ```
+3. **Leitura do repositório pela VPS** (o repositório é privado): como `deploy`,
+   gere outra chave (`ssh-keygen -t ed25519 -N "" -f ~/.ssh/github`), cadastre o
+   `.pub` em GitHub → repositório → Settings → *Deploy keys* (**sem** permissão de
+   escrita) e clone por SSH:
+   `GIT_SSH_COMMAND="ssh -i ~/.ssh/github" git clone git@github.com:juniorsilvarc0/whitehousevillage.git /opt/whv-gestao`,
+   depois `git -C /opt/whv-gestao config core.sshCommand "ssh -i ~/.ssh/github"`.
+4. **`infra/.env.production`** na VPS, preenchido (passo do primeiro deploy acima).
+5. **Segredos no GitHub** (Settings → Secrets and variables → Actions):
+   `VPS_HOST` = `82.29.59.229`, `VPS_USER` = `deploy`, `VPS_SSH_KEY` = conteúdo de
+   `whv_deploy` (a privada), `VPS_KNOWN_HOSTS` = a linha do `ssh-keyscan`.
+6. Opcional: Settings → Environments → `producao` → *Required reviewers*, para cada
+   deploy esperar um clique seu.
+7. **Primeiro deploy à mão** (`bash infra/deploy.sh` como `deploy`) e o nginx do
+   host (acima). Daí em diante, merge na `main` = deploy.
+
 **Redeploy**: `git pull && bash infra/deploy.sh` — idempotente; migrations e seed
 só aplicam o que falta.
 
