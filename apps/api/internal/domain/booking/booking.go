@@ -32,6 +32,7 @@ type Policy struct {
 	DiscountApprovalPct float64 // até aqui, com aprovação do proprietário
 	MinNights           map[calendar.DateType]int
 	EventDeposit        money.Cents
+	QuoteValidityDays   int // validade do orçamento emitido sem `valid_until` — ver QuoteValidUntil
 }
 
 // DiscountAuthority diz até onde a negociação pode ir sem consultar ninguém.

@@ -67,9 +67,7 @@
 .legend__item { display: flex; align-items: center; gap: 8px; font-size: var(--fs-caption); color: var(--c-text-soft); }
 .legend__dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.08); }
 .legend__dot--free { background: var(--c-free-bg); border-color: var(--c-free); }
-.legend__dot--hold { background: var(--c-hold-bg); border-color: var(--c-hold); }
 .legend__dot--busy { background: var(--c-busy-bg); border-color: var(--c-busy); }
-.legend__dot--block { background: var(--c-block-bg); border-color: var(--c-block); }
 .legend__dot--special { background: linear-gradient(135deg, #fff 55%, var(--c-gold) 55%); border-color: var(--c-gold); }
 
 /* Calendários */
@@ -104,10 +102,9 @@
 .day__p { font-size: 8.5px; letter-spacing: 0.02em; color: var(--c-text-soft); line-height: 1; }
 .day--empty { background: transparent; cursor: default; }
 .day--free { background: var(--c-free-bg); border-color: rgba(47,125,95,0.18); }
-.day--hold { background: var(--c-hold-bg); border-color: rgba(180,147,79,0.3); color: var(--c-hold); cursor: not-allowed; }
+/* Um só estado de indisponível: o público vê livre ou ocupado, nunca o motivo. */
 .day--busy { background: var(--c-busy-bg); border-color: rgba(164,65,60,0.25); color: var(--c-busy); cursor: not-allowed; }
-.day--block { background: var(--c-block-bg); border-color: rgba(138,143,139,0.3); color: var(--c-block); cursor: not-allowed; }
-.day--hold .day__p, .day--busy .day__p, .day--block .day__p { color: inherit; opacity: 0.75; }
+.day--busy .day__p { color: inherit; opacity: 0.75; }
 .day--past { opacity: 0.35; cursor: not-allowed; }
 .day--special::after {
     content: ''; position: absolute; top: 4px; right: 4px;
@@ -162,14 +159,10 @@
 .quote__signal .row { display: flex; justify-content: space-between; }
 .quote__signal b { color: var(--c-deep); }
 
-.discount { display: flex; flex-direction: column; gap: 8px; }
-.discount__head { display: flex; justify-content: space-between; font-size: var(--fs-caption); color: var(--c-text-soft); }
-.discount__head b { color: var(--c-deep); }
-.discount input[type=range] { width: 100%; accent-color: var(--c-gold); }
-.discount__hint { font-size: 11px; padding: 6px 10px; border-radius: var(--radius-md); }
-.discount__hint--ok { background: var(--c-free-bg); color: var(--c-free); }
-.discount__hint--warn { background: var(--c-hold-bg); color: var(--c-gold-dark); }
-.discount__hint--block { background: var(--c-busy-bg); color: var(--c-busy); }
+/* Avisos do orçamento (estadia mínima, capacidade). */
+.quote__hint { font-size: 11px; padding: 6px 10px; border-radius: var(--radius-md); }
+.quote__hint--warn { background: var(--c-hold-bg); color: var(--c-gold-dark); }
+.quote__hint--block { background: var(--c-busy-bg); color: var(--c-busy); }
 
 .quote__actions { display: flex; flex-direction: column; gap: var(--space-2); }
 .quote__note { font-size: 11px; color: var(--c-text-soft); text-align: center; }
@@ -191,39 +184,6 @@
 .rates tbody td:first-child { font-family: var(--font-display); font-size: 1.05rem; color: var(--c-deep); }
 .rates tbody tr:hover { background: var(--c-bg-alt); }
 .rates .hi { color: var(--c-gold-dark); font-weight: 500; }
-
-/* ═══ Agenda / reservas ═══ */
-.agenda { background: var(--c-bg-alt); }
-.agenda__list { display: grid; gap: var(--space-3); }
-.booking {
-    background: #fff; border: 1px solid var(--c-border); border-radius: var(--radius-lg);
-    padding: var(--space-4) var(--space-6); display: grid; gap: var(--space-3);
-    align-items: center; transition: border-color var(--t-fast), box-shadow var(--t-fast);
-}
-@media (min-width: 880px) { .booking { grid-template-columns: 132px 1.4fr 1fr 132px 132px; } }
-.booking:hover { border-color: var(--c-gold); box-shadow: var(--shadow-sm); }
-.booking__date { font-family: var(--font-display); font-size: 1.05rem; color: var(--c-deep); }
-.booking__unit { font-size: var(--fs-small); color: var(--c-text); }
-.booking__client { font-size: var(--fs-small); color: var(--c-text-soft); }
-.booking__value { font-family: var(--font-display); font-size: 1.1rem; color: var(--c-deep); text-align: right; }
-@media (max-width: 879px) { .booking__value { text-align: left; } }
-.booking__status { justify-self: start; }
-@media (min-width: 880px) { .booking__status { justify-self: end; } }
-
-/* ═══ Pipeline (CRM) ═══ */
-.pipeline__grid {
-    display: grid; gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-.stage {
-    background: #fff; border: 1px solid var(--c-border); border-radius: var(--radius-lg);
-    padding: var(--space-4); text-align: center;
-    transition: transform var(--t-base), border-color var(--t-base);
-}
-.stage:hover { transform: translateY(-4px); border-color: var(--c-gold); }
-.stage__n { font-family: var(--font-display); font-size: 1.9rem; color: var(--c-deep); line-height: 1; }
-.stage__l { font-size: 9.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-text-soft); margin-top: 6px; }
-.stage__bar { height: 3px; border-radius: 2px; background: var(--c-gold-soft); margin-top: var(--space-3); overflow: hidden; }
-.stage__bar i { display: block; height: 100%; background: var(--c-gold); }
 
 /* Toast */
 .toast {

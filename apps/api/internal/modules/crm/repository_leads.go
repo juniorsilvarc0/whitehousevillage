@@ -11,6 +11,7 @@ import (
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/pii"
 )
 
 // condicoes monta o WHERE e os argumentos posicionais.
@@ -73,14 +74,25 @@ const juncoesDoLead = `
 	  LEFT JOIN unit_types ut ON ut.id = l.interest_unit_type_id
 	  LEFT JOIN users u ON u.id = l.owner_id`
 
+// lerLead é a ÚNICA porta de linha para `Lead` — lista, detalhe e a resposta
+// das escritas passam por aqui. Por isso o telefone é mascarado aqui, e não em
+// cada service: o contrato manda `contact_phone_e164` SEMPRE mascarado
+// (`+*********0000`), e uma máscara por rota é a que alguém esquece na rota
+// nova. O lead guarda o interesse, não a pessoa; o número cheio mora na ficha
+// (`GET /contacts/{id}`), que registra quem leu. Nenhum código do CRM usa o
+// número cheio do lead — a busca `q` compara o valor cheio no SQL, antes.
 func lerLead(linha pgx.Row) (Lead, error) {
-	var l Lead
-	err := linha.Scan(&l.ID, &l.ContactID, &l.ContatoNome, &l.ContatoFone,
+	var (
+		l    Lead
+		fone *string
+	)
+	err := linha.Scan(&l.ID, &l.ContactID, &l.ContatoNome, &fone,
 		&l.Origem, &l.CampanhaID, &l.Status, &l.Score,
 		&l.ProdutoID, &l.ProdutoNome,
 		&l.CheckIn, &l.CheckOut, &l.Hospedes,
 		&l.DonoID, &l.DonoNome, &l.ConvertidoEm,
 		&l.OportunidadeID, &l.CriadoEm, &l.AtualizadoEm)
+	l.ContatoFone = pii.MascararTelefone(fone)
 	return l, err
 }
 

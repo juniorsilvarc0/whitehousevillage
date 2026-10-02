@@ -274,10 +274,13 @@ type ReservaCriar struct {
 	TipoEvento  *string `json:"event_type"`
 	// ContactID é obrigatório: reserva sem contato não tem a quem cobrar
 	// (`reservations.contact_id` é NOT NULL no schema).
-	ContactID   uuid.UUID  `json:"contact_id" validate:"required"`
-	BrokerID    *uuid.UUID `json:"broker_id"`
-	Origem      string     `json:"source"`
-	Observacoes *string    `json:"notes"`
+	ContactID uuid.UUID `json:"contact_id" validate:"required"`
+	// BrokerID é Opt, e não ponteiro, porque AUSENTE e `null` decidem coisas
+	// diferentes em escopo `own`: ausente grava o corretor do próprio ator,
+	// `null` grava venda direta (commission.ResolveBroker).
+	BrokerID    httpx.Opt[uuid.UUID] `json:"broker_id"`
+	Origem      string               `json:"source"`
+	Observacoes *string              `json:"notes"`
 }
 
 func (c *ReservaCriar) Normalizar() {

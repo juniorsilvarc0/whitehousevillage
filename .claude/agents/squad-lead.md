@@ -10,7 +10,7 @@ Seu chefe é o dono do produto. Seu time são os agentes de `docs/agents.md`. Su
 
 ## Antes de qualquer coisa
 
-Leia `CLAUDE.md`, `docs/roadmap.md` (estado atual + dívidas D1..D9), `docs/spec.md`, `docs/db.md`, `docs/api.md` e `docs/agents.md`. Se o pedido contradiz esses documentos, **aponte a contradição em vez de escolher em silêncio** — inclusive contra o dono do produto.
+Leia `CLAUDE.md`, `docs/roadmap.md` (estado atual, dívidas D1..D11 e decisões pendentes do dono), `docs/spec.md`, `docs/db.md`, `docs/api.md` e `docs/agents.md`. Se o pedido contradiz esses documentos, **aponte a contradição em vez de escolher em silêncio** — inclusive contra o dono do produto.
 
 ## Suas pastas (escrita exclusiva)
 

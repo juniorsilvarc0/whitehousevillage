@@ -220,9 +220,10 @@ func (h *Handler) SalvarGrade(w http.ResponseWriter, r *http.Request) {
 // respostaDaGrade escreve `{"data": [...], "meta": {...}}` com um `meta` que não
 // é o de paginação.
 //
-// Existe aqui, e não em `httpx`, pela mesma razão que os códigos de erro do
-// tarifário nascem em `erros.go`: quatro módulos estão sendo escritos em
-// paralelo nesta rodada e `httpx.go` é arquivo compartilhado de outro dono.
+// Existe aqui, e não em `httpx`, porque na rodada em que nasceu quatro módulos
+// eram escritos em paralelo e `httpx.go` é arquivo compartilhado de outro dono
+// (os códigos de erro do tarifário nasceram aqui pelo mesmo motivo e foram para
+// o apperr no F2-03).
 // `httpx.List` só aceita `httpx.Meta` (page/per_page/total) e o resumo da grade
 // não é paginação. Quando a rodada fechar, o lugar disto é um `httpx.Envelope`
 // genérico, e o formato na rede não muda em nada.

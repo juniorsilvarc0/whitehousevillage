@@ -51,14 +51,23 @@ import (
 // linha só — `detail | 44`. O vocabulário está fechado hoje e é barato mantê-lo
 // assim: quem precisa de um motivo novo acrescenta a constante aqui, e é isso
 // que faz o motivo novo aparecer para quem consulta.
+//
+// O vocabulário é o do contrato ("Dado pessoal na resposta" na OpenAPI):
+// `detail` (GET e PATCH /contacts/{id}), `export`, `rooming_list` (uma linha
+// por hóspede de GET /reservations/{id}/full) e `opportunity` (o contato de
+// GET /crm/opportunities/{id}/full).
 const (
-	MotivoFicha      = "detail"
-	MotivoExportacao = "export"
+	MotivoFicha           = "detail"
+	MotivoExportacao      = "export"
+	MotivoListaDeHospedes = "rooming_list"
+	MotivoOportunidade    = "opportunity"
 )
 
 var motivosConhecidos = map[string]bool{
-	MotivoFicha:      true,
-	MotivoExportacao: true,
+	MotivoFicha:           true,
+	MotivoExportacao:      true,
+	MotivoListaDeHospedes: true,
+	MotivoOportunidade:    true,
 }
 
 // inserePorEntidade amarra a entidade lida à coluna que a registra.
@@ -80,6 +89,15 @@ var inserePorEntidade = map[string]string{
 	"contacts": `INSERT INTO pii_access_log (actor_id, contact_id, reason) VALUES ($1, $2, $3)`,
 }
 
+// insereVariosPorEntidade é a forma em lote: uma instrução para N pessoas
+// exibidas na mesma resposta (a rooming list chega a 24). Uma instrução só é
+// também atomicidade de graça — ou entram as N linhas, ou nenhuma, e a leitura
+// aborta.
+var insereVariosPorEntidade = map[string]string{
+	"contacts": `INSERT INTO pii_access_log (actor_id, contact_id, reason)
+	             SELECT $1, alvo, $3 FROM unnest($2::uuid[]) AS alvo`,
+}
+
 var (
 	errEntidadeSemColuna  = errors.New("pii: entidade sem coluna em pii_access_log")
 	errMotivoDesconhecido = errors.New("pii: motivo fora do vocabulário de pii_access_log")
@@ -95,22 +113,54 @@ var (
 // registro do acesso não deve ser desfeito por um erro posterior de
 // serialização da resposta. O acesso ACONTECEU.
 func Registrar(ctx context.Context, exec db.DBTX, entidade string, id uuid.UUID, motivo string) error {
-	inserir, conhecida := inserePorEntidade[entidade]
+	inserir, err := sqlDoRegistro(inserePorEntidade, entidade, motivo)
+	if err != nil {
+		return err
+	}
+	if _, err := db.From(ctx, exec).Exec(ctx, inserir, atorDe(ctx), id, motivo); err != nil {
+		return db.MapError(err)
+	}
+	return nil
+}
+
+// RegistrarVarios grava UMA linha por pessoa exibida, numa instrução só, com a
+// mesma falha fechada de Registrar. A pergunta da LGPD — "quem viu o meu
+// número?" — é por pessoa, não por tela: a resposta que lista 24 hóspedes
+// grava 24 linhas.
+//
+// Lista vazia não grava nada e não é erro: reserva sem hóspede não exibiu
+// ninguém.
+func RegistrarVarios(ctx context.Context, exec db.DBTX, entidade string, ids []uuid.UUID, motivo string) error {
+	inserir, err := sqlDoRegistro(insereVariosPorEntidade, entidade, motivo)
+	if err != nil {
+		return err
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := db.From(ctx, exec).Exec(ctx, inserir, atorDe(ctx), ids, motivo); err != nil {
+		return db.MapError(err)
+	}
+	return nil
+}
+
+// sqlDoRegistro confere entidade e motivo ANTES de qualquer ida ao banco: o
+// erro de programação aparece mesmo quando a lista de pessoas vem vazia.
+func sqlDoRegistro(porEntidade map[string]string, entidade, motivo string) (string, error) {
+	inserir, conhecida := porEntidade[entidade]
 	if !conhecida {
-		return apperr.Internal.WithCause(fmt.Errorf("%w: %q", errEntidadeSemColuna, entidade))
+		return "", apperr.Internal.WithCause(fmt.Errorf("%w: %q", errEntidadeSemColuna, entidade))
 	}
 	if !motivosConhecidos[motivo] {
-		return apperr.Internal.WithCause(fmt.Errorf("%w: %q", errMotivoDesconhecido, motivo))
+		return "", apperr.Internal.WithCause(fmt.Errorf("%w: %q", errMotivoDesconhecido, motivo))
 	}
+	return inserir, nil
+}
 
-	var ator *uuid.UUID
+func atorDe(ctx context.Context) *uuid.UUID {
 	if u, autenticado := auth.UserFrom(ctx); autenticado {
 		atorID := u.ID
-		ator = &atorID
-	}
-
-	if _, err := db.From(ctx, exec).Exec(ctx, inserir, ator, id, motivo); err != nil {
-		return db.MapError(err)
+		return &atorID
 	}
 	return nil
 }

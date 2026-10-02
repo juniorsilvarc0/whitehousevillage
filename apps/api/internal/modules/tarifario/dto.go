@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/booking"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
 )
@@ -488,11 +489,9 @@ func (a MinimoAtualizar) Validar() map[string]string {
 // PoliticaComercial é versionada: a reserva grava `policy_version` na criação e
 // é essa versão que vale para ela até o fim.
 //
-// `hold_extension_hours` e `hold_max_extensions` estão nas colunas desde a
-// migration 20260826110000 e ainda NÃO aparecem no schema do contrato. Vão na
-// resposta e são aceitos na entrada de propósito: sem isso, publicar uma versão
-// nova apagaria em silêncio o limite de extensão que a gestão configurou, porque
-// a coluna cairia no DEFAULT do banco.
+// `quote_validity_days` (F2-05) é a validade do orçamento emitido sem
+// `valid_until`: quem a lê é `disponibilidade.Emitir`, pela versão que
+// precificou o orçamento, e o resultado fica congelado em `quotes.valid_until`.
 type PoliticaComercial struct {
 	ID                   uuid.UUID `json:"id"`
 	Versao               int       `json:"version"`
@@ -504,6 +503,7 @@ type PoliticaComercial struct {
 	CaucaoDeEventoCents  int64     `json:"event_deposit_cents"`
 	ExtensaoDeHoldHoras  int       `json:"hold_extension_hours"`
 	ExtensoesDeHoldMax   int       `json:"hold_max_extensions"`
+	ValidadeOrcamentoDia int       `json:"quote_validity_days"`
 	ValidoDe             Data      `json:"valid_from"`
 	CriadaEm             time.Time `json:"created_at"`
 }
@@ -511,6 +511,11 @@ type PoliticaComercial struct {
 // PoliticaComercialEntrada é o corpo do PUT. `version` NÃO é aceito: quem numera
 // é o servidor, e aceitar o número do cliente é a porta para reescrever uma
 // versão já publicada.
+//
+// Os campos `Opt` ausentes (ou `null`) HERDAM da última versão publicada — quem
+// faz a herança é o banco, copiando a linha anterior (ver
+// Repository.PublicarPoliticaComercial). Na primeira publicação da casa caem
+// no DEFAULT da coluna.
 type PoliticaComercialEntrada struct {
 	SinalPct             *float64         `json:"deposit_pct" validate:"required,gte=0,lte=100"`
 	SaldoDiasAntes       *int             `json:"balance_due_days" validate:"required,gte=0"`
@@ -520,6 +525,7 @@ type PoliticaComercialEntrada struct {
 	CaucaoDeEventoCents  httpx.Opt[int64] `json:"event_deposit_cents"`
 	ExtensaoDeHoldHoras  httpx.Opt[int]   `json:"hold_extension_hours"`
 	ExtensoesDeHoldMax   httpx.Opt[int]   `json:"hold_max_extensions"`
+	ValidadeOrcamentoDia httpx.Opt[int]   `json:"quote_validity_days"`
 	ValidoDe             *Data            `json:"valid_from" validate:"required"`
 }
 
@@ -544,6 +550,12 @@ func (e PoliticaComercialEntrada) Validar() map[string]string {
 	}
 	if v, ok := e.ExtensoesDeHoldMax.Definido(); ok && v < 0 {
 		erros["hold_max_extensions"] = "não pode ser negativo."
+	}
+	// O piso espelha o `CHECK (quote_validity_days > 0)`; o teto é a guarda de
+	// digitação do domínio (3650 no lugar de 365 congelaria o preço por dez
+	// anos em `quotes.valid_until`, sem volta).
+	if v, ok := e.ValidadeOrcamentoDia.Definido(); ok && (v < 1 || v > booking.QuoteValidityMaxDays) {
+		erros["quote_validity_days"] = fmt.Sprintf("deve estar entre 1 e %d.", booking.QuoteValidityMaxDays)
 	}
 	return erros
 }

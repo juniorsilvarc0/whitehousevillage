@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/booking"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 )
@@ -104,30 +105,54 @@ func TestSemFixacaoOrcarNaoUsaSnapshotDeOutroContexto(t *testing.T) {
 
 // ─────────────────────────── Validade ───────────────────────────────
 
-func TestValidadePadraoSaoSeteDiasAPartirDoAgoraDoBanco(t *testing.T) {
+// F2-05: sem `valid_until`, a validade é a `quote_validity_days` da política
+// que precificou o orçamento — 15 aqui, longe do antigo 7 fixo, para o teste
+// distinguir "leu a política" de "usou o número de sempre".
+func TestValidadePadraoVemDaPoliticaQuePrecificou(t *testing.T) {
 	agora := time.Date(2026, 8, 27, 15, 0, 0, 0, time.UTC)
+	repo := &repoFalso{contexto: Contexto{Politica: booking.Policy{Version: 3, QuoteValidityDays: 15}}}
+	svc := NovoServico(repo, nil)
 
-	padrao, err := validade(nil, agora)
+	padrao, err := svc.validadeDoOrcamento(context.Background(), uuid.New(), Orcamento{PolicyVersion: 3}, nil, agora)
 	if err != nil {
 		t.Fatalf("validade padrão: %v", err)
 	}
-	if esperado := agora.AddDate(0, 0, validadePadraoEmDias); !padrao.Equal(esperado) {
-		t.Fatalf("validade padrão = %s, esperado %s", padrao, esperado)
+	if esperado := agora.AddDate(0, 0, 15); !padrao.Equal(esperado) {
+		t.Fatalf("validade padrão = %s, esperado %s (15 dias da política)", padrao, esperado)
+	}
+}
+
+// Política lida sem a coluna é defeito de leitura: 500, nunca um orçamento que
+// nasce vencido e estoura no CHECK do COMMIT.
+func TestValidadeComPoliticaSemColunaEhErroInterno(t *testing.T) {
+	agora := time.Date(2026, 8, 27, 15, 0, 0, 0, time.UTC)
+	svc := NovoServico(&repoFalso{contexto: Contexto{Politica: booking.Policy{Version: 3}}}, nil)
+
+	_, err := svc.validadeDoOrcamento(context.Background(), uuid.New(), Orcamento{PolicyVersion: 3}, nil, agora)
+	if got := apperr.From(err).Code; got != apperr.Internal.Code {
+		t.Fatalf("código = %q, esperado %q (erro: %v)", got, apperr.Internal.Code, err)
 	}
 }
 
 func TestValidadeNoPassadoOuNoInstanteDaEmissaoEhRecusada(t *testing.T) {
 	agora := time.Date(2026, 8, 27, 15, 0, 0, 0, time.UTC)
+	svc := NovoServico(&repoFalso{contexto: Contexto{Politica: booking.Policy{Version: 1, QuoteValidityDays: 7}}}, nil)
 
 	for nome, pedido := range map[string]time.Time{
 		"ontem":              agora.AddDate(0, 0, -1),
 		"o próprio instante": agora, // `CHECK quotes_validade` exige estritamente maior
 	} {
 		t.Run(nome, func(t *testing.T) {
-			if _, err := validade(&pedido, agora); err == nil {
+			_, err := svc.validadeDoOrcamento(context.Background(), uuid.New(), Orcamento{PolicyVersion: 1}, &pedido, agora)
+			if err == nil {
 				t.Fatal("proposta nasceu vencida")
-			} else if apperr.From(err).Code != "VALIDATION_ERROR" {
-				t.Fatalf("código = %q", apperr.From(err).Code)
+			}
+			ae := apperr.From(err)
+			if ae.Code != "VALIDATION_ERROR" {
+				t.Fatalf("código = %q", ae.Code)
+			}
+			if d, ok := ae.Details.(map[string]string); !ok || d["valid_until"] == "" {
+				t.Fatalf("details sem valid_until: %#v", ae.Details)
 			}
 		})
 	}

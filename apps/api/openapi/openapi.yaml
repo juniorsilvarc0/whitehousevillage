@@ -29,6 +29,94 @@ info:
     saída e na coluna do banco. Número de hóspedes é `guests_count` em pedido de
     orçamento, criação, edição, remarcação e resposta — não `guests` em metade
     delas.
+
+    ## Dado pessoal na resposta: coleção mascara, ficha deixa rastro
+
+    Uma regra só para toda rota que devolve dado de uma pessoa — `contacts` e
+    tudo que o embute (lead, oportunidade, hóspede da reserva). Fixada em
+    02/10/2026 pelo item F2-23, depois desta medida, autenticado como
+    `corretor@wh.local`: `GET /contacts?per_page=100` devolveu as 11 fichas com
+    CPF e telefone completos, e `pii_access_log` ficou em 43 → 43 linhas; uma
+    única leitura de ficha levou a contagem a 44. A trilha de LGPD era
+    contornável por um parâmetro de paginação.
+
+    1. **Coleção não serve documento, telefone nem e-mail cheios.** Lista
+       paginada, quadro e kanban devolvem a máscara da tabela abaixo, e nunca
+       `birth_date` nem `notes` (texto livre não tem máscara possível). Por
+       isso coleção **não** grava `pii_access_log`: ela não entrega o dado que
+       a trilha protege.
+    2. **Leitura de UM registro que devolve o valor cheio grava
+       `pii_access_log`** — uma linha por contato exibido (`actor_id`,
+       `contact_id`, `reason`), gravada **antes** de a resposta sair. Falha
+       fechada: não conseguir gravar a linha aborta a leitura com erro, nunca
+       serve sem rastro.
+    3. **Filtro continua comparando o valor cheio, no servidor.** `doc_number`,
+       `phone` e `q` acham a pessoa exatamente como antes; a máscara é só da
+       resposta. Quem procura pelo CPF no balcão acha a linha, vê o documento
+       mascarado e abre a ficha — que registra.
+
+    Não há terceira opção. Coleção nova da Fase 2 entra mascarando (regra 1)
+    ou registrando cada pessoa exibida (regra 2): recebível com titular e
+    comissão com corretor são listas paginadas e mascaram; a rooming list é a
+    lista de UMA reserva, é tela de trabalho da recepção e registra. O teste
+    que aceita cada uma repete a medida acima: falha se um `doc_number`
+    completo aparecer numa resposta sem linha nova em `pii_access_log`.
+
+    | Campo | Máscara | Valor cheio → resposta |
+    |---|---|---|
+    | `doc_number`, `doc_type: cpf` com 11 dígitos | `***.***.` + dígitos 7–9 + `-` + os 2 verificadores | `12345677735` → `***.***.777-35` |
+    | `doc_number`, `doc_type: cnpj` com 14 dígitos | `**.***.***/` + dígitos 9–12 + `-` + os 2 verificadores | `11222333000181` → `**.***.***/0001-81` |
+    | `doc_number` em qualquer outro caso (passaporte, tipo nulo, tamanho fora do tipo) | `*` em todo caractere menos os 3 últimos; com 3 caracteres ou menos, `***` | `FX1234567` → `******567` |
+    | `phone_e164` | `+` e `*` em todo dígito menos os 4 últimos | `+5585999990000` → `+*********0000` |
+    | `email` | primeiro caractere antes do `@`, `***`, `@` e o domínio inteiro; sem `@`, `***` | `fernanda.lima@gmail.com` → `f***@gmail.com` |
+
+    `null` continua `null` — a máscara não inventa dado. E o valor mascarado
+    **nunca** é aceito de volta: num `POST`/`PUT`/`PATCH` ele é
+    `422 VALIDATION_ERROR`. Documento e telefone já caem nos validadores de
+    formato (`*` não é dígito de CPF nem pontuação de telefone); o e-mail não
+    cairia — `f***@gmail.com` é endereço válido pela RFC, conferido contra o
+    validador em uso —, e por isso `email` com `*` é recusado explicitamente
+    (ver `ContatoCriar.email`). Sem essa recusa, um formulário preenchido a
+    partir da lista gravaria a máscara por cima do endereço verdadeiro, com
+    `200` e sem erro nenhum.
+
+    **O e-mail é mascarado, e não por excesso de zelo.** Telefone e e-mail são
+    o mesmo tipo de dado — canal para alcançar a pessoa —, e mascarar só um
+    deixaria a lista exportável como mala direta da clientela da casa, página a
+    página e sem rastro: é a mesma "base inteira" que o F2-23 mediu, trocada de
+    coluna. A busca `q` continua achando por e-mail; o que se perde é copiar
+    endereços da tela, que não é uso de quem atende. O domínio fica visível
+    porque distingue `@gmail.com` de endereço corporativo sem identificar
+    ninguém sozinho.
+
+    **O nome não é mascarado**, em coleção nenhuma. É como a operação se refere
+    ao hóspede — no mapa, no kanban, na lista de reservas —, e uma lista de
+    nomes sem documento nem canal não alcança a pessoa. Mascará-lo inutilizaria
+    as telas de trabalho sem proteger o que esta regra protege.
+
+    **Usuário do sistema não é contato.** `GET /users` devolve `email` e `phone`
+    de quem opera o painel, cheios: na matriz semeada o recurso `users` só é
+    concedido ao perfil `admin` (e quem concede a outro perfil decide isso na
+    tela de perfis, com trilha), a lista é a tela de administração de acesso e
+    o e-mail é o login — mascará-lo impediria o administrador de saber de quem
+    é a conta que está desativando.
+
+    **Vocabulário de `pii_access_log.reason`**, fechado — motivo novo entra aqui
+    e em `internal/platform/pii` na mesma mudança, porque "quantas vezes leram
+    esta pessoa, e para quê?" só tem resposta com vocabulário fechado:
+
+    | `reason` | Quem grava |
+    |---|---|
+    | `detail` | `GET /contacts/{id}` e `PATCH /contacts/{id}` |
+    | `export` | `GET /contacts/{id}/export` |
+    | `rooming_list` | `GET /reservations/{id}/full` — uma linha por hóspede listado |
+    | `opportunity` | `GET /crm/opportunities/{id}/full` — o contato da oportunidade |
+
+    **Versionamento.** `docs/api.md` §8 trata como quebra mudar o que um campo
+    devolve, e mascarar `doc_number` em `/api/v1` é isso. A exceção é deliberada
+    e fica escrita: é correção de vazamento, e o único consumidor da v1 é o
+    painel deste repositório, publicado junto com a API. Abrir `/api/v2` para a
+    v1 seguir servindo CPF em texto puro seria manter o vazamento aberto.
 servers:
   - url: http://localhost:8080/api/v1
     description: Desenvolvimento
@@ -308,6 +396,15 @@ paths:
     get:
       tags: [Usuários]
       summary: Lista usuários
+      description: |
+        Devolve `email` e `phone` **cheios**, e é a exceção declarada à regra
+        "Dado pessoal na resposta" (topo deste arquivo): usuário do sistema não
+        é contato. Na matriz semeada, o recurso `users` só é concedido ao
+        perfil `admin`; a lista é a tela de administração de acesso, e o e-mail
+        é o login —
+        mascará-lo impediria o administrador de saber de quem é a conta que
+        está desativando. Dado de hóspede, lead ou corretor como **pessoa**
+        mora em `contacts` e segue a regra sem exceção.
       parameters:
         - { name: page,     in: query, schema: { type: integer, default: 1 } }
         - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
@@ -1298,10 +1395,16 @@ paths:
         - { name: page,     in: query, schema: { type: integer, default: 1 } }
         - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
         - { name: active,   in: query, schema: { type: boolean } }
-        - name: on
+        - name: "on"
           in: query
           schema: { type: string, format: date }
-          description: Traz apenas a(s) tabela(s) vigente(s) na data informada.
+          description: |
+            Traz apenas a(s) tabela(s) vigente(s) na data informada.
+
+            O nome vai **entre aspas** de propósito: em YAML 1.1, `on` sem aspas
+            é o booleano `true`, e o parâmetro chegava a gerador de cliente e a
+            validador como `name: true` — medido com `openapi-spec-validator`
+            em 02/10/2026, que reprovava o contrato inteiro por esta linha.
       responses:
         "200":
           description: OK
@@ -2086,7 +2189,7 @@ paths:
             não se reescreve nem se antedata.
           $ref: "#/components/responses/Erro"
         "422":
-          description: "`VALIDATION_ERROR` — `discount_approval_pct` menor que `discount_auto_pct`, percentual fora de 0–100 ou `hold_hours` não positivo."
+          description: "`VALIDATION_ERROR` — `discount_approval_pct` menor que `discount_auto_pct`, percentual fora de 0–100, `hold_hours` ou `hold_extension_hours` não positivo, `hold_max_extensions` negativo, ou `quote_validity_days` fora de 1–365."
           $ref: "#/components/responses/Erro"
 
   /policies/cancellation:
@@ -2167,7 +2270,9 @@ paths:
   #
   # DADO PESSOAL TEM DONO, E O DONO É O TITULAR. Três consequências que
   # atravessam todas as operações abaixo:
-  #   1. leitura de ficha individual grava `pii_access_log` (spec §16);
+  #   1. leitura de ficha individual grava `pii_access_log` (spec §16), e a
+  #      LISTA devolve documento, telefone e e-mail mascarados (F2-23) — ver
+  #      "Dado pessoal na resposta" no topo deste arquivo;
   #   2. `POST /contacts/{id}/anonymize` atende ao direito de eliminação SEM
   #      apagar o razão — o `id` sobrevive, a PII não;
   #   3. `GET /contacts/{id}/export` atende à portabilidade.
@@ -2207,6 +2312,26 @@ paths:
         sustentar a reserva antiga, e oferecê-la num seletor de novo negócio é
         reintroduzir na operação o dado que o titular mandou eliminar. Quem
         precisa auditar passa `include_anonymized=true`.
+
+        ## A lista mascara; a ficha registra
+
+        Cada linha é um `ContatoNaLista`: `doc_number`, `phone_e164` e `email`
+        **mascarados**, e sem `birth_date` nem `notes` — a regra e o formato
+        exato da máscara estão em "Dado pessoal na resposta", no topo deste
+        arquivo. Por isso esta rota **não** grava `pii_access_log`: ela não
+        serve o dado que a trilha protege. O valor cheio sai só em
+        `GET /contacts/{id}`, que registra quem leu.
+
+        Até 02/10/2026 esta rota devolvia a ficha inteira sem rastro — medido
+        como `corretor@wh.local`, que tem `contacts:ver` em `all` porque a
+        tabela não tem dono: 11 CPFs completos numa página, `pii_access_log`
+        parado em 43. O comentário do módulo dizia "a lista é a agenda do dia";
+        a premissa era falsa porque a lista servia a ficha.
+
+        **Os três filtros continuam comparando o valor cheio**, no servidor:
+        `phone=+5585999990000` e `doc_number=12345678909` acham a pessoa por
+        igualdade exata como sempre, e a linha devolvida vem mascarada. Quem
+        perguntou pelo número já o tem; quem precisa do resto abre a ficha.
       x-rbac: { recurso: contacts, acao: ver }
       parameters:
         - { name: page,     in: query, schema: { type: integer, default: 1 } }
@@ -2214,18 +2339,29 @@ paths:
         - name: q
           in: query
           schema: { type: string, minLength: 2 }
-          description: Busca por nome (trigram) ou e-mail. Não serve para deduplicar — para isso use `phone` ou `doc_number`.
+          description: Busca por nome (trigram) ou e-mail — comparando o e-mail cheio, no servidor; a resposta o devolve mascarado. Não serve para deduplicar — para isso use `phone` ou `doc_number`.
         - name: phone
           in: query
           schema: { type: string, example: "+5585999990000" }
           description: |
             **E.164 exato**, com `+` e DDI. Igualdade, não prefixo. É a consulta
-            que o inbound de WhatsApp faz antes de criar contato.
+            que o inbound de WhatsApp faz antes de criar contato. Compara o
+            valor cheio; a linha devolvida traz o telefone mascarado — quem
+            perguntou já tem o número, e o que precisa da resposta é o `id`.
         - name: doc_number
           in: query
           schema: { type: string, example: "12345678909" }
-          description: "Só dígitos, como é gravado. Igualdade exata."
-        - { name: marketing_opt_in, in: query, schema: { type: boolean }, description: "Filtra quem aceitou (ou recusou) comunicação de marketing. É por aqui que se monta uma lista de disparo sem varrer a base inteira na mão." }
+          description: "Só dígitos, como é gravado. Igualdade exata, contra o valor cheio; a resposta devolve o documento mascarado."
+        - name: marketing_opt_in
+          in: query
+          schema: { type: boolean }
+          description: |
+            Filtra quem aceitou (ou recusou) comunicação de marketing. Conta e
+            seleciona; **não** é mais uma forma de copiar endereços: o e-mail e
+            o telefone saem mascarados como em qualquer linha da lista. O
+            disparo de campanha, quando existir, é do servidor — quem recebe a
+            mensagem é escolhido por este filtro, e ninguém precisa baixar a
+            lista de endereços para isso.
         - { name: include_anonymized, in: query, schema: { type: boolean, default: false } }
         - name: sort
           in: query
@@ -2241,7 +2377,7 @@ paths:
                     properties:
                       data:
                         type: array
-                        items: { $ref: "#/components/schemas/Contato" }
+                        items: { $ref: "#/components/schemas/ContatoNaLista" }
                   - $ref: "#/components/schemas/Paginacao"
         "403": { $ref: "#/components/responses/Erro" }
         "422":
@@ -2326,11 +2462,18 @@ paths:
       tags: [Contatos]
       summary: Detalhe do contato
       description: |
-        Devolve a ficha inteira, inclusive documento e data de nascimento — e por
-        isso **grava `pii_access_log`** (ator, contato, instante), como manda a
-        spec §16. É a diferença entre esta rota e a lista: a lista serve à
-        operação do dia, a ficha é leitura de dado pessoal identificável, e a LGPD
-        pede que ela deixe rastro de quem olhou.
+        Devolve a ficha inteira, com os valores **cheios** — documento,
+        telefone, e-mail e data de nascimento — e por isso **grava
+        `pii_access_log`** (ator, contato, instante, `reason: "detail"`), como
+        manda a spec §16. É a diferença entre esta rota e a lista: a lista
+        devolve documento, telefone e e-mail mascarados e não registra; a ficha
+        é leitura de dado pessoal identificável, e a LGPD pede que ela deixe
+        rastro de quem olhou.
+
+        A linha é gravada **antes** da resposta e com falha fechada: se o
+        registro não entra, a ficha não sai. Contato inexistente ou fora do
+        alcance responde `404` sem gravar nada — registrar leitura de uuid
+        inventado encheria a trilha de acessos que não aconteceram.
 
         Contato anonimizado responde `200` com a ficha esvaziada e
         `anonymized_at` preenchido — nunca `404`. Sumir com a ficha faria o
@@ -2386,6 +2529,19 @@ paths:
         é afirmação. Desligar o opt-in limpa `consent_at` sozinho: a revogação
         não precisa de segunda chamada, e deixar a data antiga sobreviver faria o
         relatório dizer que a pessoa aceitou.
+
+        ## A resposta é a ficha cheia, e por isso registra
+
+        O `200` devolve o `Contato` inteiro — inclusive os campos que o corpo
+        **não** trouxe. Sem trilha, isto seria uma segunda porta para a ficha:
+        `PATCH {}` não muda nada, não gera linha em `audit_log` (não há
+        diferença a registrar) e devolvia documento e nascimento cheios sem
+        rastro nenhum. Por isso o `PATCH` bem-sucedido grava `pii_access_log`
+        com `reason: "detail"`, na mesma transação da escrita, como a ficha.
+
+        `POST` e `PUT` **não** gravam: a resposta deles devolve só o que o
+        próprio corpo mandou gravar (no `PUT`, campo ausente vira `null`), e a
+        escrita já está em `audit_log` com o ator.
       x-rbac: { recurso: contacts, acao: editar }
       requestBody:
         required: true
@@ -2539,7 +2695,9 @@ paths:
           interoperável"; PDF é para ler, JSON é para carregar em outro sistema.
         - **Grava `pii_access_log` com `reason: "export"`.** Exportar é a maior
           leitura de dado pessoal que o sistema faz numa chamada só; se alguma
-          leitura tem de deixar rastro, é esta.
+          leitura tem de deixar rastro, é esta. Os valores saem **cheios**: o
+          pacote é do titular, e mascarar o que ele pediu para levar seria
+          negar a portabilidade.
 
         Contato anonimizado exporta o que sobrou — o `id`, as datas e os vínculos
         financeiros, sem PII. Devolver `404` esconderia do titular a informação de
@@ -2929,7 +3087,7 @@ paths:
         - { name: q,    in: query, schema: { type: string }, description: "Busca por `code` da reserva ou nome do contato." }
         - { name: unit_type_id, in: query, schema: { type: string, format: uuid } }
         - { name: contact_id,   in: query, schema: { type: string, format: uuid } }
-        - { name: broker_id,    in: query, schema: { type: string, format: uuid } }
+        - { name: broker_id,    in: query, schema: { type: string, format: uuid }, description: "Id de `brokers` (não de `users`). Em escopo `own` o filtro só estreita o que já é do ator — nunca alarga." }
         - name: sort
           in: query
           schema: { type: string, default: -created_at, enum: [check_in, -check_in, created_at, -created_at, code, -code] }
@@ -3007,6 +3165,69 @@ paths:
         O `hold` nasce com `hold_expires_at = now() + hold_hours` da política
         (48 h por padrão). Um job expira o que vencer, libera as unidades e
         registra o evento.
+
+        ## Corretor da venda: quem pode gravar `broker_id`
+
+        `broker_id` aponta para **`brokers(id)`** — o cadastro comercial do
+        corretor, criado no F2-09 —, e **não** para `users(id)`. A partir do
+        F2-13 é esta coluna que decide **para quem vai a comissão**, e por isso
+        ela deixou de aceitar qualquer coisa. Medido em 31/08/2026, com a API no
+        ar: um UUID inventado respondeu `201` (`WH-2026-0008`), e
+        `corretor@wh.local`, com `reservations:criar` em escopo `own`, gravou a
+        venda no `broker_id` de **outro** corretor e também recebeu `201`
+        (`WH-2026-0009`). Comissão sobre um campo que o beneficiário escreve é
+        saída de caixa autorizada por quem a recebe.
+
+        O escopo é o da ação — `reservations:criar` no `POST`,
+        `reservations:editar` no `PUT`/`PATCH` —, lido da matriz, nunca do nome
+        do perfil.
+
+        **Escopo `all`** grava qualquer corretor existente, ou `null`. Ausente
+        no `POST` e no `PUT` é `null` — venda direta, que é a maioria; no
+        `PATCH`, ausente não muda. Toda mudança do campo entra em `audit_log`
+        com o valor anterior e o novo.
+
+        **Escopo `own`** só conhece dois valores: `null` e **o corretor da
+        própria conta** (`users.broker_id` do ator; `null` quando a conta não
+        tem cadastro de corretor).
+
+        - Ausente no `POST` — e no `PUT`, que volta ao padrão do escopo — grava
+          o corretor do próprio ator. Quem vende pela própria conta não precisa
+          lembrar de se atribuir a venda, e o painel não precisa saber o id.
+        - Qualquer outro valor é **`403 FORBIDDEN`**, exista esse corretor ou
+          não. Responder `422` "não existe" a quem não pode gravar nenhum outro
+          seria ensinar, por tentativa, quais ids de corretor existem.
+        - No `PUT`/`PATCH`, **trocar** o valor gravado tem mais duas condições,
+          também `403`: o valor atual tem de ser `null` ou o próprio — a venda
+          que alguém com escopo `all` atribuiu a outro corretor só se
+          reatribui com escopo `all` —, e a reserva tem de estar em `quote` ou
+          `hold`. A partir de `confirmed` a venda gera comissão (F2-13), e
+          trocar o corretor dela é transferir dinheiro entre pessoas: exige
+          escopo `all`, entra em `audit_log` e, quando o F2-13 existir, estorna
+          a comissão anterior emitindo a nova — nunca reescreve a linha.
+        - Reenviar o valor que já está gravado **não é troca** e passa em
+          qualquer estado: o formulário que devolve a reserva inteira não pode
+          falhar por carregar o corretor que já estava lá.
+
+        `403`, e não `422`, porque é recusa de **autoridade**: a reserva é do
+        ator (senão a resposta já teria sido `404`) e o valor é bem formado; o
+        que falta é o poder de atribuir a venda a outra pessoa. `details` traz
+        `{"field": "broker_id", "scope": "own", "reason": ...}`, com `reason`
+        em `not_actor_broker` (o valor pedido não é o do ator),
+        `replaces_other_broker` (a venda está atribuída a outro corretor) ou
+        `reservation_confirmed` (a reserva já saiu de `hold`). A mensagem diz
+        "corretor inválido para o seu escopo" — **nunca** o nome do corretor:
+        nome de pessoa não entra em mensagem de erro.
+
+        **Corretor inexistente**, em escopo `all`, é **`422 VALIDATION_ERROR`**
+        com `details.broker_id`. Quem garante é a FK
+        `reservations.broker_id → brokers(id)`: a violação `23503` é traduzida
+        para o campo, sem `SELECT` antes do `INSERT` — conferir antes e gravar
+        depois é TOCTOU, e a FK é a única garantia que vale sob concorrência.
+
+        A decisão é a função pura `commission.ResolveBroker`
+        (`internal/domain/commission`); o service só monta a entrada (escopo,
+        corretor do ator, valor atual, estado) e grava o que ela devolve.
       x-rbac: { recurso: reservations, acao: criar }
       parameters:
         - name: Idempotency-Key
@@ -3052,6 +3273,12 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Reserva" }
+        "403":
+          description: |
+            `FORBIDDEN` — sem `reservations:criar`, ou, em escopo `own`,
+            `broker_id` diferente de `null` e do corretor da própria conta
+            (`details.field = "broker_id"`, `details.reason = "not_actor_broker"`).
+          $ref: "#/components/responses/Erro"
         "404": { $ref: "#/components/responses/Erro" }
         "409":
           description: |
@@ -3072,6 +3299,9 @@ paths:
             entregue inteira: produto `all_members` com unidade membro inativa,
             ou produto sem nenhuma unidade ativa. `details`: `unit_type_code`,
             `expected_units`, `active_units`, `missing_unit_codes`.
+
+            `VALIDATION_ERROR` com `details.broker_id` — corretor inexistente
+            (FK `reservations.broker_id → brokers(id)`, violação `23503`).
           $ref: "#/components/responses/Erro"
 
   /reservations/{id}:
@@ -3104,6 +3334,10 @@ paths:
         ação correspondente. Deixar datas editáveis aqui seria um caminho para
         alterar `stay_blocks` sem passar pela constraint — e sem gravar a
         remarcação em lugar nenhum.
+
+        `broker_id` segue a regra de "Corretor da venda" em
+        `POST /reservations`. No `PUT`, ausente volta ao **padrão do escopo**:
+        `null` em `all`, o corretor da própria conta em `own`.
       x-rbac: { recurso: reservations, acao: editar }
       requestBody:
         required: true
@@ -3119,15 +3353,32 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Reserva" }
+        "403":
+          description: |
+            `FORBIDDEN` — em escopo `own`, a escrita trocaria `broker_id` por
+            um valor que não é `null` nem o corretor da própria conta
+            (`not_actor_broker`), tiraria a venda de outro corretor
+            (`replaces_other_broker`) ou mexeria no corretor de reserva que já
+            saiu de `hold` (`reservation_confirmed`). `details.field =
+            "broker_id"`; regra completa em `POST /reservations`.
+          $ref: "#/components/responses/Erro"
         "404": { $ref: "#/components/responses/Erro" }
         "409": { $ref: "#/components/responses/Erro" }
         "422":
-          description: "`VALIDATION_ERROR` — inclusive `guests_count` acima da capacidade do produto (`CAPACITY_EXCEEDED`)."
+          description: "`VALIDATION_ERROR` — inclusive `guests_count` acima da capacidade do produto (`CAPACITY_EXCEEDED`) e `broker_id` inexistente (`details.broker_id`, FK `reservations.broker_id → brokers(id)`)."
           $ref: "#/components/responses/Erro"
     patch:
       tags: [Reservas]
       summary: Atualiza a reserva
-      description: Campo ausente não muda nada; campo com `null` limpa. Mesmas restrições do `PUT`.
+      description: |
+        Campo ausente não muda nada; campo com `null` limpa. Mesmas restrições
+        do `PUT`.
+
+        `broker_id` segue a regra de "Corretor da venda" em
+        `POST /reservations`: em escopo `own`, só `null` ou o corretor da
+        própria conta, só sobre venda que não está atribuída a outro corretor,
+        e só enquanto a reserva está em `quote` ou `hold`. Reenviar o valor
+        gravado não é troca e passa.
       x-rbac: { recurso: reservations, acao: editar }
       requestBody:
         required: true
@@ -3143,9 +3394,14 @@ paths:
                 type: object
                 properties:
                   data: { $ref: "#/components/schemas/Reserva" }
+        "403":
+          description: "`FORBIDDEN` — mesmas recusas de `broker_id` do `PUT` (`not_actor_broker`, `replaces_other_broker`, `reservation_confirmed`)."
+          $ref: "#/components/responses/Erro"
         "404": { $ref: "#/components/responses/Erro" }
         "409": { $ref: "#/components/responses/Erro" }
-        "422": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: "`VALIDATION_ERROR` — inclusive `broker_id` inexistente (`details.broker_id`)."
+          $ref: "#/components/responses/Erro"
     delete:
       tags: [Reservas]
       summary: Descarta a reserva ainda em `quote`
@@ -3186,6 +3442,30 @@ paths:
         A `timeline` é `reservation_events`, que é **append-only**: criação,
         confirmação, extensão de hold, realocação de unidade, remarcação,
         check-in, check-out e cancelamento entram como linhas, ninguém edita.
+
+        ## A rooming list sai cheia, e por isso registra
+
+        `guests` traz nome e telefone **cheios** de cada hóspede: é a tela de
+        trabalho da recepção — é dela que se liga para quem vai chegar —, e
+        mascarar o canal ali mandaria a recepção abrir uma ficha por hóspede
+        para fazer o check-in. Então esta leitura **grava `pii_access_log`**,
+        **uma linha por hóspede listado** (`reason: "rooming_list"`,
+        `contact_id` do hóspede), antes de a resposta sair e com falha
+        fechada: se o registro não entra, a tela não sai. Reserva fora do
+        escopo responde `404` sem gravar nada.
+
+        A Completa recebe até 24 pessoas; abrir a reserva de um evento grava
+        até 24 linhas. É o custo certo: são 24 pessoas cujo telefone foi
+        exibido, e a pergunta da LGPD ("quem viu o meu número?") é por
+        pessoa, não por tela.
+
+        Duas coisas que **não** acontecem, e que a revisão confere: a resposta
+        não entra em log de aplicação nem em `audit_log` (que registra que a
+        lista **mudou**, nunca de quem para quem), e evento de tempo real
+        sobre hóspede, se existir, carrega `reservation_id` e nada mais.
+
+        A lista de reservas (`GET /reservations`) não carrega hóspede nem
+        canal de contato — só `contact_name` — e não grava.
       x-rbac: { recurso: reservations, acao: ver }
       responses:
         "200":
@@ -4380,6 +4660,11 @@ paths:
         dono — o que entra por WhatsApp antes de alguém assumir — não aparece
         para quem tem escopo `own`, e é assim que tem de ser: é fila da gestão
         até ser distribuído.
+
+        `contact_phone_e164` sai **mascarado** (`+*********0000`), como em
+        toda coleção que embute contato — ver "Dado pessoal na resposta", no
+        topo deste arquivo. Ligar para o lead é abrir a ficha do contato, que
+        registra a leitura.
       x-rbac: { recurso: crm.leads, acao: ver }
       parameters:
         - { name: page,     in: query, schema: { type: integer, default: 1 } }
@@ -4388,7 +4673,7 @@ paths:
         - { name: source,   in: query, schema: { type: string, example: whatsapp } }
         - { name: owner_id, in: query, schema: { type: string, format: uuid }, description: "Ignorado (na prática, sobreposto) para quem tem escopo `own`." }
         - { name: contact_id, in: query, schema: { type: string, format: uuid } }
-        - { name: q,        in: query, schema: { type: string }, description: "Busca por nome, e-mail ou telefone do contato." }
+        - { name: q,        in: query, schema: { type: string }, description: "Busca por nome, e-mail ou telefone do contato — comparando os valores cheios, no servidor. A resposta devolve `contact_phone_e164` mascarado." }
         - { name: from,     in: query, schema: { type: string, format: date }, description: "Recorte por `created_at`." }
         - { name: to,       in: query, schema: { type: string, format: date } }
         - { name: sort,     in: query, schema: { type: string, default: -created_at, enum: [created_at, -created_at, score, -score] } }
@@ -4793,6 +5078,13 @@ paths:
 
         `stages` vem do funil da oportunidade, não do funil default: o card
         antigo tem de desenhar a trilha em que ele realmente andou.
+
+        **Grava `pii_access_log`** (`reason: "opportunity"`, o `contact_id` da
+        oportunidade), porque `contact` traz telefone e e-mail cheios — ver
+        `ContatoResumo`. A linha entra **antes** da resposta e com falha
+        fechada; oportunidade fora do escopo responde `404` sem gravar nada.
+        A lista e o kanban (`GET /crm/opportunities`, `/kanban`) não carregam
+        canal de contato, só `contact_name`, e não gravam.
       x-rbac: { recurso: crm.opportunities, acao: ver }
       responses:
         "200":
@@ -5350,7 +5642,16 @@ components:
         broker_id:
           type: [string, "null"]
           format: uuid
-          description: Só leitura. Preenchido quando a conta é a de um corretor.
+          description: |
+            Só leitura — `brokers(id)` do cadastro comercial ligado a esta
+            conta; `null` quando a conta não é de corretor. É **este** valor que
+            o escopo `own` de reservas usa como "o corretor da própria conta":
+            o único `broker_id` que o ator `own` pode gravar numa venda.
+
+            Não é aceito em `POST`/`PUT`/`PATCH /users` (campo desconhecido,
+            `422`): vincular conta a corretor é ato do cadastro de corretores,
+            que não existe nesta fase — o CRUD de `/brokers` é do F2-17/Fase 3.
+            Até lá o vínculo só nasce fora da API (seed).
         active:  { type: boolean }
         last_login_at: { type: [string, "null"], format: date-time }
         created_at:    { type: string, format: date-time }
@@ -5756,6 +6057,23 @@ components:
         discount_auto_pct:     { type: number, example: 5,  description: "Até aqui a gestão fecha sozinha (`discount_authority = gestao`)." }
         discount_approval_pct: { type: number, example: 10, description: "Até aqui, com aprovação do proprietário (`proprietario`). Acima, `negado` — e o orçamento não sai." }
         event_deposit_cents:   { type: integer, format: int64, example: 200000, description: "Caução de evento, cobrada como recebível reembolsável." }
+        hold_extension_hours:  { type: integer, minimum: 1, example: 24, description: "Quanto cada `POST /reservations/{id}/extend-hold` acrescenta ao prazo do hold." }
+        hold_max_extensions:   { type: integer, minimum: 0, example: 1, description: "Quantas extensões um hold aceita. `0` desliga a extensão." }
+        quote_validity_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          example: 7
+          description: |
+            Validade do orçamento emitido sem `valid_until` explícito, em dias
+            a partir da emissão (`America/Fortaleza`). É a política que
+            **precificou** o orçamento que decide — a mesma versão gravada em
+            `quotes.policy_version` —, e o resultado é congelado em
+            `quotes.valid_until` na emissão: publicar outra validade amanhã não
+            estica nem encurta orçamento já emitido (regra 7 do `CLAUDE.md`).
+
+            Até a migration `20260831100000` este número era a constante
+            `validadePadraoEmDias = 7` no Go, e mudá-lo exigia recompilar.
         valid_from: { type: string, format: date }
         created_at: { type: string, format: date-time }
 
@@ -5763,6 +6081,21 @@ components:
       type: object
       description: |
         Corpo do `PUT`. `version` **não** é aceito: quem numera é o servidor.
+
+        **Campo opcional ausente HERDA da última versão publicada** — nunca cai
+        no `DEFAULT` da coluna. É a defesa contra o risco R6 da Fase 2: a cópia
+        para a versão nova é feita coluna a coluna, e coluna esquecida na cópia
+        voltava ao padrão a cada publicação, em silêncio (a gestão mudaria a
+        validade do orçamento para 15 dias, publicaria qualquer outra mudança
+        depois, e a validade voltaria a 7 sem erro e sem linha de auditoria).
+        Na primeira publicação da casa, sem versão anterior, o ausente assume
+        o padrão do banco: `event_deposit_cents` 0, `hold_extension_hours` 24,
+        `hold_max_extensions` 1, `quote_validity_days` 7.
+
+        A prova que o `backend-go` entrega com isto (F2-05): publicar uma
+        versão com todas as colunas fora do padrão, republicar alterando uma
+        só, e exigir que as outras sobrevivam — com o controle negativo de
+        tirar `quote_validity_days` do `INSERT` e ver o teste ficar vermelho.
       required: [deposit_pct, balance_due_days, hold_hours, discount_auto_pct, discount_approval_pct, valid_from]
       properties:
         deposit_pct:      { type: number, minimum: 0, maximum: 100 }
@@ -5770,7 +6103,23 @@ components:
         hold_hours:       { type: integer, minimum: 1 }
         discount_auto_pct:     { type: number, minimum: 0, maximum: 100 }
         discount_approval_pct: { type: number, minimum: 0, maximum: 100, description: "Precisa ser `>= discount_auto_pct` — a faixa de aprovação não pode ser menor que a automática." }
-        event_deposit_cents:   { type: integer, format: int64, minimum: 0, default: 0 }
+        event_deposit_cents:   { type: integer, format: int64, minimum: 0, description: "Ausente herda da última versão (0 na primeira)." }
+        hold_extension_hours:  { type: integer, minimum: 1, description: "Ausente herda da última versão (24 na primeira). Zero é `422`: extensão que não estende nada." }
+        hold_max_extensions:   { type: integer, minimum: 0, description: "Ausente herda da última versão (1 na primeira)." }
+        quote_validity_days:
+          type: integer
+          minimum: 1
+          maximum: 365
+          description: |
+            Ausente herda da última versão (7 na primeira). Fora de `1..365` é
+            `422 VALIDATION_ERROR` com `details.quote_validity_days`.
+
+            O piso é o `CHECK (quote_validity_days > 0)` do banco: validade zero
+            é orçamento que nasce vencido, recusado pela própria tela que o
+            emitiu. O teto não é regra comercial — é guarda de digitação: um
+            orçamento cuja validade passa de um ano sobrevive à tabela de
+            tarifas que o precificou, e `3650` no lugar de `365` congelaria esse
+            preço em `quotes.valid_until` por dez anos, sem volta.
         valid_from: { type: string, format: date, description: "Não pode ser anterior ao `valid_from` da vigente." }
 
     FaixaDeCancelamento:
@@ -5840,6 +6189,12 @@ components:
         A pessoa. **Uma pessoa, um registro** (spec §6): lead, hóspede, corretor
         e proprietário apontam todos para cá, e é por isso que não existe um
         cadastro de hóspede paralelo a este.
+
+        **É a ficha com os valores cheios**, e só sai em resposta de UM
+        registro: `GET /contacts/{id}` e `PATCH /contacts/{id}` (que gravam
+        `pii_access_log`), `POST` e `PUT` (que devolvem só o que o próprio
+        corpo gravou) e `/anonymize` (que devolve a ficha já esvaziada). A
+        coleção usa `ContatoNaLista`, mascarado.
       properties:
         id:         { type: string, format: uuid }
         name:       { type: string }
@@ -5879,6 +6234,62 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
+    ContatoNaLista:
+      type: object
+      description: |
+        A linha de `GET /contacts` — a pessoa como a lista precisa dela, com
+        documento, telefone e e-mail **mascarados** e sem `birth_date` nem
+        `notes`. As chaves `birth_date` e `notes` **não aparecem** (nem como
+        `null`): a lista não as usa, data de nascimento ajuda a reidentificar
+        quem tem o nome, e texto livre não tem máscara possível.
+
+        Os campos mantêm os nomes da ficha (`doc_number`, `phone_e164`,
+        `email`) para a tela trocar de fonte sem trocar de vocabulário — mas o
+        **conteúdo** é a máscara de "Dado pessoal na resposta", no topo deste
+        arquivo. Consequências para quem consome:
+
+        - `phone_e164` **não** é E.164 aqui: não serve para `tel:` nem para
+          WhatsApp. Ligar exige a ficha (`GET /contacts/{id}`), que registra.
+        - Valor mascarado não volta como entrada. Formulário de edição se
+          preenche com a ficha, nunca com esta linha — mandar `***` num
+          `PUT`/`PATCH` é `422 VALIDATION_ERROR`.
+
+        Não confundir com `ContatoResumo`, que é o contato embutido na tela da
+        oportunidade: aquele é UM registro, sai cheio e grava `pii_access_log`.
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string, description: "Cheio. O nome não é mascarado em coleção nenhuma — ver \"Dado pessoal na resposta\"." }
+        email:
+          type: [string, "null"]
+          example: "f***@gmail.com"
+          description: "**Mascarado**: primeiro caractere antes do `@`, `***`, `@` e o domínio inteiro (`fernanda.lima@gmail.com` → `f***@gmail.com`)."
+        phone_e164:
+          type: [string, "null"]
+          example: "+*********0000"
+          description: "**Mascarado**: `+` e `*` em todo dígito menos os 4 últimos (`+5585999990000` → `+*********0000`). Não é E.164 — não serve para `tel:`."
+        doc_type:   { oneOf: [{ $ref: "#/components/schemas/TipoDeDocumento" }, { type: "null" }] }
+        doc_number:
+          type: [string, "null"]
+          example: "***.***.777-35"
+          description: |
+            **Mascarado**, pela forma do `doc_type`: CPF com 11 dígitos sai
+            `***.***.777-35` (dígitos 7–9 e os verificadores); CNPJ com 14 sai
+            `**.***.***/0001-81` (dígitos 9–12 e os verificadores); qualquer
+            outro caso — passaporte, tipo nulo, tamanho fora do tipo — sai com
+            `*` em todo caractere menos os 3 últimos (`FX1234567` →
+            `******567`), ou `***` se tiver 3 caracteres ou menos.
+
+            O suficiente para o balcão conferir "é o mesmo documento que a
+            pessoa me mostrou?" sem que a página vire uma lista de CPFs.
+        city:       { type: [string, "null"] }
+        state:      { type: [string, "null"], maxLength: 2, example: CE }
+        lgpd_basis: { oneOf: [{ $ref: "#/components/schemas/BaseLegalLGPD" }, { type: "null" }] }
+        marketing_opt_in: { type: boolean }
+        consent_at:    { type: [string, "null"], format: date-time }
+        anonymized_at: { type: [string, "null"], format: date-time }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+
     VinculosDoContato:
       type: object
       description: |
@@ -5914,7 +6325,18 @@ components:
       required: [name]
       properties:
         name:       { type: string, minLength: 2, maxLength: 200 }
-        email:      { type: [string, "null"], format: email }
+        email:
+          type: [string, "null"]
+          format: email
+          description: |
+            **`*` é recusado** com `422 VALIDATION_ERROR`, embora a RFC o
+            aceite antes do `@`. É a máscara que `GET /contacts` devolve
+            (`f***@gmail.com`), e o validador de formato em uso a aprova —
+            conferido em 02/10/2026. Sem a recusa, um formulário preenchido a
+            partir da lista gravaria a máscara por cima do endereço verdadeiro,
+            com `200` e sem erro nenhum. Nenhum cadastro real deste negócio usa
+            `*` no e-mail; perder esse caso hipotético é o preço de não corromper
+            o caso comum.
         phone_e164:
           type: [string, "null"]
           example: "+5585999990000"
@@ -5946,7 +6368,7 @@ components:
         perderia.
       properties:
         name:       { type: string, minLength: 2, maxLength: 200 }
-        email:      { type: [string, "null"], format: email }
+        email:      { type: [string, "null"], format: email, description: "Mesma regra do `ContatoCriar.email`: `*` é recusado com `422`, porque é a máscara da lista." }
         phone_e164: { type: [string, "null"] }
         doc_type:   { oneOf: [{ $ref: "#/components/schemas/TipoDeDocumento" }, { type: "null" }] }
         doc_number: { type: [string, "null"] }
@@ -6010,7 +6432,13 @@ components:
             consent_at:       { type: [string, "null"], format: date-time }
         reservations:
           type: array
-          description: "Reservas com noites e valores congelados — o que ele pagou, por qual noite."
+          description: |
+            Reservas com noites e valores congelados — o que ele pagou, por qual
+            noite. **Sem `guests`**: a rooming list traz nome e telefone de
+            OUTRAS pessoas, e a portabilidade é do dado do titular — pôr o
+            acompanhante no pacote de quem pediu a exportação seria entregar
+            dado de terceiro sem base legal nenhuma. É também o que a
+            implementação já faz (`contatos/repository.go`, `Exportar`).
           items: { $ref: "#/components/schemas/ReservaCompleta" }
         leads:
           type: array
@@ -6080,18 +6508,19 @@ components:
           format: date-time
           description: |
             Até quando este preço fica de pé (`quotes.valid_until`, `NOT NULL`).
-            Ausente, vale **7 dias** a partir da emissão, em `America/Fortaleza`.
+            Ausente, vale **`quote_validity_days` dias** a partir da emissão, em
+            `America/Fortaleza` — da política comercial que precificou o
+            orçamento (a mesma de `policy_version`), e não de uma constante.
             No passado é `422 VALIDATION_ERROR` — proposta que nasce vencida não é
             proposta (`CHECK quotes_validade`).
 
             Exige `persist: true`.
 
-            > **Dívida registrada**: esses 7 dias são constante de aplicação, e
-            > "tudo que é regra comercial é dado versionado" (spec, Convenções).
-            > O lugar dele é `commercial_policies.quote_validity_days`, junto de
-            > `hold_hours` e `balance_due_days`. Enquanto a coluna não existir, o
-            > padrão fica no código — e fica escrito aqui para não virar número
-            > mágico esquecido.
+            O número era a constante `validadePadraoEmDias = 7` até a Fase 2; a
+            coluna existe desde `20260831100000` e o F2-05 a liga à emissão
+            pela função pura `booking.QuoteValidUntil`. Prova de que a
+            constante morreu: `grep -rn validadePadraoEmDias apps/api` devolve
+            zero.
         guests_count:
           type: integer
           minimum: 1
@@ -6381,7 +6810,7 @@ components:
         unit_type_name: { type: string, example: White House Completa }
         contact_id:     { type: string, format: uuid }
         contact_name:   { type: string }
-        broker_id:      { type: [string, "null"], format: uuid }
+        broker_id:      { type: [string, "null"], format: uuid, description: "O corretor da venda — `brokers(id)`, não `users(id)`. `null` é venda direta. Quem pode gravar: \"Corretor da venda\" em `POST /reservations`." }
         source:         { type: string, default: direto, example: direto }
         check_in:  { type: string, format: date }
         check_out: { type: string, format: date, description: "Exclusivo: a noite do check-out não é cobrada e a data já fica livre para outro hóspede (back-to-back)." }
@@ -6450,11 +6879,18 @@ components:
 
     HospedeDaReserva:
       type: object
-      description: Rooming list — titular e acompanhantes (`reservation_guests`).
+      description: |
+        Rooming list — titular e acompanhantes (`reservation_guests`).
+
+        Sai em leitura de UM registro (`GET /reservations/{id}/full`) com o
+        telefone **cheio**, e por isso cada hóspede exibido grava uma linha
+        em `pii_access_log` com `reason: "rooming_list"` — ver a rota. Campo
+        de documento que a rooming list ganhar (F2-22) segue a mesma regra:
+        cheio aqui, com rastro; mascarado em qualquer coleção.
       properties:
         contact_id:    { type: string, format: uuid }
         name:          { type: string }
-        phone_e164:    { type: [string, "null"], example: "+5585999990000" }
+        phone_e164:    { type: [string, "null"], example: "+5585999990000", description: "Cheio — esta leitura registra cada hóspede em `pii_access_log`." }
         is_lead_guest: { type: boolean, description: O titular da estadia. }
 
     EventoDaReserva:
@@ -6511,6 +6947,9 @@ components:
             `reservation.guests_count`, que é **quantas** foram vendidas. Os dois
             podem divergir de propósito: a reserva é de 6 hóspedes e só 2 nomes
             foram informados até agora.
+
+            Cada item exibido aqui é uma linha nova em `pii_access_log`
+            (`reason: "rooming_list"`).
           items: { $ref: "#/components/schemas/HospedeDaReserva" }
         timeline:
           type: array
@@ -6549,7 +6988,18 @@ components:
         is_event:     { type: boolean, default: false }
         event_type:   { type: [string, "null"] }
         contact_id:   { type: string, format: uuid, description: "Obrigatório: reserva sem contato não tem a quem cobrar." }
-        broker_id:    { type: [string, "null"], format: uuid }
+        broker_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            `brokers(id)` — o corretor que recebe a comissão da venda.
+
+            **Ausente** assume o padrão do escopo de `reservations:criar`:
+            `null` (venda direta) em `all`; o corretor da própria conta
+            (`users.broker_id`) em `own`. **Em escopo `own`**, qualquer valor
+            além de `null` e do próprio é `403 FORBIDDEN`. **Inexistente** é
+            `422 VALIDATION_ERROR` em `details.broker_id`, pela FK. Regra
+            completa em "Corretor da venda", `POST /reservations`.
         source:       { type: string, default: direto }
         notes:        { type: [string, "null"] }
 
@@ -6564,7 +7014,18 @@ components:
         a ação correspondente.
       properties:
         contact_id:   { type: string, format: uuid }
-        broker_id:    { type: [string, "null"], format: uuid }
+        broker_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            `brokers(id)`. No `PATCH`, ausente não muda; no `PUT`, ausente volta
+            ao padrão do escopo (`null` em `all`, o corretor da própria conta em
+            `own`). **Em escopo `own`**, trocar o valor gravado só vale para
+            `null` ou o próprio, só sobre venda não atribuída a outro corretor
+            e só com a reserva em `quote` ou `hold` — fora disso, `403
+            FORBIDDEN`. Reenviar o valor gravado não é troca. Inexistente é
+            `422 VALIDATION_ERROR`. Regra completa em "Corretor da venda",
+            `POST /reservations`.
         guests_count: { type: integer, minimum: 1, description: "Validado contra a capacidade do produto — acima dela, `CAPACITY_EXCEEDED`." }
         is_event:     { type: boolean }
         event_type:   { type: [string, "null"] }
@@ -6984,10 +7445,21 @@ components:
       type: object
       description: |
         O contato como o CRM precisa dele — o suficiente para ligar, escrever e
-        identificar. O cadastro completo é de `GET /contacts/{id}`; expor aqui só
-        o resumo evita que a tela de oportunidade vire uma segunda porta de
-        leitura de dado pessoal — a ficha completa grava `pii_access_log`, o
-        resumo embutido no card não.
+        identificar. O cadastro completo é de `GET /contacts/{id}`; aqui não vêm
+        documento, nascimento nem notas, porque a tela da oportunidade não os
+        usa.
+
+        **Telefone e e-mail saem cheios, e por isso a leitura registra.** É a
+        tela de trabalho do corretor — o `tel:` e o WhatsApp saem daqui —, e
+        mascarar o canal nela empurraria todo atendimento para a ficha. Então
+        `GET /crm/opportunities/{id}/full` grava `pii_access_log` com
+        `reason: "opportunity"` para este contato, antes de responder e com
+        falha fechada.
+
+        Até 02/10/2026 este schema dizia que "o resumo embutido no card não
+        grava". Era a terceira opção que a regra "Dado pessoal na resposta"
+        (topo deste arquivo) proíbe: valor cheio, sem máscara e sem rastro —
+        a mesma premissa de "é só a lista" que o F2-23 mediu e derrubou.
       properties:
         id:         { type: string, format: uuid }
         name:       { type: string }
@@ -7016,7 +7488,24 @@ components:
         id:           { type: string, format: uuid }
         contact_id:   { type: string, format: uuid }
         contact_name: { type: string }
-        contact_phone_e164: { type: [string, "null"] }
+        contact_phone_e164:
+          type: [string, "null"]
+          example: "+*********0000"
+          description: |
+            **Sempre mascarado** — `+` e `*` em todo dígito menos os 4 últimos —,
+            na lista, no detalhe e na resposta das escritas (regra "Dado pessoal
+            na resposta", no topo deste arquivo). Não é E.164: não serve para
+            `tel:` nem para WhatsApp.
+
+            Mascarado também no detalhe, e não só na coleção, porque o lead
+            guarda o **interesse**, não a pessoa: o telefone é do contato, e a
+            leitura dele mora num lugar só — a ficha (`GET /contacts/{id}`), que
+            registra quem leu. Servir o número cheio aqui obrigaria a gravar
+            `pii_access_log` em toda rota que devolve um lead (detalhe, criação,
+            edição) para entregar o mesmo dado que a ficha já entrega com rastro.
+
+            A busca `q` de `GET /crm/leads` continua comparando o telefone
+            cheio, no servidor.
         source:       { type: string, example: whatsapp, description: "Vocabulário aberto: `whatsapp`, `site`, `indicacao`, `ota`, `telefone`, `instagram`…" }
         campaign_id:  { type: [string, "null"], format: uuid }
         status:       { $ref: "#/components/schemas/EstadoDoLead" }

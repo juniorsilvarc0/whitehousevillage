@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Contatos de demonstração — as pessoas de mentira sem as quais nenhuma tela do
@@ -141,6 +142,19 @@ func contatosDeDemonstracao(ctx context.Context, tx pgx.Tx, st *estado) (contage
 		return c, nil
 	}
 
+	cu, err := gravarContatos(ctx, tx, st.propriedadeID, contatosDemo)
+	c.Criadas = cu.Criadas
+	c.Atualizadas = cu.Atualizadas
+	return c, err
+}
+
+// gravarContatos é o upsert de ficha por telefone, compartilhado pelas etapas
+// que semeiam pessoas: os contatos de demonstração e o contato do corretor de
+// desenvolvimento (corretores.go). Uma instrução só para as duas, e não uma
+// cópia em cada arquivo: a guarda `IS DISTINCT FROM` precisa listar exatamente
+// as colunas que o `SET` escreve, e duas cópias divergem na primeira coluna
+// nova — a linha passa a voltar como "atualizada" em toda execução.
+func gravarContatos(ctx context.Context, tx pgx.Tx, propriedade pgtype.UUID, contatos []contatoDemo) (contagem, error) {
 	// O `ON CONFLICT` precisa repetir o predicado do índice parcial: sem o
 	// `WHERE phone_e164 IS NOT NULL` o Postgres não consegue inferir qual
 	// índice arbitra o conflito e recusa a instrução.
@@ -176,18 +190,15 @@ func contatosDeDemonstracao(ctx context.Context, tx pgx.Tx, st *estado) (contage
 		        EXCLUDED.notes)
 		RETURNING (xmax = 0)`
 
-	cu, err := upsert(ctx, tx, q, st.propriedadeID,
-		coluna(contatosDemo, func(c contatoDemo) string { return c.nome }),
-		coluna(contatosDemo, func(c contatoDemo) string { return c.email }),
-		coluna(contatosDemo, func(c contatoDemo) string { return c.telefone }),
-		coluna(contatosDemo, func(c contatoDemo) string { return c.cidade }),
-		coluna(contatosDemo, func(c contatoDemo) string { return c.uf }),
-		coluna(contatosDemo, func(c contatoDemo) string { return c.base }),
-		coluna(contatosDemo, func(c contatoDemo) bool { return c.optIn }),
-		coluna(contatosDemo, func(c contatoDemo) *time.Time { return c.consenti }),
-		coluna(contatosDemo, func(c contatoDemo) string { return c.nota }),
+	return upsert(ctx, tx, q, propriedade,
+		coluna(contatos, func(c contatoDemo) string { return c.nome }),
+		coluna(contatos, func(c contatoDemo) string { return c.email }),
+		coluna(contatos, func(c contatoDemo) string { return c.telefone }),
+		coluna(contatos, func(c contatoDemo) string { return c.cidade }),
+		coluna(contatos, func(c contatoDemo) string { return c.uf }),
+		coluna(contatos, func(c contatoDemo) string { return c.base }),
+		coluna(contatos, func(c contatoDemo) bool { return c.optIn }),
+		coluna(contatos, func(c contatoDemo) *time.Time { return c.consenti }),
+		coluna(contatos, func(c contatoDemo) string { return c.nota }),
 	)
-	c.Criadas = cu.Criadas
-	c.Atualizadas = cu.Atualizadas
-	return c, err
 }

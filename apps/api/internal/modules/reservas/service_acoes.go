@@ -169,7 +169,7 @@ func (s *Servico) Cancelar(ctx context.Context, id uuid.UUID, dryRun bool, corpo
 			return err
 		}
 		if !Cancelavel(e.Status) {
-			return NaoCancelavel.WithDetails(map[string]any{
+			return apperr.ReservationNotCancellable.WithDetails(map[string]any{
 				"status":  e.Status,
 				"allowed": EstadosCancelaveis(),
 			})
@@ -450,7 +450,6 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 			IsEvento:    e.IsEvento,
 			TipoEvento:  e.TipoEvento,
 			ContactID:   e.ContactID,
-			BrokerID:    e.BrokerID,
 			Origem:      e.Origem,
 			Observacoes: e.Observacoes,
 		}
@@ -464,7 +463,11 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 			pedido.DescontoPct = *corpo.DescontoPct
 		}
 
-		nova, credito, err := s.emitir(ctx, u, pedido, e.Status, &e.ID, sinalHerdado)
+		// O corretor é HERDADO da original, sem passar pela regra de
+		// autoridade: remarcar não atribui a venda a ninguém, só a muda de
+		// data. Sem restrição no SQL pelo mesmo motivo — o corretor de uma
+		// venda atribuída pela gestão continua dele depois da remarcação.
+		nova, credito, err := s.emitir(ctx, u, pedido, AtribuicaoDoCorretor{Corretor: e.BrokerID}, e.Status, &e.ID, sinalHerdado)
 		if err != nil {
 			return err
 		}
@@ -726,7 +729,7 @@ func (s *Servico) Realocar(ctx context.Context, id uuid.UUID, corpo PedidoDeReal
 		}
 		// A Completa já ocupa todas as unidades: não há para onde mover.
 		if e.Consome == ConsomeTodosMembros {
-			return EstadoInvalido.
+			return apperr.InvalidStateTransition.
 				WithMessage("Produto que consome todas as unidades não realoca: ele já ocupa a casa inteira.").
 				WithDetails(map[string]any{"status": e.Status, "consumes": e.Consome})
 		}
@@ -838,7 +841,7 @@ func (s *Servico) EstenderHold(ctx context.Context, id uuid.UUID, corpo PedidoDe
 			return err
 		}
 		if feitas >= comercial.HoldMaxExtensoes {
-			return LimiteDeHold.WithDetails(map[string]any{
+			return apperr.HoldLimitReached.WithDetails(map[string]any{
 				"max_extensions":   comercial.HoldMaxExtensoes,
 				"extensions_count": feitas,
 			})

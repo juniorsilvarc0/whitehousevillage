@@ -272,7 +272,7 @@ func (r *Repository) MarcarConvertido(ctx context.Context, orcamento, reserva uu
 		return db.MapError(err)
 	}
 	if tag.RowsAffected() == 0 {
-		return OrcamentoNaoEstaDePe.WithDetails(map[string]any{
+		return apperr.QuoteNotPending.WithDetails(map[string]any{
 			"quote_id": orcamento,
 			"hint":     "este orçamento já virou venda; emita outro para vender de novo.",
 		})
@@ -332,8 +332,12 @@ func (r *Repository) ConferirContato(ctx context.Context, propriedade, id uuid.U
 	}
 	if anonimizado {
 		// O contato pediu eliminação: não se emite proposta nova para ele. É o
-		// mesmo código que `/contacts` usa — um código, um status.
-		return ContatoAnonimizado.WithDetails(map[string]any{"contact_id": id})
+		// mesmo código que `/contacts` usa — um código, um status. A frase diz
+		// o que não se pode fazer AQUI (a padrão fala de dado pessoal), e é a
+		// mesma que a emissão devolvia antes do F2-03.
+		return apperr.ContactAnonymized.
+			WithMessage("Este contato foi anonimizado; não é possível emitir proposta para ele.").
+			WithDetails(map[string]any{"contact_id": id})
 	}
 	return nil
 }

@@ -535,16 +535,24 @@ func coberturaContraCompleta(t *testing.T, ctx context.Context, pool *pgxpool.Po
 // no dia 23. É o que o `daterange` half-open `[in, out)` significa, e é
 // dinheiro: recusar back-to-back esvaziaria uma noite entre cada duas estadias
 // na alta temporada.
+//
+// As datas ficam DEPOIS da última rodada do cenário B (2031-02-03 + 9×7 + 3 =
+// 2031-04-10). Até 02/10/2026 este cenário usava 20 a 26/03 na AP-01, dentro da
+// rodada 7 do B (24 a 27/03): quando a Completa vencia aquela rodada, ela
+// ocupava a AP-01 e o check-in do dia 23 levava 23P01 — o teste acusava o
+// `[in, out)` por uma colisão que era dele. Medido: falhou uma vez na suíte
+// inteira e passou 15 de 15 isolado; com a linha da Completa injetada, falha
+// sempre.
 func backToBack(t *testing.T, ctx context.Context, pool *pgxpool.Pool, inv inventario) {
 	unidade := inv.porCodigo["AP-01"]
 
 	if err := ocupar(ctx, pool, inv.propriedade, unidade, "confirmed",
-		"2031-03-20", "2031-03-23", marcaQA+":C:sai-dia-23"); err != nil {
+		"2031-05-20", "2031-05-23", marcaQA+":C:sai-dia-23"); err != nil {
 		t.Fatalf("primeira estadia: %v", err)
 	}
 
 	if err := ocupar(ctx, pool, inv.propriedade, unidade, "confirmed",
-		"2031-03-23", "2031-03-26", marcaQA+":C:entra-dia-23"); err != nil {
+		"2031-05-23", "2031-05-26", marcaQA+":C:entra-dia-23"); err != nil {
 		t.Fatalf("check-in no mesmo dia do check-out anterior foi recusado: %v — "+
 			"o daterange precisa ser half-open '[in, out)'", err)
 	}
@@ -552,7 +560,7 @@ func backToBack(t *testing.T, ctx context.Context, pool *pgxpool.Pool, inv inven
 	// A recíproca: sobrepor uma noite (entrar no dia 22, quando o hóspede
 	// anterior ainda dorme lá) continua sendo conflito.
 	err := ocupar(ctx, pool, inv.propriedade, unidade, "confirmed",
-		"2031-03-22", "2031-03-25", marcaQA+":C:sobrepoe-uma-noite")
+		"2031-05-22", "2031-05-25", marcaQA+":C:sobrepoe-uma-noite")
 	if !ehConflitoDeDatas(err) {
 		t.Fatalf("sobrepor uma noite deveria dar 23P01, deu: %v", err)
 	}
@@ -564,10 +572,13 @@ func backToBack(t *testing.T, ctx context.Context, pool *pgxpool.Pool, inv inven
 // pagamento nenhum. Quando o prazo vence e o job a marca como expirada, a data
 // volta a ser vendável no mesmo instante — sem passar por lugar nenhum do
 // código da aplicação.
+//
+// Fora das rodadas do cenário B pelo mesmo motivo do C: a SP-01 é da Completa,
+// e 05 a 08/04 caía dentro da rodada 9 (07 a 10/04).
 func preReservaBloqueiaEExpiradaLibera(t *testing.T, ctx context.Context, pool *pgxpool.Pool, inv inventario) {
 	const (
-		entrada = "2031-04-05"
-		saida   = "2031-04-08"
+		entrada = "2031-06-05"
+		saida   = "2031-06-08"
 	)
 	unidade := inv.porCodigo["SP-01"]
 

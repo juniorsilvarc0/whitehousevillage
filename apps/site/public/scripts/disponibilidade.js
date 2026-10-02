@@ -1,4 +1,10 @@
-/* Central de reservas — calendário, orçamento e indicadores (dados mocados). */
+/* Central de reservas — calendário, orçamento e indicadores (dados mocados).
+ *
+ * Esta página é pública. Duas regras valem até a última linha:
+ *  - o visitante não negocia preço: nenhum controle mexe no valor, e nenhuma
+ *    regra comercial interna aparece aqui (passo D2 de docs/unificacao-site-crm.md);
+ *  - um dia indisponível é só "indisponível": nunca quem ocupa, por quanto, nem
+ *    se é reserva, pré-reserva ou bloqueio (invariante 1 do mesmo plano). */
 (function () {
   'use strict';
   if (!window.WH) return;
@@ -12,8 +18,7 @@
     ano: WH.parse(WH.HOJE).getFullYear(),
     mes: WH.parse(WH.HOJE).getMonth(),
     checkin: null,
-    checkout: null,
-    desconto: 0
+    checkout: null
   };
 
   const $ = s => document.querySelector(s);
@@ -28,6 +33,13 @@
   };
 
   const unit = () => WH.units.find(u => u.id === state.produto);
+
+  /* Número do WhatsApp: o nginx escreve no <meta name="whv:whatsapp"> por SSI, a
+     partir da única linha que o define (apps/site/nginx.conf). Servida por outro
+     servidor, a página chega com o comentário SSI cru no lugar do número: aí o
+     botão do orçamento simplesmente não aparece, em vez de abrir um link quebrado. */
+  const metaWa = document.querySelector('meta[name="whv:whatsapp"]');
+  const WHATSAPP = metaWa && /^\d{10,15}$/.test(metaWa.content) ? metaWa.content : null;
 
   /* Deep link opcional: ?produto=cobertura&checkin=2026-12-28&checkout=2027-01-02 */
   function aplicarDeepLink() {
@@ -95,7 +107,7 @@
   }
 
   /* ─────────── Calendário ─────────── */
-  const CLASSE = { 'livre': 'free', 'pre-reserva': 'hold', 'confirmada': 'busy', 'bloqueio': 'block' };
+  const CLASSE = { 'livre': 'free', 'ocupado': 'busy' };
 
   function renderCalendars() {
     let html = '';
@@ -136,7 +148,7 @@
 
       const titulo = st === 'livre'
         ? `${t.label} · ${WH.brl(WH.preco(u.id, s))}`
-        : `${st === 'pre-reserva' ? 'Pré-reserva' : st === 'bloqueio' ? 'Bloqueado' : 'Reservado'} — ${WH.status(u.id, s).r.cliente}`;
+        : 'Indisponível';
 
       cells += `<button type="button" class="${cls.join(' ')}" data-d="${s}" data-st="${st}" title="${titulo}">
           <span class="day__n">${d}</span>
@@ -155,8 +167,7 @@
   function onPick(s, st) {
     if (s < WH.HOJE) { toast('Data já passou.'); return; }
     if (st !== 'livre') {
-      const r = WH.status(state.produto, s).r;
-      toast(`${s.split('-').reverse().join('/')} indisponível — ${r ? r.cliente : 'reservado'}.`);
+      toast(`${s.split('-').reverse().join('/')} indisponível.`);
       return;
     }
     if (!state.checkin || state.checkout || s <= state.checkin) {
@@ -190,9 +201,8 @@
       minExigido = Math.max(minExigido, P.minNoites[t.tipo] || 1);
     }
     const limpeza = P.taxaLimpeza[u.id] || 0;
-    const descontoV = Math.round(subtotal * state.desconto / 100);
-    const total = subtotal - descontoV + limpeza;
-    return { linhas: Object.values(linhas), subtotal, limpeza, descontoV, total, noites, minExigido,
+    const total = subtotal + limpeza;
+    return { linhas: Object.values(linhas), subtotal, limpeza, total, noites, minExigido,
              sinal: Math.round(total * P.sinalPercentual / 100) };
   }
 
@@ -231,11 +241,6 @@
     const c = calcular();
     const capOK = state.hospedes <= u.capacidade;
     const minOK = c.noites >= c.minExigido;
-    const descHint = state.desconto <= P.descontoGestao
-      ? ['ok', `Dentro da alçada da gestão (até ${P.descontoGestao}%) — pode fechar agora.`]
-      : state.desconto <= P.descontoProprietario
-        ? ['warn', `Acima de ${P.descontoGestao}% — precisa de aprovação do proprietário.`]
-        : ['block', `Acima de ${P.descontoProprietario}% — não autorizado pela política comercial.`];
 
     el.quote.innerHTML = head + `
       <div class="quote__dates">
@@ -251,15 +256,6 @@
             <b>${WH.brl(l.unit * l.qtd)}</b>
           </div>`).join('')}
         <div class="quote__line"><span>Taxa de limpeza</span><b>${WH.brl(c.limpeza)}</b></div>
-        ${c.descontoV ? `<div class="quote__line"><span>Desconto (${state.desconto}%)</span><b style="color:var(--c-free)">− ${WH.brl(c.descontoV)}</b></div>` : ''}
-      </div>
-
-      <div class="quote__sep"></div>
-
-      <div class="discount">
-        <div class="discount__head"><span>Desconto negociado</span><b>${state.desconto}%</b></div>
-        <input type="range" min="0" max="15" step="1" value="${state.desconto}" data-desc />
-        <div class="discount__hint discount__hint--${descHint[0]}">${descHint[1]}</div>
       </div>
 
       <div class="quote__sep"></div>
@@ -275,35 +271,30 @@
         <div class="row"><span>Diária média</span><b>${WH.brl(Math.round(c.total / c.noites))}</b></div>
       </div>
 
-      ${!minOK ? `<div class="discount__hint discount__hint--warn">Estadia mínima para este período: ${c.minExigido} noites.</div>` : ''}
-      ${!capOK ? `<div class="discount__hint discount__hint--block">${state.hospedes} hóspedes excede a capacidade de ${u.capacidade}.</div>` : ''}
+      ${!minOK ? `<div class="quote__hint quote__hint--warn">Estadia mínima para este período: ${c.minExigido} noites.</div>` : ''}
+      ${!capOK ? `<div class="quote__hint quote__hint--block">${state.hospedes} hóspedes excede a capacidade de ${u.capacidade}.</div>` : ''}
 
       <div class="quote__actions">
-        <button class="btn btn--dark" data-pre ${(!minOK || !capOK || descHint[0] === 'block') ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''}>Gerar pré-reserva (${P.preReservaHoras}h)</button>
-        <a class="btn btn--secondary" data-wa target="_blank" rel="noopener" href="#">Enviar orçamento no WhatsApp</a>
+        <button class="btn btn--dark" data-pre ${(!minOK || !capOK) ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''}>Gerar pré-reserva (${P.preReservaHoras}h)</button>
+        ${WHATSAPP ? `<a class="btn btn--secondary" data-wa target="_blank" rel="noopener" href="#">Enviar orçamento no WhatsApp</a>` : ''}
       </div>
       <p class="quote__note">Pré-reserva bloqueia a data por ${P.preReservaHoras}h. Sem o sinal, a data é liberada automaticamente.</p>`;
-
-    const range = el.quote.querySelector('[data-desc]');
-    range.addEventListener('input', () => { state.desconto = Number(range.value); renderQuote(); });
 
     const pre = el.quote.querySelector('[data-pre]');
     if (pre && !pre.disabled) {
       pre.addEventListener('click', () => {
-        WH.reservas.push({
-          unit: state.produto, de: state.checkin, ate: state.checkout, status: 'pre-reserva',
-          cliente: 'Pré-reserva do site', valor: c.total, origem: 'Site'
-        });
+        WH.ocupacoes.push({ unit: state.produto, de: state.checkin, ate: state.checkout });
         toast(`Pré-reserva registrada: ${WH.dataCurta(state.checkin)} → ${WH.dataCurta(state.checkout)} · ${WH.brl(c.total)}. A data ficou bloqueada por ${P.preReservaHoras}h.`);
         state.checkin = state.checkout = null;
-        state.desconto = 0;
         render();
       });
     }
 
     const wa = el.quote.querySelector('[data-wa]');
-    const txt = `Olá! Orçamento White House%0A%0A*${u.nome}*%0ACheck-in: ${state.checkin.split('-').reverse().join('/')}%0ACheck-out: ${state.checkout.split('-').reverse().join('/')}%0AHóspedes: ${state.hospedes}%0ANoites: ${c.noites}%0A%0ATotal: ${WH.brl(c.total)}%0ASinal (${P.sinalPercentual}%25): ${WH.brl(c.sinal)}`;
-    wa.href = 'https://wa.me/5586999999999?text=' + txt;
+    if (wa) {
+      const txt = `Olá! Orçamento White House%0A%0A*${u.nome}*%0ACheck-in: ${state.checkin.split('-').reverse().join('/')}%0ACheck-out: ${state.checkout.split('-').reverse().join('/')}%0AHóspedes: ${state.hospedes}%0ANoites: ${c.noites}%0A%0ATotal: ${WH.brl(c.total)}%0ASinal (${P.sinalPercentual}%25): ${WH.brl(c.sinal)}`;
+      wa.href = `https://wa.me/${WHATSAPP}?text=` + txt;
+    }
   }
 
   /* ─────────── Indicadores públicos do mês ─────────── */

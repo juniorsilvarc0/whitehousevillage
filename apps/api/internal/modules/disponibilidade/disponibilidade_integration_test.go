@@ -10,7 +10,6 @@ package disponibilidade_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -598,7 +597,7 @@ func TestMapaDeNoventaDiasRespondeEmMenosDeTrezentosMilissegundos(t *testing.T) 
 			melhor = decorrido
 		}
 	}
-	t.Log(fmt.Sprintf("mapa 90 dias × 8 unidades (720 células): %s", melhor.Round(time.Microsecond)))
+	t.Logf("mapa 90 dias × 8 unidades (720 células): %s", melhor.Round(time.Microsecond))
 	if melhor > 300*time.Millisecond {
 		t.Errorf("mapa levou %s, teto é 300ms", melhor)
 	}
@@ -615,7 +614,7 @@ func TestMapaDeNoventaDiasRespondeEmMenosDeTrezentosMilissegundos(t *testing.T) 
 			melhor = d
 		}
 	}
-	t.Log(fmt.Sprintf("disponibilidade 90 dias × 4 produtos: %s", melhor.Round(time.Microsecond)))
+	t.Logf("disponibilidade 90 dias × 4 produtos: %s", melhor.Round(time.Microsecond))
 	if melhor > 300*time.Millisecond {
 		t.Errorf("disponibilidade levou %s, teto é 300ms", melhor)
 	}

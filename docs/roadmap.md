@@ -1,17 +1,18 @@
 # Roadmap
 
-> Documento vivo. O `tech-lead` atualiza ao fim de cada fatia. Registra também o que foi **decidido não fazer agora**.
+> Documento vivo. O `squad-lead` atualiza ao fim de cada rodada (o arquivo é pasta dele, `docs/agents.md` §2). Registra também o que foi **decidido não fazer agora**.
 
 ## Estado atual
 
 | | |
 |---|---|
-| Fase corrente | **2 — Dinheiro e rotina**, aberta. A Fase 1 está concluída e no ar; a rodada de **quitação de dívida técnica** de 27/08 está commitada em `dividas/quitacao-rodada-4` (PR #1) |
-| Backlog da fase | [`docs/backlog/fase-2.md`](backlog/fase-2.md) — 24 itens, os sete primeiros de dívida |
-| Schema aplicado | `20260827150000` (conferido em `/readyz`: `{"database":"ok","schema_version":20260827150000,"status":"ok"}`) |
-| Dívida aberta | **D1**, **D3**, **D4**, **D6**, **D7**, **D9**, **D10**. Pagas: **D2**, **D5**, **D8** |
-| Última atualização | 31/08/2026, pelo `squad-lead`, ao abrir a Fase 2 |
-| Repositório | `github.com/juniorsilvarc0/whitehousevillage` |
+| Fase corrente | **2 — Dinheiro e rotina**, aberta. Bloco 0 (dívida) **fechado**; Bloco 1 começou pelo F2-09. Em paralelo, o plano de [unificação do site](unificacao-site-crm.md) está no passo A0 mais a limpeza D1/D2/D4 |
+| Backlog da fase | [`docs/backlog/fase-2.md`](backlog/fase-2.md) — 24 itens. Estado item a item no quadro "Estado em 02/10/2026": **9 feitos**, **2 parciais**, **13 abertos** |
+| Schema da árvore | `20261002180000` (`brokers_e_fk_do_corretor`) = `router.SchemaVersionEsperada`. Conferido em 02/10 no Postgres de teste recriado do zero: `banco pronto: 20261002180000\|f`. O banco do stack de desenvolvimento **não** foi conferido nesta rodada (o ambiente dela não tinha Docker) |
+| Dívida aberta | **D1** (agora pré-requisito da reserva pública, não da Fase 6), **D4**, **D9** (parcial), **D11** (aberta nesta rodada). Pagas: **D2**, **D3**, **D5**, **D6**, **D7**, **D8**, **D10** |
+| Decisões do dono pendentes | 13, cada uma com o que bloqueia — ver [Decisões pendentes do dono do negócio](#decisões-pendentes-do-dono-do-negócio) |
+| Última atualização | 02/10/2026, pelo `squad-lead`, ao fechar a Rodada 5 |
+| Repositório | `github.com/juniorsilvarc0/whitehousevillage`. `main` = `957e6e3`; a Rodada 5 está na árvore e é commitada pelo integrador ao fim dela. PR #2 (`ci/actions-node-24`, `c8037be`) aberto, esperando autorização do dono |
 
 ## Fase 0 — Fundação
 
@@ -102,22 +103,85 @@ Financeiro (recebíveis, pagáveis, pagamentos, conciliação, caução), comiss
 
 **Backlog de implantação: [`docs/backlog/fase-2.md`](backlog/fase-2.md)** — 24 itens, cada um com efeito, dono, entrada, prova executável e quem bloqueia, mais a auditoria de segurança item a item e os riscos da fase.
 
-**Abre com a dívida, não com funcionalidade.** A lista mudou depois de conferida no repositório e no banco, em 31/08:
+**Abre com a dívida, não com funcionalidade.** A lista mudou depois de conferida no repositório e no banco, em 31/08. A coluna da direita é o estado em 02/10:
 
-| Dívida | Estado real | Onde ficou |
-|---|---|---|
-| **D3** — códigos de erro fora de `apperr` | aberta (a medida estava invertida: 17 fora, não 20) | F2-03, transversal, em worktree |
-| **D5** — `crm_opportunities.quote_id` | **já paga** em `20260827150000` — a coluna foi removida, conferido em `information_schema` | sobrou só a correção de `docs/db.md` → F2-07 |
-| **D6** — `pii_access_log` dentro do módulo de contatos | aberta | F2-01, e é o **primeiro** item da fase |
-| **D7** — `quote_validity_days` como constante | aberta | F2-04 (schema) + F2-05 (a cópia coluna a coluna, que é a metade perigosa) |
-| **D8** — documento sem índice único | **já paga** em `20260827150000` — `contacts_doc_unico_idx` existe, conferido em `pg_indexes` | nada a fazer |
-| **D9** — miudezas | aberta. **Uma delas ganhou fase**: a segunda cópia do controle de idempotência | F2-02, porque `POST /finance/payments` seria a **terceira** cópia. O `<Toaster/>` montado em dois lugares entra junto do F2-17. As demais seguem sem fase |
-| **D10** — funil sem tempo real | aberta nesta leitura | F2-06, em paralelo |
+| Dívida | Estado em 31/08 | Onde ficou | Estado em 02/10/2026 |
+|---|---|---|---|
+| **D3** — códigos de erro fora de `apperr` | aberta (a medida estava invertida: 17 fora, não 20) | F2-03, transversal, em worktree | **paga** na Rodada 5 |
+| **D5** — `crm_opportunities.quote_id` | **já paga** em `20260827150000` — a coluna foi removida, conferido em `information_schema` | sobrou só a correção de `docs/db.md` → F2-07 | paga; F2-07 feito em `91d2388` |
+| **D6** — `pii_access_log` dentro do módulo de contatos | aberta | F2-01, e é o **primeiro** item da fase | **paga** em `91d2388` |
+| **D7** — `quote_validity_days` como constante | aberta | F2-04 (schema) + F2-05 (a cópia coluna a coluna, que é a metade perigosa) | F2-04 em `91d2388`; F2-05 na Rodada 5 → **paga** |
+| **D8** — documento sem índice único | **já paga** em `20260827150000` — `contacts_doc_unico_idx` existe, conferido em `pg_indexes` | nada a fazer | paga |
+| **D9** — miudezas | aberta. **Uma delas ganhou fase**: a segunda cópia do controle de idempotência | F2-02, porque `POST /finance/payments` seria a **terceira** cópia. O `<Toaster/>` montado em dois lugares entra junto do F2-17. As demais seguem sem fase | **parcial**: idempotência paga em `91d2388`; `golangci-lint` no CI na Rodada 5 |
+| **D10** — funil sem tempo real | aberta nesta leitura | F2-06, em paralelo | **paga** em `91d2388` |
 
-Duas dívidas **não listadas** e medidas na abertura entraram no backlog como item de segurança, não de higiene:
+Duas dívidas **não listadas** e medidas na abertura entraram no backlog como item de segurança, não de higiene. **As duas foram fechadas na Rodada 5** (abaixo):
 
 - **`reservations.broker_id` não tem foreign key e não é validado.** Medido: `POST /reservations` com um UUID inexistente respondeu `201`; e o corretor `corretor@wh.local`, com escopo `own`, gravou a venda com o `broker_id` de **outro** usuário, também `201`. Não existe tabela `brokers`. Quando a comissão nascer sobre esse campo, ele vira dinheiro que o beneficiário se atribui. → **F2-09** e **F2-13**.
 - **A lista de contatos serve CPF completo sem gravar `pii_access_log`.** Medido como corretor: `GET /contacts?per_page=100` devolveu 11 documentos e telefones inteiros, e a contagem de `pii_access_log` ficou em 43; um `GET /contacts/{id}` levou para 44. A trilha de LGPD é contornável por um parâmetro de paginação. → **F2-23**.
+
+### Commits de 31/08 e 02/10 que entraram sem PR
+
+`125d5fd` (abertura da Fase 2), `91d2388` (PII, idempotência, validade no banco, kanban ao vivo), `e0bc08e` (lint zerado) e `957e6e3` (o site no monorepo) foram para a `main` **por push direto**, sem PR e sem a revisão adversarial que `docs/agents.md` e o `squad-lead` exigem. O PR #1 aparece como `merged` em 02/10 14:47 só porque o push levou a `main` até o head dele (`merge_commit_sha` = `head.sha` = `5cc80bb`); o único PR que existe além dele é o #2, ainda aberto. O CI de push rodou uma vez, no topo (`957e6e3`), com os seis jobs verdes — `91d2388` e `e0bc08e` não têm execução própria.
+
+Não houve defeito atribuído a isso até aqui; a verificação de 02/10 (sete leitores sobre `957e6e3`) achou o que esses commits deixaram para trás — `docs/db.md` afirmando que a validade já saía do banco quando o Go ainda usava a constante, e o F2-04 entrando sem o F2-05, que é exatamente o risco R6 do backlog materializado. É o tipo de achado que a revisão antes de entrar existe para pegar. **A Rodada 5 passou por revisão adversarial antes do commit** (a seção seguinte diz o que ela recusou e o que achou).
+
+### Rodada 5 — exposição e defeitos ativos — 02/10/2026
+
+Rodada de correção, aberta pela verificação de 02/10. Seis agentes em pastas disjuntas (`tech-lead`, `db-migrations`, `backend-go` em duas frentes, `next-frontend` no site, `devops`), o `squad-lead` fechando a documentação e o integrador commitando.
+
+**O que entrou, em linguagem de negócio:**
+
+- **O corretor não consegue mais pôr a venda no nome de outro, nem num corretor inventado.** Existe cadastro de corretor (`brokers`); `reservations.broker_id` e `users.broker_id` têm FK (a de `users` é composta, `(broker_id, id) → brokers(id, user_id)`: a conta só aponta para o cadastro que aponta de volta para ela). Em escopo `own`, a escrita só aceita `null` ou o próprio corretor, conferido **no SQL da escrita** além do domínio (`commission.ResolveBroker`); omitir o campo grava o próprio. Trocar o corretor depois de `confirmed` exige escopo `all`.
+- **A lista de contatos parou de servir CPF, telefone e e-mail inteiros.** A coleção devolve `***.***.777-35`, `+*********0000`, `f***@gmail.com`, sem `birth_date` e sem `notes`; a ficha devolve cheio e grava `pii_access_log`. Fecharam-se também três portas que a verificação achou ao lado: `PATCH /contacts/{id}` com corpo vazio devolvia a ficha cheia sem rastro; `GET /reservations/{id}/full` servia nome e telefone dos hóspedes sem rastro (agora uma linha `rooming_list` por hóspede); `GET /crm/opportunities/{id}/full` idem (agora `opportunity`). O telefone do lead sai sempre mascarado. E-mail com `*` é recusado (`422`), para que a máscara nunca seja gravada por cima do endereço verdadeiro.
+- **A gestão passou a poder mudar a validade do orçamento sem recompilar**, e publicar outra regra da política não a devolve mais para 7 dias. A versão nova da política é **a anterior copiada pelo banco** com o pedido por cima — coluna que nascer amanhã é herdada sem ninguém lembrar de listá-la.
+- **O mesmo código de erro chega ao painel sempre com o mesmo status.** Os 37 códigos do contrato vivem num catálogo só.
+- **O site público deixou de expor o que não é dele**: o back-office falso em `/admin/` (1143 linhas, sem autenticação, com link no rodapé) e o controle de desconto de 0 a 15% com a alçada interna sumiram; o calendário deixou de mostrar o nome de quem ocupa a data; as fontes deixaram de vir do Google (que recebia o IP de cada visitante); qualquer caminho inexistente responde 404 de verdade.
+- **A pré-reserva volta a expirar sozinha no ambiente que o time roda**: o worker saiu do profile `full` e sobe no `make up` e na fumaça do CI.
+- **O lint Go entrou no CI**, com a versão fixada num lugar só (`Makefile`, `GOLANGCI_LINT_VERSION`), e a fumaça do site entrou no `make smoke` e num job próprio.
+
+**A medida, refeita pelo `squad-lead` sobre a árvore final (02/10, 19h):**
+
+| | Antes (verificação de 02/10 sobre `957e6e3`) | Depois |
+|---|---|---|
+| `golangci-lint run --max-same-issues=0 --max-issues-per-linter=0 ./...` | 0 (desde `e0bc08e`) | **0** |
+| O mesmo, com `--build-tags=integration` | 15 (errcheck 11, staticcheck 3, unused 1) | **6** — todos `defer resp.Body.Close()` em `internal/router/*_integration_test.go` |
+| `go test ./... -race -count=1` | 23 pacotes ok | **24 pacotes ok**, 0 FAIL |
+| Integração (banco recriado do zero + `make it-suite`, `-p 1 -race`) | 23 pacotes (o `backend-go` mediu `exit=2` duas vezes antes de corrigir `TestUsuarioDevolveBrokerIDGravadoNoBanco` e a colisão de datas de `TestOverbookingEhImpedidoPeloBanco/C`) | **24 pacotes ok, `exit=0`**. Repetida com `-v` (sem `-race`): **701 testes de topo, 978 com subtestes, 0 FAIL, 0 SKIP** — sem `-v` a contagem de SKIP é sempre zero e não prova nada |
+| Painel: `pnpm lint`, `tsc --noEmit`, `pnpm test --run` | 340 testes | lint 0, tsc 0, **40 arquivos, 340 testes** |
+| Fumaça do site (`node apps/site/e2e/fumaca-site.mjs`, nginx 1.24 local) | não existia; o equivalente feito à mão dava `/admin/` 200 e caminho inventado 200 | **APROVADO**, 17 recursos internos; `/admin`, `/admin/`, `/scripts/admin.js` e `/nao-existe` = **404** |
+| `grep -rn '"RESOURCE_IN_USE"' apps/api --include='*.go' \| grep -v _test` | 5 linhas, 4 frases | **1** (`apperr/catalogo.go:51`) |
+| `grep -rn validadePadraoEmDias apps/api/internal` | constante viva (`dto_orcamento_salvo.go:22`) | **0** |
+| WhatsApp fictício em `apps/site` | 8 ocorrências | **1** (`apps/site/nginx.conf:17`, chega ao HTML por SSI) |
+| `pii_access_log` numa listagem de 11 contatos como corretor | 43 → 43, CPF inteiro no corpo | coleção mascarada; ficha, `PATCH`, `/full` da reserva e da oportunidade gravam (testes `TestColecaoDeContatosNaoServeDocumentoCheioComoCorretor`, `TestPatchDeContatoRegistraLeituraERecusaEmailMascarado`, `TestFullDaReservaRegistraCadaHospedeExibido`, `TestFullDaOportunidadeRegistraOContato`) |
+
+Cada guarda nova veio com controle negativo medido pelo agente que a escreveu (remover a linha deixa o teste vermelho): a cópia da política (duas mutações), a validade, a máscara, o registro do `PATCH`, a recusa do `*`, a rooming list, o lead, a guarda do corretor no SQL (as duas escritas), a FK composta de `users`, o catálogo de erros (três mutações), `commission.ResolveBroker` (116, 32 e 12 falhas ao remover cada regra) e a fumaça do site (seis mutantes, todos reprovados). O `squad-lead` **não** refez as mutações — elas exigem editar `.go`; refez os portões e os `grep`.
+
+**O que a revisão recusou ou corrigiu antes de entrar:**
+
+- **A lista de contatos mascarada quebra o "Editar" da própria lista no painel.** `components/contatos/lista.tsx:174` abre o formulário com a linha da coleção, e o formulário salva por `PUT` com a ficha inteira. Com a linha agora mascarada, editar um contato pela lista responde `422` em campos que o operador não tocou (`e-mail mascarado não é aceito`); e num contato sem e-mail, telefone nem documento, o `PUT` sairia sem `notes` e sem `birth_date`, que a coleção não traz mais — **apagaria a anotação**. O telefone mascarado também vira `tel:` morto no painel de leads (`app/leads/painel.tsx:162`). O painel não foi tocado nesta rodada (`git status apps/admin` vazio às 19h). **Não bloqueia o commit da API**, porque a alternativa é a lista continuar servindo CPF sem rastro; vira **D11**, com dono e prazo (abaixo), e é o primeiro item do `next-frontend` na próxima rodada.
+- **O `F2-13` foi escrito com "o PATCH de `broker_id` exige escopo `all`", e o contrato desta rodada deixa o `own` editar.** A contradição foi apontada pelo `tech-lead` e **aceita** pela revisão, com a trava que a torna inofensiva: em `own`, só entre `null` e o próprio, só sobre venda que não é de outro corretor, e só em `quote`/`hold`; de `confirmed` em diante, `all`. A comissão nasce no `/confirm`, então antes dele nenhuma troca move dinheiro. O backlog foi corrigido.
+- **O `F2-03` pedia `apperr.Definir` público, e entrou `definir` privado.** Aceito: um construtor público é a porta para um módulo voltar a declarar código, que é a dívida que o item paga. A prova do backlog foi reescrita.
+- **"0 SKIP" e "0 `LIMPEZA INCOMPLETA`" sem `-v` não são medida.** Dois relatórios da rodada contaram as duas marcas na saída de `make it-suite`, que roda sem `-v` — e sem `-v` o `go test` não imprime `--- SKIP` nem o `t.Logf` de teste que passa. Refeita com `-v`: 0 SKIP (confirmado) e **5** `LIMPEZA INCOMPLETA` (item abaixo).
+- **A prova do `F2-05` (`grep -rn validadePadraoEmDias apps/api` devolve zero) é impossível como escrita**: a migration `20260831100000`, já aplicada, cita o nome no comentário (linha 15) e não se edita. A prova passa a ser `apps/api/internal`. Sobram o comentário de `cmd/seed/tarifario.go:147` e o texto de `openapi.yaml:6519-6522` (que repete a prova velha), ambos com dono no relatório.
+
+**O que ficou de fora, com dono:**
+
+- O painel não acompanhou a mudança de formato de `GET /contacts` e do telefone do lead (**D11**), nem expõe `quote_validity_days` no formulário de política.
+- 6 apontamentos de `golangci-lint` com a tag `integration`, todos em `internal/router` (dono: `tech-lead`/`qa-testes`). Até zerar, o CI roda o lint **sem** a tag (`GOLANGCI_LINT_TAGS` vazia).
+- **A suíte de integração já deixa lixo por causa do rastro novo, e esconde isso.** O `pii_access_log` gravado pelos `/full` não tem cascata, e o cleanup do usuário descartável não o apaga (`internal/router/api_integration_test.go:276`). Medido pelo `squad-lead` com `-v`: `TestReajusteDeTarifaNaoAlcancaVendaJaEmitida` e `TestRemarcarParaMaisBaratoNaoFazDinheiroDoHospedeEvaporar` deixam usuário e perfil de teste no banco a cada execução; e `TestPapelAcimaDoTetoDoAtorEhRecusado` deixa um perfil desde antes da rodada (conferido numa cópia de `957e6e3`). A limpeza só faz `t.Logf`, que sem `-v` não aparece: a saída de `make it-suite` mostra **zero** `LIMPEZA INCOMPLETA` com **cinco** acontecendo — e os relatórios que contaram "0" sem `-v` não contaram nada. Dono: `qa-testes` (testes de `internal/router`), com a guarda junto: limpeza incompleta passa a reprovar.
+- Nada que dependa de Docker rodou aqui: `make up`, `make smoke-stack`, `smoke-site-imagem`, o worker em container e o nginx 1.27 da imagem. A prova na imagem vem no primeiro CI depois do commit (jobs `site`, `smoke` e `lint-go`, este nunca rodado num runner).
+- O número real do WhatsApp, o texto da pré-reserva do site (promete "data bloqueada por 48h" e grava só na memória do navegador) e o restante da unificação dependem de decisão do dono (abaixo).
+- Corretor inativo (`brokers.active=false`) e corretor de outra propriedade continuam aceitos na venda: precisam de decisão de produto e, se entrarem, de FK composta com `property_id`.
+- A mesma `Idempotency-Key` reusada com `{}` e depois com `{"broker_id":null}` devolve a resposta guardada em vez de `422`: a impressão do corpo não distingue ausente de nulo. Mexer nela afeta todos os módulos — entra em **D9**.
+
+**A pergunta da tarefa órfã — o que ninguém tinha permissão de escrever:**
+
+- O `README.md` da raiz não tinha dono na tabela de `docs/agents.md` e prometia River, Traefik, backup, `/metrics` e uma pasta `features/**` que não existem. Corrigido nesta rodada pelo `squad-lead`, sob ordem explícita, e **atribuído ao `tech-lead`** em `docs/agents.md` §2, que também deixou de contradizer a própria tabela sobre o dono de `docs/db.md`.
+- `config.go:49` exige `JWT_SECRET` em produção também do worker, que não assina token: o compose passou a entregar ao worker um segredo que ele não usa (`backend-go`).
+- `docs/infra.md` descreve Traefik, backup diário cifrado, `/metrics` e HSTS que não existem, e diz que o worker usa River (`tech-lead`).
+- `.claude/agents/devops.md` listava jobs de CI que não existem (`contract`, `e2e`) e não citava o serviço `site`: corrigido nesta rodada, junto com o aviso de que compose de produção, Traefik e backup automático não existem. `.claude/agents/tech-lead.md` dizia ser "o único agente que aciona os demais" e o dono do roadmap, contra `squad-lead.md` e `docs/agents.md`: corrigido. Não existe `.claude/agents/integrador.md` — fica para a próxima passada em `.claude/agents/**`, com a decisão de criar o agente ou tirar o papel de `docs/agents.md`.
+- `docs/agents.md` ainda tem pastas com dois donos (`apps/site/Dockerfile`: `next-frontend` por `apps/site/**` e `devops` por `Dockerfile*` — a definição do `next-frontend` já manda combinar no relatório; `internal/router/rotas_*.go`: o código diz "de quem implementa o módulo", a tabela dá `routes.go` ao `tech-lead`) e pastas sem dono (`cmd/migrate`, `internal/router/router.go` e `saude.go`, `.env.example`). A de `docs/db.md` foi resolvida nesta rodada. O resto é do `tech-lead`, e o papel de `integrador`, que `docs/agents.md` §4.1 cria e o backlog usa como dono, continua sem definição em `.claude/agents/`.
 
 ## Fase 3 — Escala comercial
 Portal do corretor, contratos em PDF, BI e KPIs (ocupação, ADR, RevPAR, conversão, motivos de perda).
@@ -135,7 +199,9 @@ Herdou da abertura da Fase 2, com a decisão registrada abaixo em 31/08:
 Inventário operacional, ordens de manutenção, tokens com escopo, webhooks com outbox, agente de IA e MCP.
 
 ## Fase 6 — Hardening e go-live
-Carga (mapa < 300 ms p95), `EXPLAIN ANALYZE` das 10 queries mais quentes, revisão de segurança, **limitador de login e de reset de senha no Redis** (dívida **D1**, abaixo), restore testado com RTO/RPO medidos, runbook e treinamento.
+Carga (mapa < 300 ms p95), `EXPLAIN ANALYZE` das 10 queries mais quentes, revisão de segurança, restore testado com RTO/RPO medidos, runbook e treinamento.
+
+O **limitador de login e de reset no Redis** (dívida **D1**) estava aqui e **saiu em 02/10/2026**: com o site vendendo ao público, ele é pré-requisito de qualquer rota `/public/*` em produção (passo B0 da unificação), e não pode esperar o go-live do painel.
 
 ---
 
@@ -143,7 +209,9 @@ Carga (mapa < 300 ms p95), `EXPLAIN ANALYZE` das 10 queries mais quentes, revis�
 
 O que está no código de propósito, com fase marcada para sair. Dívida sem dono e sem fase é dívida esquecida.
 
-### D1 — Limitadores de login e de reset vivem na memória do processo → Redis, na Fase 6
+### D1 — Limitadores de login e de reset vivem na memória do processo → Redis, **antes de qualquer rota `/public` ir para produção** (era Fase 6)
+
+> **Prazo antecipado em 02/10/2026.** Esta entrada, o quadro "Recusado nesta fase" do backlog da Fase 2 e a linha da Fase 6 diziam que o limitador distribuído espera o go-live. A decisão de 02/10 (o site vende ao público, [`unificacao-site-crm.md`](unificacao-site-crm.md)) muda o prazo: toda rota pública é limitada por taxa, e o limitador de uma porta aberta à internet **não pode** ser um mapa por processo. A dívida morre no passo **B0** do plano de unificação, que é pré-requisito de qualquer `/public/*` em produção — seja qual for a ordem entre a unificação e o financeiro (decisão pendente do dono, abaixo). Continua valendo que **com uma instância e só a gestão** o mapa faz o que promete; o que mudou é que a reserva pública não espera a Fase 6. A medida de pronto é a do B0: com duas réplicas no ar, a sexta tentativa de login é recusada também na réplica que não viu as cinco primeiras. Conferido em 02/10: `grep -rni redis apps/api infra .env.example` só acha o comentário de `httpx/middleware.go`; não há serviço Redis no compose.
 
 `httpx.Limitador` (`apps/api/internal/platform/httpx/middleware.go`) é um contador por chave em janela fixa guardado **num mapa do processo**. Não há coluna de bloqueio no banco: **todo** o estado de força bruta é esse mapa — o par e-mail+IP (5 erros em 15 min), o teto global por e-mail (20 em 15 min), a isenção do IP de onde a conta já entrou (7 dias) e o disparo de recuperação de senha (3 em 15 min).
 
@@ -160,7 +228,15 @@ Fica em memória na Fase 0 porque a alternativa hoje seria tabela nova + varredu
 
 Quitada pela migration `20260826100000_reservation_pricing`. Conferido no `information_schema`: `reservation_pricing` existe com 12 colunas e `reservations` caiu de 32 para **23**, dentro da regra 9. Fica registrada aqui, e não apagada, porque a decisão de adiar está na tabela abaixo e a dívida quitada é a prova de que o adiamento tinha prazo.
 
-### D3 — Dezessete dos 37 códigos de erro do contrato são declarados fora de `apperr`, e `RESOURCE_IN_USE` existe em cinco lugares → consolidar na Fase 2
+### D3 — Dezessete dos 37 códigos de erro do contrato são declarados fora de `apperr`, e `RESOURCE_IN_USE` existe em cinco lugares → **PAGA em 02/10/2026** (Rodada 5, F2-03)
+
+**Como foi paga.** Os 37 códigos vivem em `internal/platform/apperr/catalogo.go`: uma constante `apperr.Code*` (o literal existe só nela) e um erro base com status e frase padrão por código, registrados por uma função **privada**, `definir`, que derruba o pacote na carga se o mesmo código for registrado duas vezes. `PorCodigo` e `Codigos()` expõem o catálogo; a tradução do `booking.RuleError` tira o status de lá. `tarifario/erros.go`, `inventario/erros.go` e `disponibilidade/erros.go` foram apagados, e as funções locais `erro`, `conflito` e `invalido` sumiram. O backlog pedia `Definir` público; entrou privado de propósito — construtor público é a porta para o módulo voltar a declarar código, que é a dívida.
+
+Medido antes (verificação de 02/10 sobre `957e6e3`): `apperr` com 20 `define(...)`, 17 códigos nascendo fora (16 em módulos e `RATE_NOT_FOUND` em `internal/domain/booking`), `RESOURCE_IN_USE` em 5 lugares com 4 frases, e mais cópias que esta entrada não contava — `CODE_IN_USE` ×3, `COMPOSITION_INCOMPLETE` ×3, `INVALID_STATE_TRANSITION` ×2, `CONTACT_ANONYMIZED` ×2. Medido depois (02/10, 19h): `grep -rn '"RESOURCE_IN_USE"' apps/api --include='*.go' | grep -v _test` devolve **uma** linha (`apperr/catalogo.go:51`); `ls internal/modules/*/erros.go` devolve só `reservas/erros.go`, que monta detalhes sobre erros do catálogo (`apperr.CompositionIncomplete`, `apperr.InvalidStateTransition`, `apperr.DateConflict` para o `23P01`) e não declara código. Nenhum status HTTP mudou: o `backend-go` comparou `(code, status)` de cada símbolo antes e depois, 37 códigos, diff vazio. A garantia de que não volta é `apperr/catalogo_test.go`: os 37 do catálogo são exatamente os do enum; cada código aparece uma vez como literal; nenhum arquivo de `internal/` fora do `apperr` tem literal com cara de código, `apperr.Error{` nem `.Code =`; e todo código carimbado em `internal/domain` existe no catálogo — três controles negativos medidos (a cópia de `tarifario/erros.go` de volta, um `apperr.Error{…}` montado num módulo, um `definir` repetido), os três vermelhos.
+
+Ficou uma mudança de comportamento num caso que hoje não ocorre: código do domínio fora do catálogo saía `422` com esse código e agora sai `500 INTERNAL` — e o teste acima impede que esse caso exista. Nove frases **padrão** mudaram; nenhuma das que chegavam ao cliente, que foram mantidas por `WithMessage` no ponto de uso.
+
+O texto abaixo é a entrada como foi escrita, mantida pela mesma razão da D2.
 
 O `components.responses.Erro` da OpenAPI diz, textualmente, que o enum é "espelhado em `internal/platform/apperr`". Não é.
 
@@ -186,6 +262,8 @@ Por que é aceitável até lá: com uma instalação e poucos operadores o teto 
 
 **Definitivo (Fase 6, com D1)**: contador no Redis, chave por par e-mail+IP **do usuário final**, e o painel encaminhando o IP de origem. Os dois passos vão juntos: contador distribuído com a chave errada distribui o mesmo erro.
 
+**Atualizado em 02/10/2026.** Como a D1 subiu para o passo B0 da unificação, esta entrada sobe junto — pela regra da linha acima. E ganhou uma segunda porta com o mesmo defeito: se o site passar a falar com a API por um proxy `/api` no nginx de `apps/site` (o caminho que o A2 do plano sugere para não abrir CORS) **sem** `proxy_set_header X-Forwarded-For` e `X-Real-IP`, todo visitante chega à API com o IP do contêiner do site, e o limitador das rotas `/public` vira, outra vez, um contador único para a internet inteira. `httpx.RealIP` (`platform/httpx/middleware.go:82-115`) já consome o cabeçalho quando o peer é rede interna — o que falta é quem está na frente mandá-lo. Conferido em 02/10: `grep -rni x-forwarded-for apps/admin/src` continua em **zero**, e `apps/site/nginx.conf` não tem `location /api`. A sonda de 429 na fumaça, decidida em 31/08, também não existe ainda.
+
 ### D5 — `crm_opportunities.quote_id` apontava para `reservations` → **PAGA em 27/08/2026** (`20260827150000`)
 
 A coluna nasceu em `20260827110000_crm.up.sql` quando "orçamento" era uma reserva em estado `quote`; a FK `crm_opportunities_quote_id_fkey` referenciava `reservations(id)`. A tabela `quotes` chegou em `20260827130000` e a FK **não** foi repontada, de propósito: repontar no meio da rodada quebraria o CRM que estava no ar.
@@ -200,7 +278,11 @@ Se um dia o produto quiser "o orçamento **escolhido**" — diferente do último
 
 **Fica pendente, e é do `tech-lead`**: `docs/db.md` §7 ainda lista `quote_id?` entre as colunas de `crm_opportunities`, ainda diz "24 colunas" e ainda traz a subseção "`quote_id` — o orçamento vigente **é uma reserva**". Documento de contrato descrevendo schema que não existe é como a coluna volta. Virou o item **F2-07** do backlog da Fase 2.
 
-### D6 — `pii_access_log` e a redação de PII moram dentro do módulo de contatos → Fase 2 (LGPD)
+### D6 — `pii_access_log` e a redação de PII moram dentro do módulo de contatos → **PAGA em 02/10/2026** (`91d2388`, F2-01)
+
+**Como foi paga.** `internal/platform/pii` existe, irmã de `audit`: `pii.Registrar(ctx, exec, entidade, id, motivo)` com falha fechada (não conseguir gravar aborta a leitura) e `pii.Redigir` cobrindo `name`, `email`, `phone_e164`, `doc_number` e `birth_date`. Medido antes: `contatos/pii.go` (67 linhas) e o `semPII` de `contatos/auditoria.go` eram a única implementação, privada do módulo. Medido depois (02/10, 19h): `grep -rn "registrarAcessoPII\|semPII" apps/api/internal/modules` devolve **0**; `contatos/pii.go` não existe. Na Rodada 5 a plataforma ganhou o que a Fase 2 vai precisar: as máscaras do contrato (`pii.MascararDocumento`, `MascararTelefone`, `MascararEmail`), `RegistrarVarios` (uma instrução para N pessoas) e dois motivos novos, `rooming_list` e `opportunity` — e passou a ter **quatro** consumidores fora de contatos (`reservas.Completa`, `crm` `/full`, o telefone do lead e a lista de contatos).
+
+O `91d2388` entrou sem PR e sem revisão (seção da Fase 2), e a mensagem dele não cita a D6; o pagamento foi conferido na verificação de 02/10 e de novo pelo `squad-lead` na Rodada 5. O texto abaixo é a entrada original.
 
 `registrarAcessoPII` (`internal/modules/contatos/pii.go`) e o `semPII` da trilha (`contatos/auditoria.go`) são plataforma disfarçada de módulo: estão ali porque `internal/platform` não era pasta do agente que os escreveu. A Fase 2 traz financeiro, hóspedes de reserva e chat — as três telas que mostram dado pessoal e vão precisar dos dois.
 
@@ -210,7 +292,13 @@ Por que é aceitável até lá: hoje só contatos serve PII, e ali a obrigação
 
 **Item de backlog: F2-01**, o primeiro da Fase 2. E a abertura da fase mediu um agravante que esta entrada não previa: a lista de contatos serve `doc_number` e `phone_e164` **completos** e não grava `pii_access_log` (43 → 43 numa listagem de 11 fichas; 43 → 44 numa leitura de ficha). A decisão escrita no módulo — "a lista não grava: ela é a agenda do dia" — parte de uma premissa falsa, porque a lista serve a ficha inteira. Virou o item **F2-23**.
 
-### D7 — `commercial_policies` não tem `quote_validity_days` → Fase 2
+### D7 — `commercial_policies` não tem `quote_validity_days` → **PAGA em 02/10/2026** (F2-04 em `91d2388`, F2-05 na Rodada 5)
+
+**Como foi paga, e por que levou duas entregas.** O `91d2388` criou a coluna (`20260831100000`, `NOT NULL DEFAULT 7 CHECK > 0`) e o seed — e parou aí. A medida de 02/10 sobre `957e6e3` achou o risco R6 do backlog **materializado**: a coluna existia, nenhum Go a lia (`disponibilidade/service_orcamentos.go:154` seguia com `agora.AddDate(0,0,validadePadraoEmDias)`), o `INSERT` de `PublicarPoliticaComercial` listava 11 colunas sem ela, e toda publicação a devolvia para 7. Pior: `docs/db.md` e a mensagem do commit afirmavam que mudar a validade "deixou de exigir recompilar", o que era falso.
+
+A Rodada 5 fechou a outra metade. `PublicarPoliticaComercial` deixou de listar colunas: a versão nova é a anterior **copiada pelo banco** (`INSERT … SELECT … FROM LATERAL jsonb_populate_record(linha_anterior, pedido || {id, version+1, created_at})`), então coluna que nascer depois é herdada sem ninguém lembrar dela; na primeira publicação, campo omitido fica fora da lista e cai no `DEFAULT`. A política no contrato ganhou `quote_validity_days` (1..365, `booking.QuoteValidityMaxDays`), e a emissão de orçamento chama `booking.QuoteValidUntil` com **a mesma versão** que precificou, congelando o resultado em `quotes.valid_until`. Medido depois (02/10, 19h): `grep -rn validadePadraoEmDias apps/api/internal` devolve **0**. `TestPoliticaNaoPerdeColunaAoRepublicar` fica vermelho com as duas mutações medidas pelo `backend-go` — copiar sobrescrevendo a coluna, e voltar à lista nome a nome sem ela (`quote_validity_days: v1=15 v2=7`) —, e `TestValidadeDoOrcamentoVemDaPoliticaECongelaNaEmissao` fica vermelho com a validade fixa em 7.
+
+Ressalva da cópia pelo banco, escrita no próprio código: coluna nova que seja **identidade ou autoria** da linha (um `created_by`, por exemplo) tem de entrar na lista do que não se herda, senão a versão nova sai assinada pelo autor da anterior. O teste confere o catálogo de colunas e reprova coluna que não conhece, para forçar essa decisão. O texto abaixo é a entrada original.
 
 A validade de 7 dias do orçamento é constante de aplicação (`validadePadraoEmDias`, em `disponibilidade/dto_orcamento_salvo.go`), ao lado de `hold_hours` e `balance_due_days`, que são **dado versionado**. Contraria "toda regra comercial é dado versionado".
 
@@ -230,9 +318,22 @@ Medido antes: dois `INSERT` com o mesmo CPF, `count(*) = 2`. Medido depois: o se
 
 O índice é sobre `coalesce(doc_type, '')`, e não `doc_type` puro: a API já recusa número sem tipo, mas em índice único NULO é distinto de NULO, e dois documentos iguais **sem tipo** passariam pelo índice feito para impedi-los — justamente a escrita fora da API que motivou a dívida. Continua parcial (`WHERE doc_number IS NOT NULL`), porque anonimizar zera o documento e duas fichas anonimizadas não podem colidir. Os três casos foram medidos.
 
-### D9 — Miudezas com dono; duas ganharam fase na abertura da Fase 2
+### D9 — Miudezas com dono; duas ganharam fase na abertura da Fase 2 — **parcial em 02/10/2026**
 
-Cada uma é pequena, todas são reais, e a lista existe para que nenhuma volte a depender de alguém lembrar:
+Cada uma é pequena, todas são reais, e a lista existe para que nenhuma volte a depender de alguém lembrar.
+
+**Estado em 02/10/2026** (conferido pelo `squad-lead` na árvore da Rodada 5):
+
+- **Paga — idempotência em dois lugares** (`91d2388`, F2-02). Antes: `reservas/idempotencia.go` (186 linhas) e `crm/idempotencia.go` (161). Depois: `internal/platform/idempotencia`, e `ls apps/api/internal/modules/*/idempotencia*.go` não acha arquivo nenhum. O controle negativo do ator (`TestChaveNaoVazaEntreAtores`) está no pacote.
+- **Paga — `docs/db.md` descrevendo `quote_id`** (`91d2388`, F2-07).
+- **Paga em parte — `golangci-lint`.** `e0bc08e` zerou os 11 apontamentos; a Rodada 5 pôs o lint no CI (job `lint-go`, versão fixada em `Makefile:GOLANGCI_LINT_VERSION` = 2.5.0, que o CI lê com `make -s golangci-versao`) e fez `make lint-golangci` achar o binário também em `go env GOBIN` e em `GOPATH/bin`. Medido: **0** apontamentos sem a tag. **Falta**: com `--build-tags=integration` são **6** (eram 15), todos `defer resp.Body.Close()` em `internal/router/*_integration_test.go`; até zerar, o CI roda sem a tag. Dono: quem tiver `internal/router` de teste (`qa-testes`). E o job `lint-go` nunca rodou num runner.
+- **Aberto — `<Toaster/>` duas vezes** (`components/crm/avisos.tsx` e `components/contatos/avisos.tsx`, conferido): continua com o F2-17.
+- **Aberto — `contacts_doc_idx` redundante**: conferido no banco recriado em 02/10, os dois índices existem. A migration `20261002180000` criou a FK `brokers.contact_id → contacts` mas não alterou `contacts`, então não era "a próxima que encosta".
+- **Nova — a impressão do corpo para idempotência não distingue ausente de `null`.** Com `ReservaCriar.BrokerID` virando `Opt`, a mesma `Idempotency-Key` reusada com `{}` e depois com `{"broker_id":null}` devolve a resposta guardada em vez de `422` por corpo divergente. Efeito hoje: nenhum dinheiro (as duas formas gravam o mesmo corretor em escopo `all`, e em `own` o ausente grava o próprio — **então em `own` os dois corpos significam coisas diferentes e recebem a mesma resposta**). Dono: `backend-go`, em `platform/idempotencia`; morre antes do F2-14, que é onde corpo divergente vira pagamento.
+- **Nova — o worker loga um `ERROR 42P01` por minuto** entre o `make up` e o `make migrate` (medido pelo `devops` contra banco vazio) e **exige `JWT_SECRET` em produção** sem assinar token (`platform/config/config.go:49`; com `APP_ENV=production` e sem a variável, sai com 1). Erro esperado ensina a ignorar erro. Dono: `backend-go` (`cmd/worker`, `config`).
+- As demais (snapshot por fixação no contexto, helpers do painel em `lib/crm`, espelho de códigos do painel, `members` exigindo `inventory:ver`, derivações do painel inicial) seguem como descritas abaixo.
+
+O texto abaixo é a lista como foi escrita em 31/08:
 
 - **`<Toaster/>` do `sonner` não está montado na casca** (nem em `app/layout.tsx`, nem no `DashboardShell`). São **duas** montagens locais (`components/crm/avisos.tsx` e `components/contatos/avisos.tsx`), hoje mutuamente exclusivas na árvore — no dia em que duas coexistirem, cada `toast()` aparece em duplicata. Montar uma na casca é o conserto; exige apagar as duas locais **na mesma mudança**. **Ganhou fase**: F2-17, junto das telas de financeiro — é ali que a segunda montagem passa a coexistir com a primeira, e cada `toast()` viraria dois.
 - **Duas cópias do controle de idempotência** (`reservas/idempotencia.go`, 186 linhas, e `crm/idempotencia.go`, 161 — e o `diff` das assinaturas de função entre as duas é **vazio**), pelo mesmo impedimento de pasta que gerou D3 e D6. O lugar é `internal/platform/idempotencia`. **Ganhou fase**: item **F2-02**, no começo da Fase 2, porque `POST /finance/payments` nasceria como terceira cópia — e a chave é `(key, endpoint, actor_id, property_id)`, então uma cópia que esqueça o ator devolve o corpo guardado por outro usuário.
@@ -246,7 +347,9 @@ Cada uma é pequena, todas são reais, e a lista existe para que nenhuma volte a
 - **`docs/db.md` §7 descreve `crm_opportunities.quote_id`, que não existe mais** (D5, paga). Documento de contrato descrevendo schema morto é como a coluna volta. Tem dono (`tech-lead`) e fase: item **F2-07**.
 
 
-### D10 — O funil não tem tempo real, embora o barramento dele já esteja pronto e ligado → Fase 2
+### D10 — O funil não tem tempo real, embora o barramento dele já esteja pronto e ligado → **PAGA em 02/10/2026** (`91d2388`, F2-06)
+
+**Como foi paga.** O kanban assina `topics=crm` com o mesmo `useAtualizacaoAoVivo` do mapa (`components/crm/kanban.tsx:175`), e o teste tem a forma que esta entrada exigia: re-renderiza com **identidade nova** de `criarFonte` e cobra uma conexão só (`kanban.test.tsx`). A fumaça ganhou o bloco "funil ao vivo": 30 s em `/app/funil`, reprovando com menos de 1 ou mais de 2 aberturas de `/api/stream`. Medido antes: `grep -rn useAtualizacaoAoVivo apps/admin/src` com **um** consumidor (o mapa). Medido depois (02/10, 19h): **dois** (`mapa-de-ocupacao.tsx:100`, `kanban.tsx:175`). A fumaça com o bloco novo passou no CI de `957e6e3` (job `smoke` verde); não foi refeita na Rodada 5, que não tinha Docker. O texto abaixo é a entrada original.
 
 **Aberta em 31/08/2026 pelo `squad-lead`**, na leitura de abertura da Fase 2. Não foi assumida por ninguém: é dívida que apareceu porque a metade cara foi entregue e a metade barata não.
 
@@ -263,6 +366,46 @@ Por que é aceitável até aqui: com uma ou duas pessoas no funil, a janela é p
 **Definitivo (Fase 2, item F2-06)**: o kanban assina `topics=crm` com o mesmo `useAtualizacaoAoVivo` que o mapa usa. Entra na Fase 2, e não vira linha adiada, por uma razão de princípio deste squad: **gatilho, canal e RBAC de tópico que ninguém consome são código morto com nome plausível** — ou ganham dono, ou somem. O custo é um componente reusando um hook que já existe, em pasta disjunta de todo o resto do bloco de dívida, então roda em paralelo e não empurra nada.
 
 O teste é a parte que importa, e ele tem forma obrigatória: **re-renderizar com identidade nova da fábrica de conexão**. Foi exatamente essa a forma que os 13 testes do hook de SSE não sabiam falhar — todos passavam uma fábrica estável de módulo, a única que não podia quebrar, enquanto a conexão reabria **1957 vezes em 9 segundos** no build minificado.
+
+### D11 — O painel ainda trata a lista de contatos como ficha cheia → `next-frontend`, primeiro item da próxima rodada
+
+**Aberta em 02/10/2026 pelo `squad-lead`**, na revisão da Rodada 5. Não foi assumida por ninguém: é o efeito colateral de o F2-23 ter mudado o formato de `GET /contacts` numa rodada em que o painel não teve agente.
+
+A API passou a devolver, na coleção, o schema `ContatoNaLista`: documento, telefone e e-mail mascarados, e **sem** as chaves `birth_date` e `notes`. O painel continua tipando essa resposta como `Contato` e usando a linha como se fosse a ficha. Lido no código em 02/10 (`git status apps/admin` vazio):
+
+- `components/contatos/lista.tsx:174` abre o formulário de edição com a **linha da lista** (`modal.abrir(contato)`), e `modal-de-contato.tsx:38-57` preenche e-mail, telefone, documento, nascimento e anotação a partir dela. O salvamento é `PUT` com o formulário inteiro (`app/contatos/acoes.ts:27`). **Efeito**: "Editar" pela lista responde `422` em campos que o operador não tocou — a API recusa e-mail com `*` (`contatos/dto.go:277`) e o telefone mascarado não é E.164. Num contato **sem** e-mail, telefone e documento, nada recusa, e o `PUT` grava `notes` e `birth_date` vazios, porque a lista não os trouxe: **a anotação some**. Este último caminho foi lido, não medido.
+- `lista.tsx:132-142` passa a máscara por `formatarTelefone`/`formatarDocumento`, que a devolvem como veio (não casa com E.164 nem com 11 dígitos) — a tela mostra a máscara crua, o que é aceitável, mas por acaso.
+- `app/leads/painel.tsx:162` monta `tel:` com o telefone do lead, que agora sai sempre mascarado: o botão de ligar disca `+*********0000`.
+
+**Por que é aceitável até a próxima rodada, e não até depois**: a alternativa era manter a lista servindo 11 CPFs inteiros a qualquer corretor sem gravar rastro, que é um vazamento medido; o defeito do painel é de **escrita recusada** no caso comum, e o caso de perda (contato só com nome e anotação) é estreito. Não é aceitável por mais tempo do que isso, porque o caminho de perda é silencioso.
+
+**Definitivo**: o formulário de edição carrega a ficha (`GET /contacts/{id}`, que grava `pii_access_log` como deve), nunca a linha; `lib/contatos/tipos.ts` ganha `ContatoNaLista`, e o `tsc` passa a recusar o uso da linha como ficha; o lead liga pela ficha do contato, não por `tel:` da lista. **Prova**: teste de componente que abre "Editar" a partir da lista com uma linha mascarada e exige que o formulário só monte depois da ficha chegar — e o controle negativo, com a linha passada direto, vermelho; e a fumaça reprovando se a lista de contatos tiver um `href="tel:` com `*`.
+
+---
+
+## Decisões pendentes do dono do negócio
+
+Nenhuma delas é técnica, e nenhuma pode ser adivinhada por quem implementa. Cada linha diz **o que fica parado** enquanto ela não vier. As seis primeiras da unificação estão detalhadas em [`unificacao-site-crm.md`](unificacao-site-crm.md) §8.
+
+| # | Decisão | O que bloqueia |
+|---|---|---|
+| 1 | **Prioridade entre a unificação do site e o financeiro.** Os dois disputam `tech-lead`, `backend-go`, `devops` e `next-frontend`; nenhum documento os põe em ordem | A ordem das próximas rodadas. Sem ela, o Bloco 1 da Fase 2 (F2-08 em diante) e os passos A1/B0 da unificação avançam por quem chegar primeiro. A proposta do `squad-lead` está logo abaixo da tabela |
+| 2 | **A reserva pública nasce `hold` ou nasce pedido?** (unificação 8.3) | O B1 inteiro (`POST /public/holds` existe ou vira registro de intenção), a parte de pré-reserva do contrato A1, o formato do B3 e a urgência do B0. **E o texto do site hoje**: o botão "Gerar pré-reserva" diz ao visitante que "a data ficou bloqueada por 48h" e grava só na memória do navegador |
+| 3 | **Provedor de pagamento** — Pix, cartão ou os dois, e quem concilia (8.1) | O B2 inteiro; `method` e `external_ref` de `POST /finance/payments` (F2-14); e se a confirmação automática do site passa pelo mesmo `/confirm` que gera os recebíveis (F2-12) |
+| 4 | **O público vê o tarifário do ano inteiro?** (8.4) | O desenho de `GET /public/products` e do preço por dia no calendário (A1, A2). O orçamento de uma data (`POST /public/quotes`) não depende dela |
+| 5 | **O calendário público pode revelar a ocupação?** (8.5) | O desenho de `GET /public/availability` (janela, granularidade, por unidade ou por produto) e o calendário do A2 |
+| 6 | **Domínios** — site e painel juntos ou separados (8.6) | A configuração de produção do A2 (CORS, cookie, Traefik) e a URL pública do webhook do B2. Não bloqueia o desenvolvimento local |
+| 7 | **O número real do WhatsApp de reservas** | O fechamento do passo D6 da unificação. Trocar é uma linha (`apps/site/nginx.conf:17`); a fumaça do site avisa que o número atual parece fictício, mas não reprova |
+| 8 | **Texto e base legal do consentimento LGPD** do formulário público | O contrato de `POST /public/leads` e da pré-reserva pública (A1) e a parte de consentimento do B3 |
+| 9 | **A caução de evento entra no total e na base do sinal?** Hoje `internal/domain/booking/booking.go:186-188` faz `Total = Subtotal − Desconto + Limpeza + Caução`, `Sinal = Total × deposit_pct` e `Saldo = Total − Sinal` | O F2-12 e o F2-15. Escrito à letra, o F2-12 (`saldo = total − sinal` **mais** um recebível `security_deposit`) **cobra a caução duas vezes**: uma dentro do saldo, outra no recebível próprio. E o sinal hoje incide sobre a caução, o que talvez não seja a intenção |
+| 10 | **Regra da comissão e quando ela é liberada** — percentual por corretor, por produto ou por faixa; mínimo; base `subtotal − desconto`; liberação na confirmação, no saldo ou no check-out; o que acontece no cancelamento e na remarcação | O F2-08 (os cenários tabelados da função pura), o seed de `commission_rules` (F2-10) e o F2-13 |
+| 11 | **Retenção da caução no check-out** — quem autoriza reter parte dela e com que comprovação | O pagável de devolução parcial do F2-15 |
+| 12 | **Horários da operação** — check-in, check-out e janela de limpeza | O seed de `agenda_settings` (F2-19) e a agenda que se enche sozinha (F2-20) |
+| 13 | **Desconto de 6 a 10% "com aprovação do proprietário"** está escrito em `spec.md:118`, `ui.md:125` e na unificação, e **não existe no código**: `booking.AuthorityOwner` é só um rótulo devolvido em `discount_authority`; o motor recusa apenas acima de 10% (`booking.go`), e a venda com 8% fecha sem ninguém aprovar | Ou vira fluxo (quem aprova, onde fica registrado, o que a reserva guarda) — e entra no backlog com prova —, ou sai dos documentos. Enquanto isso, a jornada 5.3 do PRD (corretor) e o semáforo do `QuoteBuilder` prometem um controle que não há |
+
+Além dessas, duas autorizações que só o dono dá: o **merge do PR #2** (`ci/actions-node-24`, CI verde; o `devops` provou que o `ci.yml` desta rodada mescla com ele sem conflito) e a **remoção das branches remotas já contidas na `main`** (`dividas/quitacao-rodada-4`, `fase-2/bloco-0`).
+
+**Proposta do `squad-lead` para a decisão 1**, para o dono aprovar ou trocar: terminar o **Bloco 1 da Fase 2** (F2-08 → F2-10 → F2-11) antes de abrir a superfície pública, porque o F2-08 é o item mais bloqueante da fase e não depende de nenhuma decisão de produto além da 9 e da 10; e, em paralelo e sem disputa de pasta, o `next-frontend` paga a D11 e o `devops` sobe o Redis do B0 — que é pré-requisito da reserva pública **qualquer que seja** a resposta às decisões 2 a 8. A superfície pública (A1) entra quando a decisão 2 vier.
 
 ---
 
@@ -287,6 +430,7 @@ O teste é a parte que importa, e ele tem forma obrigatória: **re-renderizar co
 | 20/08/2026 | **Ninguém edita a matriz do próprio perfil, e a matriz concedida nunca excede a do ator** | São as duas metades da mesma escalada. Editar o próprio perfil é se dar permissão sozinho; conceder a terceiro o que não se tem é se dar permissão por interposta pessoa (crio um perfil `all`, atribuo a um usuário meu, entro com ele). A trava do próprio perfil também evita o tiro no pé de se rebaixar e travar a instalação. `all` **contém** `own`: quem enxerga tudo pode delegar o recorte do dono |
 | 20/08/2026 | **A navegação do painel é função apenas da matriz de permissões**; `allowedRoles` por papel foi removido | Era uma segunda fonte de verdade do RBAC, contra a regra 8: perfil novo criado por configuração não aparecia em lista nenhuma e navegava vazio, e mudar a matriz de um perfil não mudava o menu. Menu que não bate com o que a API concede engana os dois lados — esconde o que a pessoa pode e oferece o que ela não pode |
 | 20/08/2026 | **Conflito de datas responde 409 de forma determinística, inclusive sob contenção** | A regra 2 do CLAUDE.md não admite "409 quando dá tempo". Sob disputa real o Postgres pode devolver `40P01` (impasse) em vez de `23P01`, e traduzir isso para 500 quebra a promessa exatamente na véspera de Réveillon, que é quando ela importa. Determinístico quer dizer: o perdedor ouve "essas datas acabaram de ser ocupadas", com quantos concorrentes forem |
+| 20/08/2026 | O job de integração do CI **semeia o banco** e **repete os testes de concorrência** (`-count=10`) | Sem seed, `resources` fica vazio: parte dos testes bate em FK e o do perfil Corretor semeado se **pula** — teste pulado conta como verde. E o defeito das datas é probabilístico: medido nesta rodada, `-count=1` passou verde e `-count=10` reprovou. Uma execução por PR deixava ~67% de chance de a falha atravessar; dez deixam ~2% |
 | 27/08/2026 | **Orçamento é tabela própria (`quotes`), não reserva em estado `quote`** | Era o desenho do `docs/db.md` §7 e foi revisto na entrega: orçamento não ocupa unidade (não referencia `stay_blocks`), o funil emite N orçamentos por negociação e cada um gastaria um código `WH-2026-…` de reserva, e `reservations` já estava em 23 das 25 colunas da regra 9. Orçamento é **imutável**: sem `PUT`/`PATCH`/`DELETE` e sem coleção `GET /quotes`, porque reprecificar é emitir outro — e porque um par GET+POST na coleção acionaria o teste dos seis verbos, que exigiria justamente os verbos que não devem existir |
 | 27/08/2026 | **`/win` transcreve o orçamento; o motor de preço não roda de novo** | Medido: com a tarifa reajustada em +R$1.000/noite entre a emissão e o ganho, a reserva nasceu com o preço do orçamento (subtotal, total, sinal, `rate_table_id` e `policy_version` idênticos, 4 noites iguais). O contrário — recalcular no ganho — é vender por um preço e cobrar outro. A contrapartida é `409 DATE_CONFLICT` como desfecho **normal** do `/win`: orçamento não bloqueia data, e quem emitiu não reservou |
 | 27/08/2026 | **A mensagem da constraint trigger vai para o usuário, por allowlist** | As invariantes de negócio vivem em constraint trigger e já levantam a frase certa em `pg.Message`/`pg.Hint` ("a Completa tem 1 reserva de pé..."), e tudo isso virava `422 "valor fora do permitido pela regra do banco."` — que não diz o que houve nem o que fazer, e ainda discordava do contrato, que documenta `409 RESOURCE_IN_USE` para o mesmo caso. A tradução é **allowlist nomeada**, nunca automática: repassar `pg.Message` de qualquer `23514` publicaria texto de banco que ninguém revisou. E a invariante que só o nosso código pode violar (`quote_nights_fecham_o_orcamento`) vira **500**, não 422 — mandar o operador procurar erro num formulário que estava certo é pior do que assumir o defeito |
@@ -303,12 +447,18 @@ O teste é a parte que importa, e ele tem forma obrigatória: **re-renderizar co
 | 31/08/2026 | **D1 e D4 (limitador no Redis + IP real atrás do BFF) ficam na Fase 6, mas ganham uma sonda na Fase 2** | Os dois passos vão juntos, e isso não mudou: contador distribuído com a chave errada distribui o mesmo erro. O que mudou é o uso — a Fase 2 põe Agenda e Financeiro em uso diário, com mais gente entrando por turno, e o teto de 20 logins por 15 min é **global** porque o painel não encaminha `X-Forwarded-For` (conferido: zero ocorrências em `apps/admin/src`). A fumaça da fase passa a logar quatro usuários duas vezes cada e reprovar em `429`. Se reprovar, a metade do BFF sobe para a Fase 2; se não, a dívida fica onde está, com uma guarda que avisa antes do usuário |
 | 31/08/2026 | **`owner_payouts` ganha schema na Fase 2 e apuração na Fase 3** | A tabela nasce junto com o resto do modelo financeiro para não abrir migration de novo depois. A apuração por competência, com snapshot da regra usada, precisa de mais de um mês de dado real para ser conferida contra alguma coisa — apurar contra base vazia é escrever um relatório que ninguém consegue verificar, e relatório não verificável é como um número errado entra em produção com cara de certo |
 | 31/08/2026 | **`contacts` não ganha coluna de dono na Fase 2** — o que a fase resolve é o vazamento de leitura | O §1 da spec já registra que `contacts:criar` do corretor fica em `all` até a coluna existir. Criá-la agora obriga a decidir o que acontece com as fichas sem dono e com o contato que dois corretores atendem — decisão de produto que ninguém pediu, no meio da fase do dinheiro. O que dói hoje é medível e é outro: a lista serve CPF completo sem gravar `pii_access_log`, e isso é o item F2-23. A coluna vai para a Fase 3, com o portal do corretor |
-| 20/08/2026 | O job de integração do CI **semeia o banco** e **repete os testes de concorrência** (`-count=10`) | Sem seed, `resources` fica vazio: parte dos testes bate em FK e o do perfil Corretor semeado se **pula** — teste pulado conta como verde. E o defeito das datas é probabilístico: medido nesta rodada, `-count=1` passou verde e `-count=10` reprovou. Uma execução por PR deixava ~67% de chance de a falha atravessar; dez deixam ~2% |
-
 | 02/10/2026 | **O site de vendas entra no monorepo como `apps/site`, e reserva pública volta ao escopo** | Dois sistemas descrevendo a mesma casa divergem no dia seguinte: o MVP calculava tarifa, estadia mínima, sinal e alçada em JavaScript, com os números escritos num arquivo, enquanto o motor real já vivia em `internal/domain`. Enquanto o cliente via um preço e o banco guardava outro, a segunda fonte da verdade era justamente a que o cliente lê. Juntar os dois é o único jeito de o site vender o que a casa realmente tem — e cobra o preço escrito em `unificacao-site-crm.md`: pagamento online, limitador distribuído, LGPD na porta e defesa contra negação de inventário |
+| 02/10/2026 | **O limitador distribuído (D1) deixa de esperar a Fase 6**: é pré-requisito de qualquer rota `/public/*` em produção (passo B0) | A linha de 31/08 que deixava D1 e D4 na Fase 6 partia de um sistema sem porta pública. Com o site vendendo, toda rota pública é limitada por taxa, e um mapa por processo numa porta aberta à internet é limite nenhum. A linha de 31/08 continua certa no que diz — os dois passos vão juntos —, e por isso a D4 sobe junto |
+| 02/10/2026 | **Coleção mascara e não grava; registro individual devolve cheio e grava `pii_access_log`** — inclusive `PATCH /contacts/{id}`, a rooming list do `/full` (uma linha por hóspede) e o `/full` da oportunidade | Era a regra que o F2-23 deixava em aberto entre "mascarar" e "registrar a listagem". Registrar a listagem deixaria a lista exportável como mala direta com um rastro que ninguém lê; mascarar tira o dado de onde ele não serve. É **quebra deliberada de contrato** em `/api/v1` (`docs/api.md` §8 promete não quebrar): o formato da coleção mudou para corrigir um vazamento, e a exceção está escrita na OpenAPI. O e-mail também é mascarado: mascarar só o telefone deixaria a base exportável. E-mail com `*` vira `422`, para a máscara nunca ser gravada por cima do endereço. O preço é a D11 |
+| 02/10/2026 | **Em escopo `own`, o corretor pode trocar `broker_id` só entre `null` e ele mesmo, só em `quote`/`hold`, e só em venda que não é de outro corretor**; de `confirmed` em diante, só `all` | O F2-13 dizia "o `PATCH` de `broker_id` exige `all`". O contrato desta rodada abriu a edição ao `own` com essas três travas, e a revisão aceitou: a comissão nasce no `/confirm`, então antes dele nenhuma troca move dinheiro, e "atribuir a mim a venda que é minha" é o uso legítimo que o `all` puro proibiria. A recusa é `403` com `details.reason` (`not_actor_broker`, `replaces_other_broker`, `reservation_confirmed`), e não `422`: dizer "esse corretor não existe" a quem não tem autoridade ensinaria quais ids existem |
+| 02/10/2026 | **`users.broker_id` tem FK composta** `(broker_id, id) → brokers(id, user_id)` | Com a FK simples, a conta da gestão podia apontar para o cadastro do corretor e "virar" ele no escopo `own`. A composta só aceita a conta para a qual o cadastro aponta de volta. Controle negativo medido pelo `db-migrations`: trocada pela simples, `TestOutraContaNaoApontaParaOCadastroDoCorretor` fica vermelho |
+| 02/10/2026 | **Os códigos de erro são registrados por `definir`, privado, e não por `Definir`, público** | O backlog pedia o público. Um construtor público em `apperr` é a porta para um módulo voltar a declarar código próprio — que é a D3 de novo. O catálogo é fechado; módulo importa a variável |
+| 02/10/2026 | **A versão nova da política comercial é a anterior copiada pelo banco** (`jsonb_populate_record`), não um `INSERT` com as colunas listadas | Listar colunas é como `quote_validity_days` virou `DEFAULT` em toda publicação. A cópia herda o que nascer depois sem ninguém lembrar; o que não se herda (`id`, `version`, `created_at`) é a lista curta e explícita |
+| 02/10/2026 | **O worker sobe no stack padrão**, sem profile | Job que depende de opt-in é esquecido: com `profiles: ["full"]`, nem `make up` nem a fumaça do CI o ligavam, e nenhuma pré-reserva expirava em ambiente nenhum que o time roda. Medido pelo `devops`: sem schema o worker não cai (loga `42P01` por minuto) e se recupera sozinho depois do `migrate` |
+| 02/10/2026 | **O River nunca entrou**; o worker é um loop próprio com um job (`holds.expire`) | A linha de 20/08 escolheu o River e o código não o usou (`grep -i river apps/api/go.mod` = 0). A decisão fica registrada e **sem efeito**: se um job futuro precisar de retry, unicidade e agendamento, o River volta a ser a opção, por decisão escrita, e não por um README que diz que ele já está lá |
 
 ## Fora de escopo por enquanto
 
 Aplicativo nativo · multi-tenant comercial · emissão fiscal · rodar modelo de IA internamente.
 
-**Duas linhas saíram desta lista em 02/10/2026**: *motor de reserva público com pagamento online* e *substituir o site de marketing*. O site virou `apps/site` dentro deste monorepo e passa a ser o front de cliente. O plano, a ordem, os donos e o que a abertura ao público obriga a consertar antes estão em [`unificacao-site-crm.md`](unificacao-site-crm.md) — em particular a dívida **D1**, que deixa de ser dívida e passa a ser bloqueio.
+**Duas linhas saíram desta lista em 02/10/2026**: *motor de reserva público com pagamento online* e *substituir o site de marketing*. O site virou `apps/site` dentro deste monorepo e passa a ser o front de cliente. O plano, a ordem, os donos e o que a abertura ao público obriga a consertar antes estão em [`unificacao-site-crm.md`](unificacao-site-crm.md) — em particular a dívida **D1**, que deixa de ser dívida e passa a ser bloqueio (registrado na própria D1 e na linha da Fase 6 em 02/10, na Rodada 5). O `docs/prd.md` §10 marca as duas linhas como revertidas desde a mesma rodada.

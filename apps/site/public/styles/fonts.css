@@ -1,0 +1,54 @@
+/*
+ * Fontes servidas pelo próprio site — nada de servidor do Google Fonts.
+ *
+ * Por quê: carregar do Google entrega o IP de cada visitante a um terceiro antes
+ * de qualquer consentimento (LGPD). Hospedado aqui, o navegador só fala com o
+ * nosso nginx.
+ *
+ * Origem: Google Fonts css2 (display=swap), baixado em 02/10/2026 com User-Agent
+ * de Chrome para vir woff2 — cormorantgaramond v21 e jost v20. Os três arquivos
+ * são VARIÁVEIS (o Google devolveu a mesma URL para todos os pesos pedidos), por
+ * isso cada @font-face declara um intervalo e não um peso só.
+ *
+ * Só o subconjunto `latin`: varremos o texto das páginas e dos scripts e nenhum
+ * caractere cai em latin-ext, cirílico ou vietnamita. Setas e emoji não estão em
+ * subconjunto nenhum do Google e já caíam na fonte do sistema — continua igual.
+ * O unicode-range é o mesmo que o Google usava, para o fallback ser idêntico.
+ *
+ * Pesos: os intervalos são os pedidos medidos no Chromium em todas as telas
+ * (home, menu mobile, calendário e orçamento dos quatro produtos):
+ *   Cormorant Garamond normal 300–600 · itálico 400 (e 500, que casa com 400,
+ *   como já casava com o CSS do Google) · Jost 300–500.
+ * Jost 200 e Cormorant itálico 300, que o <link> antigo pedia, não eram usados.
+ *
+ * Licença: SIL Open Font License 1.1 — fonts/OFL-cormorant-garamond.txt e
+ * fonts/OFL-jost.txt, copiados de github.com/google/fonts
+ * (ofl/cormorantgaramond/OFL.txt e ofl/jost/OFL.txt).
+ */
+
+@font-face {
+    font-family: 'Cormorant Garamond';
+    font-style: normal;
+    font-weight: 300 600;
+    font-display: swap;
+    src: url('/fonts/cormorant-garamond-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+    font-family: 'Cormorant Garamond';
+    font-style: italic;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/fonts/cormorant-garamond-italic-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+    font-family: 'Jost';
+    font-style: normal;
+    font-weight: 300 500;
+    font-display: swap;
+    src: url('/fonts/jost-latin.woff2') format('woff2');
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}

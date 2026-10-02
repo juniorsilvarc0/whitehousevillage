@@ -1,0 +1,12 @@
+/* Página 404: a faixa escura do CTA ocupa a primeira dobra inteira.
+   O padding-top desconta o header fixo (--header-height): sem ele, no celular o
+   padding da seção (mínimo de 4rem = 64px) fica menor que os 84px do header e o
+   título nasce escondido atrás dele. */
+.erro {
+    min-height: 100svh;
+    display: flex;
+    align-items: center;
+    padding-top: calc(var(--header-height) + var(--space-8));
+}
+.erro .container { width: 100%; }
+.erro__codigo { color: var(--c-gold); margin-bottom: var(--space-4); }

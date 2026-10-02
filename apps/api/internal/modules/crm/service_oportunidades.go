@@ -15,6 +15,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/pii"
 )
 
 // ListarOportunidades — GET /crm/opportunities.
@@ -184,7 +185,7 @@ func (s *Servico) resolverEtapa(ctx context.Context, propriedade, funil uuid.UUI
 			return Etapa{}, err
 		}
 		if etapa.FunilID != funil {
-			return Etapa{}, EtapaForaDoFunil.WithDetails(map[string]any{
+			return Etapa{}, apperr.StageNotInPipeline.WithDetails(map[string]any{
 				"stage_id": v, "pipeline_id": funil,
 			})
 		}
@@ -322,7 +323,7 @@ func (s *Servico) AtualizarOportunidade(ctx context.Context, id uuid.UUID, corpo
 			return err
 		}
 		if travada.Status != OportunidadeAberta {
-			return OportunidadeFechada.WithDetails(map[string]any{"status": EstadoParaContrato(travada.Status)})
+			return apperr.OpportunityAlreadyClosed.WithDetails(map[string]any{"status": EstadoParaContrato(travada.Status)})
 		}
 
 		antes, err := s.repo.BuscarOportunidade(ctx, u.PropertyID, id, false, u.ID)
@@ -465,7 +466,7 @@ func (s *Servico) ExcluirOportunidade(ctx context.Context, id uuid.UUID) error {
 			if travada.ReservaID != nil {
 				detalhes["reservation_id"] = *travada.ReservaID
 			}
-			return RecursoEmUso.
+			return apperr.ResourceInUse.
 				WithMessage("Oportunidade fechada ou com reserva não se apaga: é a origem comercial da venda.").
 				WithDetails(detalhes)
 		}
@@ -498,14 +499,14 @@ func (s *Servico) MudarEtapa(ctx context.Context, id uuid.UUID, corpo PedidoDeMu
 			return err
 		}
 		if travada.Status != OportunidadeAberta {
-			return OportunidadeFechada.WithDetails(map[string]any{"status": EstadoParaContrato(travada.Status)})
+			return apperr.OpportunityAlreadyClosed.WithDetails(map[string]any{"status": EstadoParaContrato(travada.Status)})
 		}
 
 		// Guarda otimista do kanban: dois corretores arrastando o mesmo card, e
 		// o segundo descobre que o quadro mudou em vez de sobrescrever em
 		// silêncio. `details.current_stage_id` diz para onde o card foi.
 		if de, ok := corpo.DeEtapaID.Definido(); ok && de != travada.EtapaID {
-			return TransicaoInvalida.
+			return apperr.InvalidStateTransition.
 				WithMessage("O card já não está nessa etapa; alguém o moveu antes.").
 				WithDetails(map[string]any{
 					"from_stage_id":    de,
@@ -518,7 +519,7 @@ func (s *Servico) MudarEtapa(ctx context.Context, id uuid.UUID, corpo PedidoDeMu
 			return err
 		}
 		if etapa.FunilID != travada.FunilID {
-			return EtapaForaDoFunil.WithDetails(map[string]any{
+			return apperr.StageNotInPipeline.WithDetails(map[string]any{
 				"stage_id": corpo.EtapaID, "pipeline_id": travada.FunilID,
 			})
 		}
@@ -532,7 +533,7 @@ func (s *Servico) MudarEtapa(ctx context.Context, id uuid.UUID, corpo PedidoDeMu
 			if etapa.Tipo == EtapaPerdido {
 				endpoint = "/crm/opportunities/" + id.String() + "/lose"
 			}
-			return TransicaoInvalida.
+			return apperr.InvalidStateTransition.
 				WithMessage("Etapa terminal não se alcança por /stage; use o endpoint da ação.").
 				WithDetails(map[string]any{
 					"stage_type": etapa.Tipo,
@@ -544,7 +545,7 @@ func (s *Servico) MudarEtapa(ctx context.Context, id uuid.UUID, corpo PedidoDeMu
 			// destino. Traduzir aqui evita que o arrasto que solta o card na
 			// própria coluna vire 422 do banco — e evita reiniciar o SLA por um
 			// gesto que não mudou nada.
-			return TransicaoInvalida.
+			return apperr.InvalidStateTransition.
 				WithMessage("O card já está nesta etapa.").
 				WithDetails(map[string]any{"current_stage_id": travada.EtapaID})
 		}
@@ -664,7 +665,7 @@ func (s *Servico) ganhar(ctx context.Context, u *auth.Usuario, id uuid.UUID, cor
 		return ResultadoDeGanho{}, 0, err
 	}
 	if travada.Status != OportunidadeAberta {
-		return ResultadoDeGanho{}, 0, OportunidadeFechada.
+		return ResultadoDeGanho{}, 0, apperr.OpportunityAlreadyClosed.
 			WithDetails(map[string]any{"status": EstadoParaContrato(travada.Status)})
 	}
 
@@ -846,7 +847,7 @@ func (s *Servico) orcamentoParaGanhar(ctx context.Context, u *auth.Usuario, o Op
 			return vazio, err
 		}
 		if vigente == nil {
-			return vazio, OrcamentoObrigatorioParaGanhar.WithDetails(map[string]any{
+			return vazio, apperr.QuoteRequiredToWin.WithDetails(map[string]any{
 				"hint": "emita o orçamento em POST /quotes com persist: true e opportunity_id, e ganhe de novo.",
 			})
 		}
@@ -869,12 +870,12 @@ func (s *Servico) orcamentoParaGanhar(ctx context.Context, u *auth.Usuario, o Op
 		})
 	}
 	if orcamento.ReservaID != nil {
-		return vazio, disponibilidade.OrcamentoNaoEstaDePe.WithDetails(map[string]any{
+		return vazio, apperr.QuoteNotPending.WithDetails(map[string]any{
 			"quote_id": orcamento.ID, "reservation_id": *orcamento.ReservaID,
 		})
 	}
 	if orcamento.Vencido {
-		return vazio, disponibilidade.OrcamentoNaoEstaDePe.WithDetails(map[string]any{
+		return vazio, apperr.QuoteNotPending.WithDetails(map[string]any{
 			"quote_id": orcamento.ID, "valid_until": orcamento.ValidoAte,
 		})
 	}
@@ -951,7 +952,7 @@ func (s *Servico) Perder(ctx context.Context, id uuid.UUID, corpo PedidoDePerda)
 			return err
 		}
 		if travada.Status != OportunidadeAberta {
-			return OportunidadeFechada.WithDetails(map[string]any{"status": EstadoParaContrato(travada.Status)})
+			return apperr.OpportunityAlreadyClosed.WithDetails(map[string]any{"status": EstadoParaContrato(travada.Status)})
 		}
 		if err := s.repo.MotivoAtivo(ctx, u.PropertyID, corpo.MotivoID); err != nil {
 			return err
@@ -1138,6 +1139,16 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (OportunidadeCompl
 	}
 	c.Timeline = montarTimeline(c)
 	c.Alertas = montarAlertas(c, agora)
+
+	// `contact` traz telefone e e-mail CHEIOS — é a tela de trabalho do
+	// corretor, de onde sai o `tel:`. Então a leitura grava `pii_access_log`
+	// (`reason: opportunity`), por último: só depois de todas as leituras
+	// darem certo a tela sai, e o acesso só aconteceu se ela sai. Falha
+	// fechada: sem a linha, a tela não sai. Oportunidade fora do escopo já
+	// saiu em 404 em buscarComSLA, sem gravar nada.
+	if err := pii.Registrar(ctx, s.repo.Pool(), "contacts", c.Contato.ID, pii.MotivoOportunidade); err != nil {
+		return OportunidadeCompleta{}, err
+	}
 	return c, nil
 }
 

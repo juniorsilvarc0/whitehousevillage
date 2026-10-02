@@ -32,7 +32,10 @@ func NovoServico(repo *Repository, tx *db.TxManager) *Servico {
 // `phone` mal formatado é 422, e NÃO uma busca vazia: "não achei essa pessoa" e
 // "você perguntou errado" são respostas diferentes, e o robô de WhatsApp que
 // confunde as duas cria um contato novo a cada mensagem.
-func (s *Servico) Listar(ctx context.Context, f Filtro) ([]Contato, int64, error) {
+//
+// O filtro compara o valor CHEIO no SQL; a resposta sai mascarada (F2-23).
+// Quem procurou pelo CPF no balcão acha a linha e abre a ficha, que registra.
+func (s *Servico) Listar(ctx context.Context, f Filtro) ([]ContatoNaLista, int64, error) {
 	if err := s.exigirEscopoAplicavel(ctx, auth.AcaoVer); err != nil {
 		return nil, 0, err
 	}
@@ -54,7 +57,15 @@ func (s *Servico) Listar(ctx context.Context, f Filtro) ([]Contato, int64, error
 		f.Documento = normalizarBuscaDeDocumento(f.Documento)
 	}
 
-	return s.repo.Listar(ctx, f)
+	fichas, total, err := s.repo.Listar(ctx, f)
+	if err != nil {
+		return nil, 0, err
+	}
+	linhas := make([]ContatoNaLista, 0, len(fichas))
+	for _, c := range fichas {
+		linhas = append(linhas, NaLista(c))
+	}
+	return linhas, total, nil
 }
 
 // Buscar devolve a ficha completa e GRAVA `pii_access_log`.
@@ -227,7 +238,15 @@ func (s *Servico) Atualizar(ctx context.Context, id uuid.UUID, a Atualizar) (Con
 		if out, err = s.repo.Atualizar(ctx, id, a); err != nil {
 			return err
 		}
-		return registrarAlteracao(ctx, s.repo.pool, atual, out)
+		if err := registrarAlteracao(ctx, s.repo.pool, atual, out); err != nil {
+			return err
+		}
+		// A resposta do PATCH é a ficha CHEIA, inclusive o que o corpo não
+		// trouxe. Sem esta linha `PATCH {}` era uma segunda porta para a
+		// ficha: nada muda, `audit_log` não ganha linha (não há diferença) e
+		// documento e nascimento saíam sem rastro. Dentro da transação: se o
+		// registro não entra, a escrita também não.
+		return pii.Registrar(ctx, s.repo.pool, Entidade, id, pii.MotivoFicha)
 	})
 	if err != nil {
 		return Contato{}, s.completarDuplicidade(ctx, err, telefone)
@@ -262,7 +281,7 @@ func (s *Servico) Excluir(ctx context.Context, id uuid.UUID) error {
 			return err
 		}
 		if v.Total() > 0 {
-			return RecursoEmUso.WithDetails(map[string]any{
+			return apperr.ResourceInUse.WithMessage(mensagemContatoComVinculos).WithDetails(map[string]any{
 				"references": v,
 				"hint": "este contato tem histórico. Para atender ao direito de eliminação sem apagar " +
 					"a venda, use POST /contacts/" + id.String() + "/anonymize.",
@@ -314,7 +333,7 @@ func (s *Servico) Anonimizar(ctx context.Context, id uuid.UUID, p PedidoDeAnonim
 			return err
 		}
 		if len(vivas) > 0 {
-			return RecursoEmUso.
+			return apperr.ResourceInUse.
 				WithMessage("Há reserva em andamento para este contato: a ficha fica elegível quando a estadia terminar.").
 				WithDetails(map[string]any{"reservations": vivas})
 		}
@@ -368,7 +387,7 @@ func (s *Servico) travarEExigirFichaViva(ctx context.Context, id uuid.UUID) (Con
 		return Contato{}, err
 	}
 	if atual.Anonimizado() {
-		return Contato{}, ContatoAnonimizado.WithDetails(map[string]any{
+		return Contato{}, apperr.ContactAnonymized.WithDetails(map[string]any{
 			"contact_id":    id,
 			"anonymized_at": atual.AnonimizadoEm,
 		})
@@ -391,7 +410,7 @@ func (s *Servico) conferirDocumento(ctx context.Context, propriedade uuid.UUID, 
 		return err
 	}
 	if achou {
-		return ContatoDuplicado.WithDetails(map[string]any{
+		return apperr.ContactDuplicate.WithDetails(map[string]any{
 			"field":      "doc_number",
 			"contact_id": existente,
 		})
@@ -450,7 +469,7 @@ func (s *Servico) completarDuplicidade(ctx context.Context, err error, telefone 
 		}
 		detalhes["phone_e164"] = *telefone
 	}
-	return ContatoDuplicado.WithCause(err).WithDetails(detalhes)
+	return apperr.ContactDuplicate.WithCause(err).WithDetails(detalhes)
 }
 
 // propriedade resolve onde o contato nasce: a do usuário logado; sem usuário

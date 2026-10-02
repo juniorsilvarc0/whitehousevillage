@@ -387,7 +387,8 @@ func TestLeituraDeFichaGravaPIIAccessLog(t *testing.T) {
 		t.Fatalf("a ficha nasceu com %d acessos registrados", n)
 	}
 
-	// A LISTA não grava: é a agenda do dia, não leitura de ficha.
+	// A LISTA não grava porque não serve a ficha: documento, telefone e e-mail
+	// saem mascarados (F2-23 — ver lista_mascarada_integration_test.go).
 	a.chamar(t, http.MethodGet, "/contacts?q=Ficha", token, nil)
 	if n := a.contar(t, `SELECT count(*) FROM pii_access_log WHERE contact_id = $1`, contato); n != 0 {
 		t.Fatalf("a listagem gravou %d acessos; só a ficha individual deve gravar", n)

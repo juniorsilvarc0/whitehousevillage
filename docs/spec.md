@@ -115,7 +115,7 @@ Períodos se sobrepõem de propósito (Réveillon dentro da alta temporada); ven
 - Sinal para confirmar: **50%**.
 - Saldo: até **7 dias** antes do check-in.
 - Pré-reserva segura a data por **48 h** sem pagamento.
-- Alçada de desconto: **≤ 5%** a gestão fecha · **6–10%** exige aprovação do proprietário · **> 10%** não autorizado.
+- Alçada de desconto: **≤ 5%** a gestão fecha · **6–10%** exige aprovação do proprietário · **> 10%** não autorizado. *(02/10/2026: a aprovação de 6–10% **não existe no código** — o motor só rotula `discount_authority` e recusa acima de 10%, e a venda com 8% fecha sem aprovação. Virar fluxo ou sair daqui é a decisão 13 pendente do dono, em `roadmap.md`.)*
 - Caução de evento: R$ 2.000, cobrada como recebível reembolsável.
 
 ### Política de cancelamento (versionada, em faixas)

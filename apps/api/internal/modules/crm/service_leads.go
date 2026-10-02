@@ -214,7 +214,7 @@ func (s *Servico) ExcluirLead(ctx context.Context, id uuid.UUID) error {
 			return err
 		}
 		if oportunidade != "" {
-			return RecursoEmUso.
+			return apperr.ResourceInUse.
 				WithMessage("Este lead já virou oportunidade; use `status: descartado` para tirá-lo da fila.").
 				WithDetails(map[string]any{"opportunity_id": oportunidade})
 		}
@@ -247,7 +247,7 @@ func (s *Servico) Converter(ctx context.Context, id uuid.UUID, corpo PedidoDeCon
 			return err
 		}
 		if oportunidade != "" {
-			return LeadJaConvertido.WithDetails(map[string]any{"opportunity_id": oportunidade})
+			return apperr.LeadAlreadyConverted.WithDetails(map[string]any{"opportunity_id": oportunidade})
 		}
 
 		// O corpo SOBREPÕE o lead; o que ele omite é herdado. É o que permite

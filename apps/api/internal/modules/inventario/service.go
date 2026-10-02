@@ -331,7 +331,7 @@ func (s *Service) guardarTransicaoDoProduto(ctx context.Context, atual Produto, 
 		return err
 	}
 	if reservas > 0 {
-		return ResourceInUse.
+		return apperr.ResourceInUse.
 			WithMessage("Há reserva ativa neste produto. Encerre-a antes de desativá-lo.").
 			WithDetails(map[string]any{"reservations_count": reservas})
 	}
@@ -387,7 +387,7 @@ func (s *Service) guardarConsumoDoProduto(ctx context.Context, propriedade uuid.
 		return nil
 	}
 
-	return ResourceInUse.
+	return apperr.ResourceInUse.
 		WithMessage(fmt.Sprintf(
 			"O consumo de %q não pode mudar enquanto %s de pé: %s. "+
 				"O consumo define quantas unidades a venda ocupa, e %s já ocupa pelo número antigo — "+
@@ -639,7 +639,7 @@ func (s *Service) guardarComposicao(
 	}
 
 	if produto.Consome == ConsomeTodosMembros {
-		return ResourceInUse.
+		return apperr.ResourceInUse.
 			WithMessage(fmt.Sprintf(
 				"A composição de %q não pode mudar enquanto %s de pé: %s. "+
 					"O produto vende a casa por inteiro, e %s congelou o conjunto que entregaria — "+
@@ -670,7 +670,7 @@ func (s *Service) guardarComposicao(
 	sort.Strings(ocupadas)
 	detalhes["occupied_unit_codes"] = ocupadas
 
-	return ResourceInUse.
+	return apperr.ResourceInUse.
 		WithMessage(fmt.Sprintf(
 			"%s de %q %s ocupada por estadia futura já vendida: %s. "+
 				"Tirá-la da composição deixaria a venda hospedando fora do próprio produto. "+
@@ -888,7 +888,7 @@ func (s *Service) guardarDesativacaoDaUnidade(ctx context.Context, propriedade u
 	produtos, exclusivos := codigosDosVinculos(vinculos)
 	// Os motivos vão JUNTOS no mesmo details: quem desativa precisa ver tudo o
 	// que falta resolver, não descobrir um impedimento por tentativa.
-	return ResourceInUse.
+	return apperr.ResourceInUse.
 		WithMessage(mensagemDaUnidadeEmUso(bloqueios, produtos, exclusivos)).
 		WithDetails(map[string]any{
 			"blocks_count": bloqueios,
@@ -930,7 +930,7 @@ func (s *Service) guardarReativacaoDaUnidade(ctx context.Context, propriedade uu
 		codigos = append(codigos, r.Codigo)
 	}
 
-	return ResourceInUse.
+	return apperr.ResourceInUse.
 		WithMessage(fmt.Sprintf(
 			"Reativar %s a devolveria ao inventário dentro de %s: %s. "+
 				"Resolva %s antes de reativar, ou aguarde o período terminar.",

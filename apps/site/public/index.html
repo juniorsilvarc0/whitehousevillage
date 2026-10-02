@@ -8,11 +8,11 @@
     <title>White House · Praia do Coqueiro | Aluguel por temporada e eventos</title>
     <meta name="description" content="Condomínio de luxo na Praia do Coqueiro, Luís Correia (PI). Hospedagem por temporada, casamentos, aniversários, retiros e produções. Consulte disponibilidade." />
 
+    <!-- O número do WhatsApp não mora neste arquivo: o nginx o escreve por SSI a
+         partir de uma única linha (whv_whatsapp em apps/site/nginx.conf). -->
     <link rel="icon" href="/assets/logo.png" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Jost:wght@200;300;400;500&display=swap" rel="stylesheet" />
 
+    <link rel="stylesheet" href="/styles/fonts.css" />
     <link rel="stylesheet" href="/styles/tokens.css" />
     <link rel="stylesheet" href="/styles/base.css" />
     <link rel="stylesheet" href="/styles/components.css" />
@@ -240,7 +240,7 @@
                     </div>
                     <div class="cta-banner__actions" data-reveal>
                         <a href="/disponibilidade.html" class="btn btn--primary">Consultar datas</a>
-                        <a href="https://wa.me/5586999999999" target="_blank" rel="noopener" class="btn btn--light">WhatsApp</a>
+                        <a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener" class="btn btn--light">WhatsApp</a>
                     </div>
                 </div>
             </div>
@@ -266,7 +266,7 @@
                 <div>
                     <h4>Reservas</h4>
                     <ul>
-                        <li><a href="https://wa.me/5586999999999" target="_blank" rel="noopener">WhatsApp oficial</a></li>
+                        <li><a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener">WhatsApp oficial</a></li>
                         <li><a href="mailto:reservas@whitehouse.com.br">reservas@whitehouse.com.br</a></li>
                         <li>Atendimento 8h — 20h</li>
                     </ul>
@@ -281,12 +281,11 @@
             </div>
             <div class="site-footer__bottom">
                 <span>© 2026 White House — Todos os direitos reservados</span>
-                <span><a href="/admin/">Acesso da gestão →</a></span>
             </div>
         </div>
     </footer>
 
-    <a class="wa-float" href="https://wa.me/5586999999999" target="_blank" rel="noopener">💬 Falar com reservas</a>
+    <a class="wa-float" href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener">💬 Falar com reservas</a>
 
     <script src="/scripts/data.js"></script>
     <script src="/scripts/main.js"></script>

@@ -13,6 +13,7 @@ import (
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/booking"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/commission"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/money"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
@@ -284,6 +285,10 @@ type NovaReserva struct {
 	RemarcadaDe *uuid.UUID
 	Observacoes *string
 	CriadaPor   *uuid.UUID
+	// CorretorRestritoA é o ator em escopo `own` de `reservations:criar`. Com
+	// ele, o INSERT só acontece se BrokerID for nulo ou o `users.broker_id`
+	// desse ator — conferido na MESMA instrução (ver corretor.go).
+	CorretorRestritoA *uuid.UUID
 }
 
 // InserirReserva grava a reserva e devolve id e código.
@@ -294,16 +299,25 @@ type NovaReserva struct {
 // sempre tomado ANTES dos locks das unidades (a FK de stay_blocks exige que a
 // reserva exista primeiro). Ordem única de aquisição é o que impede o impasse
 // entre as duas travas.
+//
+// A AUTORIDADE sobre `broker_id` também é conferida aqui, e não só no service:
+// `INSERT ... SELECT ... WHERE` grava zero linhas quando, em escopo `own`
+// ($17), o corretor pedido não é o `users.broker_id` do ator lido NESTA
+// instrução. A leitura que o service fez antes alimenta o domínio; esta é a
+// que vale sob concorrência (a conta desvinculada entre as duas cai aqui).
 func (r *Repository) InserirReserva(ctx context.Context, n NovaReserva) (uuid.UUID, string, *time.Time, error) {
 	const q = `
 		INSERT INTO reservations (property_id, unit_type_id, contact_id, broker_id, owner_id,
 		                          source, status, check_in, check_out, guests_count,
 		                          is_event, event_type, hold_expires_at, rebooked_from_id,
 		                          notes, created_by, confirmed_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8::date,$9::date,$10,$11,$12,
-		        CASE WHEN $13::int IS NULL THEN NULL ELSE now() + make_interval(hours => $13::int) END,
-		        $14,$15,$16,
-		        CASE WHEN $7 = 'confirmed' THEN now() ELSE NULL END)
+		SELECT $1,$2,$3,$4,$5,$6,$7,$8::date,$9::date,$10,$11,$12,
+		       CASE WHEN $13::int IS NULL THEN NULL ELSE now() + make_interval(hours => $13::int) END,
+		       $14,$15,$16,
+		       CASE WHEN $7 = 'confirmed' THEN now() ELSE NULL END
+		 WHERE $17::uuid IS NULL
+		    OR $4::uuid IS NULL
+		    OR $4::uuid = (SELECT u.broker_id FROM users u WHERE u.id = $17::uuid)
 		RETURNING id, code, hold_expires_at`
 
 	var (
@@ -315,8 +329,23 @@ func (r *Repository) InserirReserva(ctx context.Context, n NovaReserva) (uuid.UU
 		n.PropertyID, n.UnitTypeID, n.ContactID, n.BrokerID, n.OwnerID,
 		n.Origem, n.Status, n.CheckIn, n.CheckOut, n.Hospedes,
 		n.IsEvento, n.TipoEvento, n.HoldHoras, n.RemarcadaDe,
-		n.Observacoes, n.CriadaPor).Scan(&id, &codigo, &expira)
+		n.Observacoes, n.CriadaPor, n.CorretorRestritoA).Scan(&id, &codigo, &expira)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, "", nil, recusaDoCorretor(commission.ReasonNotActorBroker)
+	}
 	return id, codigo, expira, db.MapError(err)
+}
+
+// CorretorDaConta é o `users.broker_id` do ator — nil para a conta sem
+// cadastro de corretor. Alimenta o domínio; a garantia é a condição dentro da
+// escrita (InserirReserva, AtualizarCadastro).
+func (r *Repository) CorretorDaConta(ctx context.Context, usuario uuid.UUID) (*uuid.UUID, error) {
+	var corretor *uuid.UUID
+	err := r.exec(ctx).QueryRow(ctx, `SELECT broker_id FROM users WHERE id = $1`, usuario).Scan(&corretor)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperr.Unauthorized
+	}
+	return corretor, db.MapError(err)
 }
 
 // Preco é o snapshot financeiro que vai para `reservation_pricing`.
@@ -595,16 +624,34 @@ func (r *Repository) EstenderHold(ctx context.Context, id uuid.UUID, horas int) 
 
 // AtualizarCadastro grava os campos editáveis por PUT/PATCH. Datas, produto e
 // preço não estão aqui de propósito — ver ReservaAtualizar.
-func (r *Repository) AtualizarCadastro(ctx context.Context, id uuid.UUID, contato uuid.UUID, corretor *uuid.UUID, hospedes int, isEvento bool, tipoEvento *string, origem string, notas *string) error {
+//
+// Em escopo `own` ($9 = o ator), TROCAR o corretor só acontece se o valor novo
+// e o gravado forem, cada um, nulo ou o `users.broker_id` do ator lido NESTA
+// instrução — a mesma conferência do INSERT. Reenviar o valor gravado não é
+// troca e passa. A linha já está travada por TravarReserva (status e corretor
+// gravado não mudam por baixo); o que pode mudar é a conta do ator, e só esta
+// condição a vê. Zero linhas = recusa.
+func (r *Repository) AtualizarCadastro(ctx context.Context, id uuid.UUID, contato uuid.UUID, corretor AtribuicaoDoCorretor, hospedes int, isEvento bool, tipoEvento *string, origem string, notas *string) error {
 	const q = `
-		UPDATE reservations
+		UPDATE reservations r
 		   SET contact_id = $2, broker_id = $3, guests_count = $4,
 		       is_event = $5, event_type = $6, source = $7, notes = $8,
 		       updated_at = now()
-		 WHERE id = $1`
+		 WHERE r.id = $1
+		   AND ( $9::uuid IS NULL
+		      OR r.broker_id IS NOT DISTINCT FROM $3::uuid
+		      OR ( ($3::uuid IS NULL OR $3::uuid = (SELECT u.broker_id FROM users u WHERE u.id = $9::uuid))
+		       AND (r.broker_id IS NULL OR r.broker_id = (SELECT u.broker_id FROM users u WHERE u.id = $9::uuid)) ) )`
 
-	_, err := r.exec(ctx).Exec(ctx, q, id, contato, corretor, hospedes, isEvento, tipoEvento, origem, notas)
-	return db.MapError(err)
+	tag, err := r.exec(ctx).Exec(ctx, q, id, contato, corretor.Corretor, hospedes, isEvento, tipoEvento, origem, notas,
+		corretor.RestritoA)
+	if err != nil {
+		return db.MapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		return recusaDoCorretor(commission.ReasonNotActorBroker)
+	}
+	return nil
 }
 
 // DescartarQuote apaga de verdade — e só o que nunca existiu comercialmente.

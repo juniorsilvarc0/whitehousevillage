@@ -647,12 +647,17 @@ func (r *Repository) ReservasExclusivasSemAUnidade(ctx context.Context, propried
 
 // ─────────────────────────── Tradução de erro ───────────────────────
 
+// mensagemCodigoEmUso troca a frase padrão do apperr ("chave") pela palavra que
+// a tela de inventário usa: aqui a chave natural é sempre o código, por
+// propriedade. É a mesma frase que o módulo devolvia antes do F2-03.
+const mensagemCodigoEmUso = "Já existe registro com esse código nesta propriedade."
+
 // traduzirProduto e traduzirUnidade transformam a violação da chave natural no
 // 409 CODE_IN_USE que o contrato promete. Quem decide é a CONSTRAINT: um SELECT
 // antes do INSERT perderia a corrida contra outra requisição no mesmo instante.
 func (r *Repository) traduzirProduto(err error) error {
 	if db.IsUniqueViolation(err, chaveNaturalDoProduto) {
-		return CodeInUse.WithCause(err).WithDetails(map[string]string{
+		return apperr.CodeInUse.WithMessage(mensagemCodigoEmUso).WithCause(err).WithDetails(map[string]string{
 			"code": "já existe um produto com esse código nesta propriedade.",
 		})
 	}
@@ -661,7 +666,7 @@ func (r *Repository) traduzirProduto(err error) error {
 
 func (r *Repository) traduzirUnidade(err error) error {
 	if db.IsUniqueViolation(err, chaveNaturalDaUnidade) {
-		return CodeInUse.WithCause(err).WithDetails(map[string]string{
+		return apperr.CodeInUse.WithMessage(mensagemCodigoEmUso).WithCause(err).WithDetails(map[string]string{
 			"code": "já existe uma unidade com esse código nesta propriedade.",
 		})
 	}

@@ -270,3 +270,19 @@ func contem(s, sub string) bool {
 		return false
 	})()
 }
+
+// quote_validity_days: piso do CHECK do banco (> 0) e teto de digitação do
+// domínio (booking.QuoteValidityMaxDays). As bordas aceitas e as recusadas.
+func TestPoliticaComercialLimitaValidadeDoOrcamento(t *testing.T) {
+	for _, caso := range []struct {
+		dias   int
+		aceita bool
+	}{{0, false}, {1, true}, {15, true}, {365, true}, {366, false}, {-3, false}} {
+		e := politicaValida(t, "2026-01-01")
+		e.ValidadeOrcamentoDia = optDe(caso.dias)
+		_, recusou := e.Validar()["quote_validity_days"]
+		if recusou == caso.aceita {
+			t.Errorf("quote_validity_days=%d: recusou=%v, esperado aceitar=%v", caso.dias, recusou, caso.aceita)
+		}
+	}
+}

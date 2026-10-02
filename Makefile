@@ -26,8 +26,34 @@ SMOKE_URL_OU_PADRAO ?= $(if $(SMOKE_URL),$(SMOKE_URL),http://localhost:$(ADMIN_P
 SMOKE_API           ?= http://localhost:$(API_HOST_PORT)
 ADMIN_PORT          ?= 3100
 API_HOST_PORT       ?= 8080
+# Site público. Mesmo padrão do .env.example (SITE_PORT=3200): o Makefile não lê
+# o .env, então a porta do host precisa de padrão aqui também.
+SITE_PORT           ?= 3200
+SITE_URL            ?= http://localhost:$(SITE_PORT)
+# `smoke-site-imagem` sobe um container próprio da imagem do site. Porta
+# diferente da do stack para rodar com o `make up` de pé sem disputar a 3200.
+SITE_IMAGEM         ?= whv-site:fumaca
+SITE_IMAGEM_PORT    ?= 3201
 
-.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed smoke smoke-stack esperar check lint fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
+# golangci-lint com versão FIXADA. O job `lint-go` do CI instala exatamente esta
+# (lê com `make -s golangci-versao`): um lugar só para o número, e o alvo
+# `lint-golangci` avisa quando a máquina roda outra. É a desta máquina em
+# 02/10/2026 (`golangci-lint --version` = 2.5.0); docs/testing.md fala em v2.1.6.
+GOLANGCI_LINT_VERSION := v2.5.0
+# Sem teto de repetição. O padrão do golangci-lint esconde apontamentos iguais
+# (3 por texto, 50 por linter): no e0bc08e, consertar três `dado :=` revelou
+# outros dois. O número que aparece tem de ser o número que existe.
+GOLANGCI_LINT_ARGS    := --max-same-issues=0 --max-issues-per-linter=0
+# Tags de build do lint. VAZIO por ora, e é um ponto cego conhecido: arquivo com
+# `//go:build integration` é invisível ao lint, como era ao vet (ver `vet`).
+# Medido em 02/10/2026 com a tag: 15 apontamentos, todos em
+# *_integration_test.go (11 errcheck, 3 staticcheck, 1 unused); sem a tag, 0.
+# Ligar agora fecharia o `make check` de todo mundo por código de teste. Passa a
+# `integration` quando os 15 forem pagos; medir hoje:
+#   make lint-golangci GOLANGCI_LINT_TAGS=integration
+GOLANGCI_LINT_TAGS    ?=
+
+.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed smoke smoke-painel smoke-site smoke-site-imagem smoke-stack worker-vivo esperar check lint lint-golangci golangci-versao fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
 
 help: ## Lista os alvos
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -69,14 +95,57 @@ migrate-version: ## Versão aplicada do schema e estado dirty
 seed: ## Popula produtos, unidades, tarifas, perfis e usuários de teste
 	$(COMPOSE) run --rm --build seed
 
-smoke: ## Fumaça de aplicação: sobe o navegador, faz login e percorre as telas
+smoke: ## Fumaça de aplicação: painel (navegador, login, telas) e site público
 	# Existe porque a suíte inteira ficou verde enquanto o stack NÃO SUBIA:
 	# a imagem do painel morria no boot, o BFF respondia 502 e /crm/pipelines
 	# devolvia 500. Teste roda contra código; isto roda contra a aplicação servida.
 	#
 	# Roda contra o que JÁ ESTÁ no ar. Se o stack não estiver na versão da
 	# árvore, o alvo abaixo (`smoke-stack`) é o que sobe tudo antes.
+	#
+	# O site entrou em 02/10/2026: até ali o /admin/ falso (sem autenticação)
+	# e um fallback que respondia 200 para qualquer caminho estavam no ar em :3200
+	# sem nenhuma fumaça olhando. As duas rodam SEMPRE, mesmo com a primeira
+	# vermelha: uma reprovação não pode esconder a outra. Para só uma delas:
+	# `make smoke-painel` ou `make smoke-site`.
+	@reprovou=""; \
+	$(MAKE) --no-print-directory smoke-painel || reprovou="$$reprovou painel"; \
+	$(MAKE) --no-print-directory smoke-site || reprovou="$$reprovou site"; \
+	if [ -n "$$reprovou" ]; then echo "==> fumaça REPROVADA em:$$reprovou"; exit 1; fi; \
+	echo "==> fumaça aprovada: painel e site"
+
+smoke-painel: ## Fumaça só do painel (navegador, login, telas) contra o que está no ar
 	cd apps/admin && node e2e/fumaca.mjs $(SMOKE_URL)
+
+smoke-site: ## Fumaça do site público: 200, 404 real, /admin 404, recursos, hosts externos, WhatsApp
+	# Node 22 puro, sem `pnpm install`: o script só usa fetch, fs e path.
+	node apps/site/e2e/fumaca-site.mjs $(SITE_URL)
+
+smoke-site-imagem: ## Constrói a imagem do site, sobe um container dela (sem volume) e roda a fumaça
+	# Por que existe além do `smoke-site` que o `smoke-stack` já roda: no compose
+	# de dev o public/ do repositório é MONTADO por cima do que a imagem copiou.
+	# A fumaça do stack prova o nginx.conf dentro do nginx:1.27-alpine, mas não
+	# prova o COPY — um .dockerignore que engolisse fonts/ ou 404.html passaria
+	# verde lá e iria ao ar quebrado. Aqui roda a imagem crua, como em produção.
+	# É o alvo do job `site` do CI.
+	@set -uo pipefail; \
+	docker build -f apps/site/Dockerfile -t $(SITE_IMAGEM) . || exit 1; \
+	docker rm -f whv-site-fumaca >/dev/null 2>&1 || true; \
+	docker run -d --name whv-site-fumaca -e TZ=America/Fortaleza \
+		-p $(SITE_IMAGEM_PORT):80 $(SITE_IMAGEM) >/dev/null || exit 1; \
+	trap 'docker rm -f whv-site-fumaca >/dev/null 2>&1 || true' EXIT; \
+	pronto=0; \
+	for _ in $$(seq 1 30); do \
+		if curl -fsS -o /dev/null "http://localhost:$(SITE_IMAGEM_PORT)/"; then pronto=1; break; fi; \
+		sleep 1; \
+	done; \
+	if [ "$$pronto" != "1" ]; then \
+		echo "imagem do site não respondeu em http://localhost:$(SITE_IMAGEM_PORT)/ depois de 30s"; \
+		docker logs --tail=60 whv-site-fumaca; exit 1; \
+	fi; \
+	node apps/site/e2e/fumaca-site.mjs "http://localhost:$(SITE_IMAGEM_PORT)" || { \
+		echo "--- log do nginx da imagem ---"; docker logs --tail=60 whv-site-fumaca; exit 1; \
+	}
 
 smoke-stack: ## Sobe/atualiza o stack inteiro, migra, semeia e roda a fumaça
 	# A ordem importa e é a mesma de um deploy: imagem nova → schema → seed →
@@ -87,12 +156,54 @@ smoke-stack: ## Sobe/atualiza o stack inteiro, migra, semeia e roda a fumaça
 	#
 	# É este alvo que o job `smoke` do CI executa: o CI não deve carregar uma
 	# segunda cópia da sequência (ver a nota do job `integration`).
+	#
+	# `desde` é marcado depois do seed: o worker loga ERROR a cada minuto
+	# ENQUANTO o schema não existe (esperado), e só o que vier depois do schema
+	# conta contra ele. Fumaça e worker rodam os dois, mesmo com um vermelho.
 	$(MAKE) up
 	@$(MAKE) --no-print-directory esperar ALVO="$(SMOKE_API)/healthz" QUEM=api
 	$(MAKE) migrate
 	$(MAKE) seed
 	@$(MAKE) --no-print-directory esperar ALVO="$(SMOKE_URL_OU_PADRAO)/login" QUEM=admin
-	$(MAKE) smoke
+	@$(MAKE) --no-print-directory esperar ALVO="$(SITE_URL)/" QUEM=site
+	@desde=$$(date -u +%Y-%m-%dT%H:%M:%SZ); reprovou=""; \
+	$(MAKE) --no-print-directory smoke || reprovou="$$reprovou fumaça"; \
+	$(MAKE) --no-print-directory worker-vivo DESDE="$$desde" || reprovou="$$reprovou worker"; \
+	if [ -n "$$reprovou" ]; then echo "==> smoke-stack REPROVADO em:$$reprovou"; exit 1; fi
+
+# worker-vivo: o worker está no stack, de pé, sem ter reiniciado, e sem ERROR
+# desde DESDE (RFC 3339; vazio pula a leitura do log).
+#
+# Existe porque o worker passou da fundação até 02/10/2026 fora do stack (num
+# profile que nenhum alvo ligava) sem nenhuma linha vermelha: a fumaça olha
+# telas, e hold que não expira não aparece em tela nenhuma. RestartCount > 0
+# pega o crash loop (env faltando, banco recusando). O ERROR depois do schema
+# pega o job que roda e falha todo minuto — uma coluna renomeada por migration,
+# por exemplo. Limite honesto: o job roda a cada minuto e não loga sucesso, então
+# a leitura do log só cobre os tiques que couberam entre DESDE e agora.
+worker-vivo: ## Confere que o worker está no stack, de pé e sem reinício (o smoke-stack chama)
+	@set -uo pipefail; \
+	id=$$($(COMPOSE) ps -q worker 2>/dev/null); \
+	if [ -z "$$id" ]; then \
+		echo "worker não está no stack (profile de volta? serviço renomeado?): nenhum hold expira"; \
+		exit 1; \
+	fi; \
+	estado=$$(docker inspect -f '{{.State.Status}} {{.RestartCount}}' "$$id"); \
+	if [ "$$estado" != "running 0" ]; then \
+		echo "worker em '$$estado' (status reinícios); esperado 'running 0'"; \
+		$(COMPOSE) logs --tail=60 worker; exit 1; \
+	fi; \
+	extra=""; \
+	if [ -n "$(DESDE)" ]; then \
+		erros=$$($(COMPOSE) logs --no-log-prefix --since "$(DESDE)" worker | grep -c '"level":"ERROR"'); \
+		if [ "$$erros" != "0" ]; then \
+			echo "worker de pé, mas com $$erros ERROR desde $(DESDE) (depois do schema):"; \
+			$(COMPOSE) logs --no-log-prefix --since "$(DESDE)" worker | grep '"level":"ERROR"' | tail -5; \
+			exit 1; \
+		fi; \
+		extra=", nenhum ERROR desde $(DESDE)"; \
+	fi; \
+	echo "==> worker de pé (running, 0 reinícios$$extra)"
 
 # esperar: sonda ALVO até responder, e despeja o log do serviço QUEM se desistir.
 # O log no fracasso é o que separa "a fumaça reprovou" de "a fumaça nem chegou
@@ -112,14 +223,45 @@ esperar:
 
 check: lint test ## Lint + typecheck + testes (rode antes de reportar qualquer entrega)
 
-lint: fmt-check vet ## gofmt + vet (com e sem tags) + golangci-lint + eslint + tsc
-	@command -v golangci-lint >/dev/null 2>&1 || { \
-		echo "golangci-lint não está instalado — \`make check\` não consegue se completar."; \
-		echo "instale com: brew install golangci-lint   (ou veja golangci-lint.run/welcome/install)"; \
-		exit 1; \
-	}
-	cd apps/api && golangci-lint run ./...
+lint: fmt-check vet lint-golangci ## gofmt + vet (com e sem tags) + golangci-lint + eslint + tsc
 	cd apps/admin && pnpm lint && pnpm exec tsc --noEmit
+
+# Procura o binário no PATH e, se não achar, em `go env GOBIN` e em cada
+# `GOPATH/bin` — é onde `go install` e o script oficial de instalação o põem, e
+# esse diretório costuma ficar fora do PATH. Lição do e0bc08e: só com o PATH,
+# `make check` reprovava dizendo que a ferramenta não existia, numa máquina onde
+# ela estava em ~/go/bin.
+#
+# Versão diferente da fixada: no CI (CI=true) reprova, porque lá a action instala
+# a versão que este Makefile pede e divergir é defeito do job; na máquina do
+# desenvolvedor só avisa, porque outra versão conta outros apontamentos, mas
+# ainda é lint.
+lint-golangci: ## golangci-lint na versão fixada, sem teto de apontamentos (o mesmo comando do CI)
+	@set -uo pipefail; \
+	bin=$$(command -v golangci-lint 2>/dev/null || true); \
+	if [ -z "$$bin" ]; then \
+		for dir in $$(go env GOBIN 2>/dev/null) $$(go env GOPATH 2>/dev/null | tr ':' '\n' | sed 's#$$#/bin#'); do \
+			if [ -x "$$dir/golangci-lint" ]; then bin="$$dir/golangci-lint"; break; fi; \
+		done; \
+	fi; \
+	if [ -z "$$bin" ]; then \
+		echo "golangci-lint não encontrado no PATH, em \`go env GOBIN\` nem em \`go env GOPATH\`/bin:"; \
+		echo "\`make check\` não se completa sem ele. Instale a versão do CI ($(GOLANGCI_LINT_VERSION)):"; \
+		echo "  curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b \"\$$(go env GOPATH)/bin\" $(GOLANGCI_LINT_VERSION)"; \
+		exit 1; \
+	fi; \
+	versao=$$("$$bin" --version 2>/dev/null | sed -n 's/.*version v\{0,1\}\([0-9][0-9.]*\).*/\1/p'); \
+	if [ "v$$versao" != "$(GOLANGCI_LINT_VERSION)" ]; then \
+		if [ "$${CI:-}" = "true" ]; then \
+			echo "golangci-lint $${versao:-desconhecida} no CI, mas o Makefile fixa $(GOLANGCI_LINT_VERSION)"; exit 1; \
+		fi; \
+		echo "AVISO: golangci-lint $${versao:-desconhecida} nesta máquina, $(GOLANGCI_LINT_VERSION) no CI: a contagem de apontamentos pode divergir."; \
+	fi; \
+	echo "==> $$bin ($$versao) run $(GOLANGCI_LINT_ARGS)$(if $(GOLANGCI_LINT_TAGS), --build-tags=$(GOLANGCI_LINT_TAGS))"; \
+	cd apps/api && "$$bin" run $(GOLANGCI_LINT_ARGS) $(if $(GOLANGCI_LINT_TAGS),--build-tags=$(GOLANGCI_LINT_TAGS)) ./...
+
+golangci-versao: ## (interno) Versão fixada do golangci-lint; o job `lint-go` do CI lê daqui
+	@echo $(GOLANGCI_LINT_VERSION)
 
 fmt-check: ## Falha se algum .go está fora do gofmt (mesmo comando do CI)
 	@cd apps/api && saida=$$(gofmt -l .); \
@@ -212,8 +354,45 @@ fmt: ## Formata
 build: ## Build de produção das imagens
 	$(COMPOSE) build
 
+# psql e backup leem POSTGRES_USER/POSTGRES_DB DENTRO do container postgres (o
+# `sh -c` entre aspas simples), onde o compose já as pôs a partir do .env. Antes
+# o `$${...}` era expandido no shell do HOST, e o Makefile não lê o .env: numa
+# máquina limpa as duas saíam vazias.
 psql: ## Console do banco
-	$(COMPOSE) exec postgres psql -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+	$(COMPOSE) exec postgres sh -c 'psql -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"'
 
-backup: ## Dump manual
-	$(COMPOSE) exec -T postgres pg_dump -U $${POSTGRES_USER} $${POSTGRES_DB} | gzip > infra/backups/manual-$$(date +%Y%m%d-%H%M%S).sql.gz
+# O backup só é aceito se o pg_dump chegou ao fim. Medido em 02/10/2026 com a
+# receita anterior: `pg_dump -U` sem usuário morria com "option requires an
+# argument", o gzip comprimia o nada, e `make backup` saía 0 deixando um .gz de
+# 20 bytes com 0 bytes de dump — backup vazio com cara de backup. Agora:
+# - pipefail: a falha do pg_dump não some atrás do gzip;
+# - o fim do dump tem de trazer o marcador que o pg_dump só escreve quando
+#   termina. Janela de 10 linhas, não 3: desde o 16.10 o pg_dump fecha com
+#   `\unrestrict <chave>` DEPOIS do marcador (medido no 16.14, 4 linhas);
+# - grava em `.parcial` e só renomeia depois de verificado: arquivo com nome de
+#   backup é backup completo, e uma falha nunca apaga nem ocupa o nome de outro
+#   (duas execuções no mesmo segundo geram o mesmo nome).
+backup: ## Dump manual comprimido em infra/backups/ (reprova se o dump falhar ou vier incompleto)
+	@set -uo pipefail; \
+	mkdir -p infra/backups; \
+	arquivo="infra/backups/manual-$$(date +%Y%m%d-%H%M%S).sql.gz"; \
+	parcial="$$arquivo.$$$$.parcial"; \
+	if ! $(COMPOSE) exec -T postgres sh -c 'pg_dump -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' | gzip > "$$parcial"; then \
+		rm -f "$$parcial"; echo "backup FALHOU: o pg_dump não terminou (nada gravado)"; exit 1; \
+	fi; \
+	if ! gunzip -c "$$parcial" | tail -n 10 | grep -q 'PostgreSQL database dump complete'; then \
+		echo "backup INCOMPLETO: sem o marcador de fim do pg_dump; mantido para inspeção em $$parcial"; exit 1; \
+	fi; \
+	if [ -e "$$arquivo" ]; then \
+		echo "backup FALHOU: $$arquivo já existe (outro backup no mesmo segundo); este dump, completo, ficou em $$parcial"; exit 1; \
+	fi; \
+	mv "$$parcial" "$$arquivo"; \
+	echo "==> backup em $$arquivo ($$(du -h "$$arquivo" | cut -f1), dump completo)"
+
+# `restore` constava do .PHONY sem receita: `make restore` respondia "Nothing to
+# be done" e saía 0 — o comando de desastre fingindo que restaurou. Até existir
+# a restauração verificada (docs/infra.md §5: sempre em base nova, nunca por cima
+# da produção), ele reprova e aponta o procedimento manual.
+restore: ## NÃO implementado: reprova e aponta o procedimento manual (docs/infra.md §5)
+	@echo "make restore ainda não existe. Restaure à mão, SEMPRE numa base nova, seguindo docs/infra.md §5."; \
+	exit 1

@@ -251,7 +251,7 @@ func (s *Servico) gravarFunil(ctx context.Context, id uuid.UUID, corpo FunilAtua
 				return err
 			}
 			if !outro {
-				return FunilPadraoObrigatorio
+				return apperr.DefaultPipelineRequired
 			}
 		}
 		if !ativo && antes.Ativo {
@@ -260,7 +260,7 @@ func (s *Servico) gravarFunil(ctx context.Context, id uuid.UUID, corpo FunilAtua
 				return err
 			}
 			if abertas > 0 {
-				return RecursoEmUso.
+				return apperr.ResourceInUse.
 					WithMessage("Há oportunidade aberta neste funil; mova ou feche os cards antes de desativá-lo.").
 					WithDetails(map[string]any{"open_opportunity_count": abertas})
 			}
@@ -384,7 +384,7 @@ func (s *Servico) conferirTerminalUnico(ctx context.Context, funil uuid.UUID, ti
 		return err
 	}
 	if existe {
-		return NomeEmUso.
+		return apperr.CodeInUse.
 			WithMessage("Este funil já tem uma etapa de tipo " + tipo + "; é ela que /win e /lose procuram.").
 			WithDetails(map[string]any{"type": tipo})
 	}
@@ -449,7 +449,7 @@ func (s *Servico) SubstituirEtapa(ctx context.Context, id uuid.UUID, corpo Etapa
 	// Etapa não troca de funil: mudar arrastaria as oportunidades dela junto,
 	// sem uma linha de histórico dizendo que foram para outro lugar.
 	if corpo.FunilID != atual.FunilID {
-		return Etapa{}, EtapaForaDoFunil.
+		return Etapa{}, apperr.StageNotInPipeline.
 			WithMessage("A etapa não muda de funil; isso moveria as oportunidades dela junto, sem histórico.").
 			WithDetails(map[string]any{"stage_id": id, "pipeline_id": atual.FunilID})
 	}
@@ -592,7 +592,7 @@ func (s *Servico) Reordenar(ctx context.Context, corpo PedidoDeReordenacao) ([]E
 		enviadas := map[uuid.UUID]bool{}
 		for _, id := range corpo.EtapaIDs {
 			if !pertence[id] {
-				return EtapaForaDoFunil.WithDetails(map[string]any{"stage_id": id})
+				return apperr.StageNotInPipeline.WithDetails(map[string]any{"stage_id": id})
 			}
 			enviadas[id] = true
 		}
@@ -605,7 +605,7 @@ func (s *Servico) Reordenar(ctx context.Context, corpo PedidoDeReordenacao) ([]E
 		if len(faltando) > 0 {
 			// Sem esta recusa, as etapas ausentes ficariam com a posição de
 			// antes e o kanban desenharia duas colunas na mesma casa.
-			return OrdemIncompleta.WithDetails(map[string]any{"missing_stage_ids": faltando})
+			return apperr.StageOrderIncomplete.WithDetails(map[string]any{"missing_stage_ids": faltando})
 		}
 
 		if err := s.repo.Reordenar(ctx, corpo.FunilID, corpo.EtapaIDs); err != nil {
@@ -644,7 +644,7 @@ func (s *Servico) ExcluirEtapa(ctx context.Context, id uuid.UUID) error {
 			// `crm_stage_history` é insert-only e é a matéria-prima da conversão
 			// por etapa: apagar a etapa deixaria o histórico apontando para o
 			// nada, e o relatório perderia a etapa em que o funil trava.
-			return RecursoEmUso.
+			return apperr.ResourceInUse.
 				WithMessage("A etapa ainda é usada por oportunidades ou pelo histórico de etapas.").
 				WithDetails(map[string]any{
 					"opportunity_count": oportunidades,

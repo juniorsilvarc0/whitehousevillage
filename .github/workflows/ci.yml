@@ -37,6 +37,40 @@ jobs:
       - name: Testes
         run: go test ./... -race -count=1
 
+  # golangci-lint só rodava no `make lint` local: 11 apontamentos entraram em
+  # commits da `main` (seis já publicados quando foram medidos) sem o CI acusar
+  # nenhum, e foram zerados à mão em e0bc08e. Job próprio, e não passo do job
+  # `api`, para lint vermelho não esconder o resultado dos testes e vice-versa.
+  lint-go:
+    name: Lint Go (golangci-lint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Versões das actions já em node24, como no PR das actions (c8037be):
+      # checkout v5 e setup-go v6.
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25'
+          cache-dependency-path: apps/api/go.sum
+      # A versão sai do Makefile (GOLANGCI_LINT_VERSION): o número mora num lugar
+      # só, e o `make lint` local confere a mesma.
+      - name: Versão fixada do golangci-lint
+        id: golangci
+        run: echo "versao=$(make -s golangci-versao)" >> "$GITHUB_OUTPUT"
+      # A action só INSTALA (e restaura/salva o cache de análise); quem roda é o
+      # alvo do Makefile, com as mesmas flags (`--max-same-issues=0
+      # --max-issues-per-linter=0`) da máquina do desenvolvedor.
+      # v9 porque é a primeira em node24: o `runs.using` do action.yml é node20
+      # nas tags v6, v7 e v8, e node24 na v9 (conferido em 02/10/2026).
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: ${{ steps.golangci.outputs.versao }}
+          install-only: true
+          working-directory: apps/api
+      - name: golangci-lint
+        run: make lint-golangci
+
   migrations:
     name: Migrations (up e down)
     runs-on: ubuntu-latest
@@ -169,7 +203,8 @@ jobs:
   smoke:
     name: Fumaça de aplicação (stack de pé)
     runs-on: ubuntu-latest
-    # Teto porque o alvo constrói duas imagens antes de abrir o navegador.
+    # Teto porque o alvo constrói três imagens (API, painel e site) antes de
+    # abrir o navegador.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -195,7 +230,9 @@ jobs:
       # seed e a fumaça, nessa ordem. Repetir a sequência aqui é como um passo
       # entra num lado e some do outro — a mesma razão pela qual o job
       # `integration` chama os alvos do Makefile.
-      - name: Subir o stack, migrar, semear e percorrer as telas
+      # Desde 02/10/2026 o alvo também roda a fumaça do site (:3200) e confere
+      # que o worker está de pé (`make worker-vivo`).
+      - name: Subir o stack, migrar, semear, percorrer painel e site, conferir o worker
         run: make smoke-stack
       # Log do stack quando a fumaça reprova: sem ele o diagnóstico é "alguma
       # tela abriu com erro" e a investigação recomeça do zero na máquina de
@@ -207,13 +244,34 @@ jobs:
         if: always()
         run: docker compose -f infra/docker-compose.yml --env-file .env down -v
 
+  # O site como vai para produção: a IMAGEM, sem o volume do compose de dev por
+  # cima. O job `smoke` já roda a fumaça do site, mas lá o public/ do repositório
+  # é montado sobre o que a imagem copiou, então um COPY ou .dockerignore errado
+  # passaria verde. Barato (nginx:alpine, sem build de front): roda em todo PR.
+  site:
+    name: Site público (imagem nginx + fumaça)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      # Node 22 fixado em vez do Node que vier na imagem do runner. A fumaça
+      # não tem dependência nenhuma: `package-manager-cache: false` porque a v5
+      # liga cache automático quando `cache:` está ausente, e aqui não há o que
+      # cachear.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Construir a imagem do site, subir o container e rodar a fumaça
+        run: make smoke-site-imagem
+
   build-images:
     name: Build das imagens
     runs-on: ubuntu-latest
     # Só em push para main: buildar imagem em todo PR custa minuto e não
     # acrescenta sinal — o build do Go e do Next já rodaram nos jobs acima.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [api, admin, migrations]
+    needs: [api, lint-go, admin, migrations, site]
     steps:
       - uses: actions/checkout@v4
       # Sem push para registry ainda: o objetivo aqui é provar que a Dockerfile
@@ -222,3 +280,9 @@ jobs:
         run: docker build -f infra/api.Dockerfile -t whv-api:${{ github.sha }} .
       - name: Imagem do painel
         run: docker build -f infra/admin.Dockerfile -t whv-admin:${{ github.sha }} .
+      # O nginx.conf do site usa set/ssi/error_page, e só o nginx:1.27-alpine da
+      # imagem prova que ele vale lá. O job `site` já monta e testa esta imagem
+      # em todo PR; aqui ela entra para o conjunto de imagens do commit ficar
+      # completo quando o push para registry existir.
+      - name: Imagem do site
+        run: docker build -f apps/site/Dockerfile -t whv-site:${{ github.sha }} .

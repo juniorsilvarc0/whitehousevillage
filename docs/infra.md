@@ -1,5 +1,16 @@
 # Infraestrutura
 
+> **Leia antes: este documento descreve o ALVO de produção, e boa parte dele ainda
+> não existe.** Conferido em 02/10/2026: `infra/` tem só `docker-compose.yml` (de
+> desenvolvimento), `api.Dockerfile` e `admin.Dockerfile` (o do site está em
+> `apps/site/Dockerfile`). **Não existem** `docker-compose.prod.yml` (embora o
+> compose o cite na primeira linha), Traefik, `acme.json`, serviço de `backup`,
+> restore verificado, `/metrics`, HSTS, push de imagem para registry nem deploy.
+> O backup que existe é `make backup`, manual (reprova se o dump falhar ou vier
+> incompleto); `make restore` reprova de propósito. O worker **não** usa River: é
+> um loop próprio com um job (`holds.expire`), e desde 02/10 sobe no compose
+> padrão, sem profile. As seções 2, 3, 5, 6 e 7 são plano; a 4 é o estado.
+
 ## 1. Ambientes
 
 | Ambiente | Onde | Domínio | Dados |
@@ -22,7 +33,7 @@ Configuração **100% por variável de ambiente** (`.env.example` é a fonte da 
              ┌───────────────┬───────────┴────────────┬──────────────┐
              ▼               ▼                        ▼              ▼
         admin (Next)     api (Go)                worker (Go)     postgres:16
-        standalone       chi + pgx               River jobs      volume nomeado
+        standalone       chi + pgx           loop próprio (*)    volume nomeado
                               │                       │              ▲
                               └───── LISTEN/NOTIFY ───┴──────────────┘
                                                               backup (cron pg_dump)
@@ -32,7 +43,7 @@ Configuração **100% por variável de ambiente** (`.env.example` é a fonte da 
 |---|---|---|
 | `traefik` | `traefik:v3` | Entrypoints 80/443, redirect para HTTPS, `acme.json` em volume com `chmod 600` |
 | `api` | multi-stage Go → `distroless/static` | Binário estático, usuário não-root, `/healthz` como healthcheck |
-| `worker` | mesma imagem, entrypoint `worker` | Jobs; escala independente da API |
+| `worker` | mesma imagem, entrypoint `worker` | (*) Loop próprio com um job, `holds.expire` (a expiração da pré-reserva), sem River. Escala independente da API. No dev, sobe no `make up` desde 02/10/2026 |
 | `admin` | `node:22-alpine` → `next start` (output standalone) | Só o BFF fala com a API |
 | `postgres` | `postgres:16-alpine` | Volume nomeado, `TZ=America/Fortaleza`, healthcheck `pg_isready` |
 | `migrate` | mesma imagem da API, entrypoint `migrate` | Roda sob demanda (`make migrate`), **nunca** no boot da API |
@@ -62,15 +73,18 @@ O que existe hoje em `.github/workflows/ci.yml` — a tabela é o arquivo, não 
 
 | Job | O que roda |
 |---|---|
-| `api` | `gofmt -l` (falha se houver arquivo fora de forma), `go vet ./...`, `go test ./... -race -count=1` |
+| `api` | `gofmt -l` (falha se houver arquivo fora de forma), `go vet ./...` e `go vet -tags=integration ./...`, `go test ./... -race -count=1` — o teste de contrato (toda rota na OpenAPI, seis verbos, permissão) roda aqui |
+| `lint-go` | `golangci-lint` na versão de `Makefile:GOLANGCI_LINT_VERSION` (v2.5.0, lida com `make -s golangci-versao`), instalado pela action e rodado por `make lint-golangci`, sem teto de repetição. Ainda **sem** a tag `integration` (6 apontamentos em `internal/router` de teste). Entrou em 02/10/2026 e não rodou num runner até o commit da Rodada 5 |
 | `migrations` | Postgres de serviço: `migrate up` → `version` → `down -all` → `up` → `version`, com o **nosso** `cmd/migrate` |
 | `integration` | Postgres de serviço: **schema → seed → suíte `-tags=integration` → concorrência repetida**. Detalhado abaixo |
-| `admin` | `pnpm install --frozen-lockfile`, `tsc --noEmit`, `pnpm build` |
-| `build-images` | Só em push para `main`: builda as imagens da API e do painel (sem push para registry enquanto não houver VPS) |
+| `admin` | `pnpm install --frozen-lockfile`, `pnpm lint` (eslint), `tsc --noEmit`, `pnpm test --run`, `pnpm build` |
+| `smoke` | `make smoke-stack`: sobe o stack com imagem reconstruída, migra, semeia, roda a fumaça do painel e a do site e confere o worker (`worker-vivo`) |
+| `site` | Constrói a imagem do site, sobe um contêiner dela **sem** o volume de desenvolvimento e roda a fumaça do site (`make smoke-site-imagem`) |
+| `build-images` | Só em push para `main`: builda as imagens da API, do painel e do site (sem push para registry enquanto não houver VPS); `needs` inclui `lint-go` e `site` |
 
-Pendências conhecidas do CI, para não parecerem entregues: `golangci-lint` e `eslint` ainda não têm job (rodam por `make lint`), o job de contrato (toda rota na OpenAPI) e o `e2e` com Playwright entram na Fase 1.
+Pendências conhecidas do CI, para não parecerem entregues: o `e2e` de jornada com escrita (Playwright) não existe; o lint não enxerga os arquivos `//go:build integration`; não há push de imagem nem deploy.
 
-Regras: `main` protegida, PR obrigatório, CI verde para merge, sem push direto.
+Regras-alvo: `main` protegida, PR obrigatório, CI verde para merge, sem push direto. **Ainda não são o estado**: quatro commits de 31/08 e 02/10 entraram por push direto (ver `roadmap.md`, Fase 2).
 
 ### 4.1 Job de integração — por que tem seed e por que repete
 

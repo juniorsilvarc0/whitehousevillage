@@ -87,7 +87,7 @@ type Repositorio interface {
 	BuscarPoliticaComercialVigente(ctx context.Context, prop uuid.UUID) (PoliticaComercial, error)
 	BuscarPoliticaComercialPorVersao(ctx context.Context, prop uuid.UUID, versao int) (PoliticaComercial, error)
 	UltimaPoliticaComercial(ctx context.Context, prop uuid.UUID) (PoliticaComercial, bool, error)
-	PublicarPoliticaComercial(ctx context.Context, prop uuid.UUID, e PoliticaComercialEntrada, herdado PoliticaComercial) (int, error)
+	PublicarPoliticaComercial(ctx context.Context, prop uuid.UUID, e PoliticaComercialEntrada) (int, error)
 
 	BuscarPoliticaDeCancelamentoVigente(ctx context.Context, prop uuid.UUID) (PoliticaDeCancelamento, error)
 	BuscarPoliticaDeCancelamentoPorVersao(ctx context.Context, prop uuid.UUID, versao int) (PoliticaDeCancelamento, error)
@@ -272,7 +272,7 @@ func (s *Service) DesativarTabela(ctx context.Context, id uuid.UUID) error {
 		// `restantes == 0` com `vigentes > 0` só acontece quando ESTA tabela é a
 		// única que cobre hoje.
 		if vigentes > 0 && restantes == 0 {
-			return ErroRecursoEmUso.
+			return apperr.ResourceInUse.
 				WithMessage("Esta é a única tabela de tarifas vigente hoje; publique outra antes de desativá-la.").
 				WithDetails(map[string]any{"rate_table_id": id, "remaining_active_today": restantes})
 		}
@@ -875,15 +875,8 @@ func (s *Service) PublicarPoliticaComercial(ctx context.Context, e PoliticaComer
 		if err != nil {
 			return err
 		}
-		if !existe {
-			// Primeira publicação da casa: os campos que o contrato ainda não
-			// declara herdam do PADRÃO, não do zero value. Sem isto,
-			// `hold_extension_hours = 0` bateria no CHECK do banco e a primeira
-			// política seria impossível de publicar.
-			ultima = politicaComercialPadrao()
-		}
 		if existe && e.ValidoDe.Before(ultima.ValidoDe.Date) {
-			return ErroPoliticaImutavel.
+			return apperr.PolicyImmutable.
 				WithMessage("A nova versão não pode entrar em vigor antes da última publicada.").
 				WithDetails(map[string]any{
 					"version":        ultima.Versao,
@@ -892,7 +885,9 @@ func (s *Service) PublicarPoliticaComercial(ctx context.Context, e PoliticaComer
 				})
 		}
 
-		versao, err := s.repo.PublicarPoliticaComercial(ctx, prop, e, ultima)
+		// A herança dos campos omitidos é do banco (cópia da linha anterior),
+		// não deste retrato: ver Repository.PublicarPoliticaComercial.
+		versao, err := s.repo.PublicarPoliticaComercial(ctx, prop, e)
 		if err != nil {
 			return err
 		}
@@ -905,16 +900,6 @@ func (s *Service) PublicarPoliticaComercial(ctx context.Context, e PoliticaComer
 		return s.repo.AuditarCriacao(ctx, entidadePolitica, verboPublicada, publicada.ID, publicada)
 	})
 	return publicada, err
-}
-
-// politicaComercialPadrao são os valores de partida dos campos que o corpo do
-// PUT pode omitir. Espelham os DEFAULT que a migration 20260826110000 deu às
-// colunas — o mesmo número em dois lugares é ruim, mas a alternativa (ler o
-// DEFAULT do catálogo do Postgres em tempo de execução) é pior de entender e de
-// testar. Quando `hold_extension_hours` entrar no contrato, isto vira exigência
-// de campo e some.
-func politicaComercialPadrao() PoliticaComercial {
-	return PoliticaComercial{ExtensaoDeHoldHoras: 24, ExtensoesDeHoldMax: 1}
 }
 
 // PoliticaDeCancelamento devolve o cabeçalho com as faixas ordenadas.
@@ -965,7 +950,7 @@ func (s *Service) PublicarPoliticaDeCancelamento(ctx context.Context, e Politica
 			return err
 		}
 		if existe && e.ValidoDe.Before(ultima.ValidoDe.Date) {
-			return ErroPoliticaImutavel.
+			return apperr.PolicyImmutable.
 				WithMessage("A nova versão não pode entrar em vigor antes da última publicada.").
 				WithDetails(map[string]any{
 					"version":        ultima.Versao,

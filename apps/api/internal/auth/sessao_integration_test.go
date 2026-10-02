@@ -454,12 +454,48 @@ func TestErrosDeUmIPNaoTrancamOLoginDoDono(t *testing.T) {
 // broker_id liga a conta de um corretor ao cadastro dele. A coluna existe desde
 // a migration 20260820140000; o campo vinha nulo fixo, e o painel do corretor
 // ficava sem dono.
+//
+// Desde 20261002180000 o vínculo é uma FK composta
+// `(users.broker_id, users.id) → brokers(id, user_id)`: a conta só aponta para
+// o cadastro que aponta de volta para ela. O teste antigo gravava um
+// `uuid.New()` — exatamente o valor que a FK existe para recusar (23503).
+// Agora monta o cadastro de verdade: contato, brokers com `user_id`, vínculo.
 func TestUsuarioDevolveBrokerIDGravadoNoBanco(t *testing.T) {
 	pool := poolDeIntegracao(t)
 	ctx := context.Background()
 	c := criarConta(t, ctx, pool, "corretor")
 
-	corretor := uuid.New()
+	var contato, corretor uuid.UUID
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO contacts (property_id, name)
+		SELECT property_id, 'QA corretor' FROM users WHERE id = $1
+		RETURNING id`, c.ID).Scan(&contato); err != nil {
+		t.Fatalf("criando o contato do corretor: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `
+		INSERT INTO brokers (property_id, contact_id, user_id)
+		SELECT property_id, $2, id FROM users WHERE id = $1
+		RETURNING id`, c.ID, contato).Scan(&corretor); err != nil {
+		t.Fatalf("criando o cadastro de corretor: %v", err)
+	}
+	// Registrado DEPOIS de criarConta, roda ANTES da limpeza dela (LIFO): sem
+	// desligar e apagar o cadastro primeiro, o DELETE da conta toma 23503 em
+	// brokers_user_id_fkey.
+	t.Cleanup(func() {
+		for _, q := range []struct {
+			sql string
+			arg uuid.UUID
+		}{
+			{`UPDATE users SET broker_id = NULL WHERE id = $1`, c.ID},
+			{`DELETE FROM brokers WHERE id = $1`, corretor},
+			{`DELETE FROM contacts WHERE id = $1`, contato},
+		} {
+			if _, err := pool.Exec(context.Background(), q.sql, q.arg); err != nil {
+				t.Errorf("limpeza (%s): %v", q.sql, err)
+			}
+		}
+	})
+
 	if _, err := pool.Exec(ctx, `UPDATE users SET broker_id = $2 WHERE id = $1`, c.ID, corretor); err != nil {
 		t.Fatalf("gravando broker_id: %v", err)
 	}

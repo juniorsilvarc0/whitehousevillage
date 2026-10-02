@@ -256,9 +256,15 @@ func (r *repoFalso) UltimaPoliticaComercial(context.Context, uuid.UUID) (Politic
 	return r.politicas[len(r.politicas)-1], true, nil
 }
 
-func (r *repoFalso) PublicarPoliticaComercial(_ context.Context, _ uuid.UUID, e PoliticaComercialEntrada, herdado PoliticaComercial) (int, error) {
+func (r *repoFalso) PublicarPoliticaComercial(_ context.Context, _ uuid.UUID, e PoliticaComercialEntrada) (int, error) {
 	r.publicacoes++
 	versao := len(r.politicas) + 1
+	// O banco herda da linha anterior ou, na primeira, do DEFAULT da coluna; o
+	// dublê imita as duas pontas para o service não perceber a diferença.
+	herdado := PoliticaComercial{ExtensaoDeHoldHoras: 24, ExtensoesDeHoldMax: 1, ValidadeOrcamentoDia: 7}
+	if len(r.politicas) > 0 {
+		herdado = r.politicas[len(r.politicas)-1]
+	}
 	r.politicas = append(r.politicas, PoliticaComercial{
 		Versao:               versao,
 		SinalPct:             *e.SinalPct,
@@ -269,6 +275,7 @@ func (r *repoFalso) PublicarPoliticaComercial(_ context.Context, _ uuid.UUID, e 
 		CaucaoDeEventoCents:  e.CaucaoDeEventoCents.Ou(herdado.CaucaoDeEventoCents),
 		ExtensaoDeHoldHoras:  e.ExtensaoDeHoldHoras.Ou(herdado.ExtensaoDeHoldHoras),
 		ExtensoesDeHoldMax:   e.ExtensoesDeHoldMax.Ou(herdado.ExtensoesDeHoldMax),
+		ValidadeOrcamentoDia: e.ValidadeOrcamentoDia.Ou(herdado.ValidadeOrcamentoDia),
 		ValidoDe:             *e.ValidoDe,
 	})
 	return versao, nil
