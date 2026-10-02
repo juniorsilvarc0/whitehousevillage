@@ -142,15 +142,26 @@ const (
 	// gestão os ajusta pela tela de política sem migration.
 	extensaoDeHoldHoras = 24 // quanto cada `extend-hold` adiciona
 	extensoesDeHoldMax  = 1  // quantas vezes a pré-reserva pode ser esticada
+
+	// Validade do orçamento emitido sem `valid_until` explícito. Era a constante
+	// `validadePadraoEmDias` da aplicação (dívida D7) e virou
+	// `commercial_policies.quote_validity_days` em 20260831100000; 7 é o mesmo
+	// número que a API já usava, de modo que semear isto não muda nenhum
+	// orçamento existente — `quotes.valid_until` é gravada na emissão.
+	validadeDeOrcamentoDias = 7
 )
 
-func politicaComercial(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
-	const q = `
+// sqlPoliticaComercialV1 é constante de PACOTE, e não local da função, porque
+// `politica_comercial_integration_test.go` a compara com
+// `information_schema.columns`: é essa comparação que impede a repetição da D7
+// do lado do seed — coluna nova em `commercial_policies` que não entre nesta
+// lista voltaria ao DEFAULT a cada `make seed`, em silêncio.
+const sqlPoliticaComercialV1 = `
 		INSERT INTO commercial_policies (
 			property_id, version, deposit_pct, balance_due_days, hold_hours,
 			discount_auto_pct, discount_approval_pct, event_deposit_cents, valid_from,
-			hold_extension_hours, hold_max_extensions)
-		VALUES ($1, 1, $2::numeric, $3, $4, $5::numeric, $6::numeric, $7, $8, $9, $10)
+			hold_extension_hours, hold_max_extensions, quote_validity_days)
+		VALUES ($1, 1, $2::numeric, $3, $4, $5::numeric, $6::numeric, $7, $8, $9, $10, $11)
 		ON CONFLICT (property_id, version) DO UPDATE
 		   SET deposit_pct           = EXCLUDED.deposit_pct,
 		       balance_due_days      = EXCLUDED.balance_due_days,
@@ -160,24 +171,28 @@ func politicaComercial(ctx context.Context, tx pgx.Tx, st *estado) (contagem, er
 		       event_deposit_cents   = EXCLUDED.event_deposit_cents,
 		       valid_from            = EXCLUDED.valid_from,
 		       hold_extension_hours  = EXCLUDED.hold_extension_hours,
-		       hold_max_extensions   = EXCLUDED.hold_max_extensions
+		       hold_max_extensions   = EXCLUDED.hold_max_extensions,
+		       quote_validity_days   = EXCLUDED.quote_validity_days
 		 WHERE (commercial_policies.deposit_pct, commercial_policies.balance_due_days,
 		        commercial_policies.hold_hours, commercial_policies.discount_auto_pct,
 		        commercial_policies.discount_approval_pct, commercial_policies.event_deposit_cents,
 		        commercial_policies.valid_from, commercial_policies.hold_extension_hours,
-		        commercial_policies.hold_max_extensions)
+		        commercial_policies.hold_max_extensions, commercial_policies.quote_validity_days)
 		       IS DISTINCT FROM
 		       (EXCLUDED.deposit_pct, EXCLUDED.balance_due_days, EXCLUDED.hold_hours,
 		        EXCLUDED.discount_auto_pct, EXCLUDED.discount_approval_pct,
 		        EXCLUDED.event_deposit_cents, EXCLUDED.valid_from,
-		        EXCLUDED.hold_extension_hours, EXCLUDED.hold_max_extensions)
+		        EXCLUDED.hold_extension_hours, EXCLUDED.hold_max_extensions,
+		        EXCLUDED.quote_validity_days)
 		RETURNING (xmax = 0)`
 
-	c, err := upsert(ctx, tx, q, st.propriedadeID,
+func politicaComercial(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
+	c, err := upsert(ctx, tx, sqlPoliticaComercialV1, st.propriedadeID,
 		sinalPct, int32(saldoDiasAntes), int32(preReservaHoras),
 		descontoGestaoPct, descontoProprietarioPct,
 		reais(caucaoDeEventoReais), vigenciaV1,
-		int32(extensaoDeHoldHoras), int32(extensoesDeHoldMax))
+		int32(extensaoDeHoldHoras), int32(extensoesDeHoldMax),
+		int32(validadeDeOrcamentoDias))
 	c.Previstas = 1
 	return c, err
 }

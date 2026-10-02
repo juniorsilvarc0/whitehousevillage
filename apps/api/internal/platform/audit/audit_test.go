@@ -88,6 +88,39 @@ func TestRedigirDesceEmDocumentoAninhado(t *testing.T) {
 	}
 }
 
+// Nulo continua nulo, no filtro de segredo como no de PII: um nulo não carrega
+// segredo nenhum, e "o campo foi limpo" é informação que a trilha registra.
+func TestRedigirPreservaNuloNoCampoSensivel(t *testing.T) {
+	got := Redigir(Campos{"password_hash": nil, "refresh_token": "rt_abc"})
+
+	if v, tem := got["password_hash"]; !tem || v != nil {
+		t.Errorf("password_hash = %v (presente=%v), esperado nulo presente", v, tem)
+	}
+	if got["refresh_token"] != Redigido {
+		t.Errorf("refresh_token = %v, esperado %q", got["refresh_token"], Redigido)
+	}
+}
+
+// RedigirCom é a mesma descida com outro critério: é o que impede
+// `internal/platform/pii` de escrever uma segunda função de descida — e a
+// segunda chance de esquecer de entrar numa lista aninhada.
+func TestRedigirComTrocaOCriterioESegueDescendo(t *testing.T) {
+	soONome := func(nome string) bool { return nome == "name" }
+
+	got := RedigirCom(Campos{
+		"password_hash": "não é segredo para este critério",
+		"pessoa":        map[string]any{"name": "Ana"},
+	}, soONome)
+
+	if got["password_hash"] != "não é segredo para este critério" {
+		t.Errorf("o critério passado foi ignorado: %v", got["password_hash"])
+	}
+	aninhado, _ := got["pessoa"].(Campos)
+	if aninhado["name"] != Redigido {
+		t.Errorf("nível aninhado = %v, esperado %q", aninhado["name"], Redigido)
+	}
+}
+
 func TestSensivelCobreOsNomesReaisDoRepositorio(t *testing.T) {
 	sensiveis := []string{
 		"password_hash", "PasswordHash", "senha", "senha_atual",

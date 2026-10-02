@@ -8,37 +8,17 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/pii"
 )
 
-// camposDePII é o conjunto de campos cujo VALOR nunca entra em `audit_log`.
+// A trilha deste módulo passa TODO documento por [pii.Redigir] antes de
+// entregá-lo a `audit.Registrar`.
 //
-// # Por que a trilha deste módulo é diferente da dos outros
-//
-// `audit.Redigir` protege SEGREDO (senha, token, chave) — o filtro dele é por
-// substring no nome do campo, e "name", "email" e "phone_e164" não casam com
-// nenhum termo dele, nem deveriam: numa reserva ou numa unidade esses valores
-// são justamente o que a auditoria precisa mostrar.
-//
-// Aqui não. O contrato do `/anonymize` promete, textualmente, que "audit_log e
-// pii_access_log guardam contact_id — não o nome". A promessa não é decorativa:
-// se a edição da ficha gravasse `{"name": "Maria Silva"}` em `before`,
-// anonimizar a ficha deixaria a cópia do dado eliminado numa tabela que todo
-// perfil com `audit:ver` consegue ler. O direito de eliminação seria cumprido na
-// tabela que o titular vê e descumprido na que ele não vê — que é a pior forma
-// de descumprir.
-//
-// `doc_type`, `city`, `state`, `lgpd_basis`, `marketing_opt_in`, `consent_at` e
-// `anonymized_at` FICAM com valor: não identificam ninguém sozinhos e são
-// exatamente o que uma fiscalização pergunta ("com que base legal esta ficha
-// existia?", "quando o opt-in foi ligado?").
-var camposDePII = map[string]bool{
-	"name":       true,
-	"email":      true,
-	"phone_e164": true,
-	"doc_number": true,
-	"birth_date": true,
-	"notes":      true,
-}
+// Motivo, em uma frase: `audit.Redigir` protege segredo e não protege pessoa —
+// "name" e "phone_e164" não casam com nenhum termo do filtro dele, e não
+// deveriam. O dicionário de campos pessoais, a razão de cada campo estar ou não
+// nele e a descida em documento aninhado vivem em `internal/platform/pii`,
+// porque a mesma obrigação vale para recebível, comissão e rooming list.
 
 // registrarCriacao grava o nascimento da ficha sem copiar a PII para a trilha.
 func registrarCriacao(ctx context.Context, exec db.DBTX, c Contato) error {
@@ -47,7 +27,7 @@ func registrarCriacao(ctx context.Context, exec db.DBTX, c Contato) error {
 		Acao:          audit.Acao(Entidade, audit.VerboCriado),
 		Entidade:      Entidade,
 		EntidadeID:    c.ID,
-		Depois:        semPII(audit.Snapshot(c)),
+		Depois:        pii.Redigir(audit.Snapshot(c)),
 	})
 }
 
@@ -68,8 +48,8 @@ func registrarAlteracao(ctx context.Context, exec db.DBTX, antes, depois Contato
 		Acao:          audit.Acao(Entidade, audit.VerboAlterado),
 		Entidade:      Entidade,
 		EntidadeID:    depois.ID,
-		Antes:         semPII(a),
-		Depois:        semPII(d),
+		Antes:         pii.Redigir(a),
+		Depois:        pii.Redigir(d),
 	})
 }
 
@@ -81,7 +61,7 @@ func registrarExclusao(ctx context.Context, exec db.DBTX, c Contato) error {
 		Acao:          audit.Acao(Entidade, audit.VerboExcluido),
 		Entidade:      Entidade,
 		EntidadeID:    c.ID,
-		Antes:         semPII(audit.Snapshot(c)),
+		Antes:         pii.Redigir(audit.Snapshot(c)),
 	})
 }
 
@@ -103,29 +83,6 @@ func registrarAnonimizacao(ctx context.Context, exec db.DBTX, id uuid.UUID, moti
 			"preserved": audit.Snapshot(preservado),
 		},
 	})
-}
-
-// semPII devolve o documento com o VALOR dos campos pessoais trocado pela marca
-// de redação, preservando a informação de QUE campo mudou.
-func semPII(c audit.Campos) audit.Campos {
-	if len(c) == 0 {
-		return nil
-	}
-	out := make(audit.Campos, len(c))
-	for chave, valor := range c {
-		if camposDePII[chave] {
-			// Nulo continua nulo: "o campo foi limpo" é informação de
-			// auditoria e não é dado pessoal nenhum.
-			if valor == nil {
-				out[chave] = nil
-				continue
-			}
-			out[chave] = audit.Redigido
-			continue
-		}
-		out[chave] = valor
-	}
-	return out
 }
 
 func propriedadeDoAtor(ctx context.Context) uuid.UUID {

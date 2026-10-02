@@ -133,30 +133,3 @@ func TestPedidoDeAnonimizacaoExigeMotivo(t *testing.T) {
 		t.Fatalf("motivo válido recusado: %v", erros)
 	}
 }
-
-// Redigir do pacote audit protege SEGREDO, não PII: "name" e "phone_e164" não
-// casam com nenhum termo dele. É semPII que impede a cópia do dado eliminado
-// sobreviver em audit_log.
-func TestSemPIIMascaraValorEPreservaOCampo(t *testing.T) {
-	campos := map[string]any{
-		"name":             "Ana Silva",
-		"phone_e164":       "+5585999990000",
-		"doc_number":       "52998224725",
-		"email":            nil,
-		"lgpd_basis":       "contrato",
-		"marketing_opt_in": true,
-	}
-	got := semPII(campos)
-
-	for _, campo := range []string{"name", "phone_e164", "doc_number"} {
-		if got[campo] != "[redigido]" {
-			t.Errorf("%s = %v, esperado marca de redação", campo, got[campo])
-		}
-	}
-	if got["email"] != nil {
-		t.Errorf("email nulo deveria continuar nulo: %v", got["email"])
-	}
-	if got["lgpd_basis"] != "contrato" || got["marketing_opt_in"] != true {
-		t.Errorf("campo não-PII foi mascarado à toa: %v", got)
-	}
-}

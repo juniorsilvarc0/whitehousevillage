@@ -3,10 +3,23 @@
 import * as React from "react";
 
 import type { CodigoDeErro } from "@/lib/api/codigos";
-import type { Resultado } from "@/lib/acoes/resultado";
 
 import { useSSE, type CriarFonte, type TempoReal } from "./sse";
 import type { EventoDoStream, Topico } from "./eventos";
+
+/**
+ * A fatia do resultado que este hook usa — `ok`, `data` e `code`, e mais nada.
+ *
+ * Tipar só o necessário (mesma razão de `FonteDeEventos` em `sse.ts`) é o que
+ * permite servir o mapa, que fala `Resultado` com o vocabulário geral de erro,
+ * e o funil, que fala `ResultadoCrm` com sete códigos a mais. A alternativa
+ * seria um dos dois traduzir o código para o vocabulário do outro antes de
+ * chamar — e a tradução perde a frase específica, que é justamente a que o
+ * operador precisa ler para resolver a recusa sozinho.
+ */
+export type ResultadoDaBusca<T, C extends string> =
+  | { ok: true; data: T }
+  | { ok: false; code: C };
 
 /**
  * "Chegou aviso, refaz o fetch" — com as três guardas que a versão ingênua não
@@ -33,7 +46,7 @@ import type { EventoDoStream, Topico } from "./eventos";
  *    não pode ser perdido nem abrir uma busca paralela: fica marcado em
  *    `pendente` e vira exatamente mais uma volta do laço.
  */
-export type AtualizacaoAoVivo = {
+export type AtualizacaoAoVivo<C extends string = CodigoDeErro> = {
   tempoReal: TempoReal;
   /** Uma busca está no ar. A tela sinaliza discretamente — **nunca** com
    *  skeleton: trocar o mapa por um esqueleto a cada evento é pior do que não
@@ -42,7 +55,7 @@ export type AtualizacaoAoVivo = {
   /** Código da última falha de atualização, ou `null`. O desenho na tela
    *  continua sendo o último que deu certo — dado velho e rotulado como velho é
    *  melhor que tela vazia. */
-  falha: CodigoDeErro | null;
+  falha: C | null;
   /** Instante da última atualização bem-sucedida. */
   atualizadoEm: number | null;
   atualizarAgora: () => void;
@@ -50,7 +63,7 @@ export type AtualizacaoAoVivo = {
 
 export const JANELA_DE_AGRUPAMENTO_MS = 250;
 
-export function useAtualizacaoAoVivo<T>({
+export function useAtualizacaoAoVivo<T, C extends string = CodigoDeErro>({
   topicos,
   interessa,
   buscar,
@@ -64,14 +77,14 @@ export function useAtualizacaoAoVivo<T>({
    *  `stay_block` e `reservation`; uma oportunidade mudando na mesma conexão não
    *  pode custar um fetch de disponibilidade. */
   interessa: (evento: EventoDoStream) => boolean;
-  buscar: () => Promise<Resultado<T>>;
+  buscar: () => Promise<ResultadoDaBusca<T, C>>;
   aoAtualizar: (dados: T) => void;
   habilitado?: boolean;
   criarFonte?: CriarFonte;
   janelaMs?: number;
-}): AtualizacaoAoVivo {
+}): AtualizacaoAoVivo<C> {
   const [atualizando, setAtualizando] = React.useState(false);
-  const [falha, setFalha] = React.useState<CodigoDeErro | null>(null);
+  const [falha, setFalha] = React.useState<C | null>(null);
   const [atualizadoEm, setAtualizadoEm] = React.useState<number | null>(null);
 
   // Refs escritos DENTRO de um efeito, nunca no corpo do render. Acessar

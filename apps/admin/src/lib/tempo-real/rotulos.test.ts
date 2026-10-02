@@ -11,6 +11,16 @@ describe("descreverTempoReal", () => {
     expect(descreverTempoReal("desligado").detalhe).toContain("última carga");
   });
 
+  it("nomeia a tela de que fala — o funil não é o mapa", () => {
+    // O selo desenha em duas telas desde que o kanban passou a assinar o
+    // barramento. "O mapa se atualiza sozinho" em cima do quadro do funil é o
+    // tipo de texto que ensina o operador a não ler o indicador.
+    expect(descreverTempoReal("ligado", "mapa").detalhe).toContain("O mapa");
+    expect(descreverTempoReal("ligado", "funil").detalhe).toContain("O quadro");
+    expect(descreverTempoReal("ligado", "funil").detalhe).not.toContain("mapa");
+    expect(descreverTempoReal("sem_rede", "funil").detalhe).not.toContain("mapa");
+  });
+
   it("só oferece reconectar onde o clique muda alguma coisa", () => {
     expect(descreverTempoReal("ligado").ofereceReconectar).toBe(false);
     expect(descreverTempoReal("conectando").ofereceReconectar).toBe(false);

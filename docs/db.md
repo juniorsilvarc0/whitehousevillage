@@ -1,6 +1,32 @@
 # Modelo de dados
 
-> PostgreSQL 16. Extensões: `btree_gist` (constraint de sobreposição), `pg_trgm` (busca), `pgcrypto` (`gen_random_uuid`).
+> PostgreSQL 16. Extensões: `btree_gist` (constraint de sobreposição), `pg_trgm` (busca), `pgcrypto` (`gen_random_uuid`) — mais `plpgsql`, são as quatro que `\dx` devolve.
+
+**O que já existe e o que ainda é projeto.** Esta página descreve o modelo inteiro,
+inclusive módulos sem uma linha de SQL escrita. Seção cuja tabela **existe** foi
+conferida coluna a coluna contra o banco; seção cuja tabela **ainda não existe** abre
+com o aviso *Ainda não existe no banco*. A distinção não é cosmética: quem lê §10 e
+escreve `INSERT INTO receivables` toma `42P01`, e quem "conserta" o schema por
+migration para casar com a página cria coluna que ninguém escreve e ninguém lê — foi
+exatamente o que aconteceu com `crm_opportunities.quote_id` (§7).
+
+Conferido em **31/08/2026** contra o Postgres do compose (`schema_migrations =
+20260827150000`) e, para `20260831100000` — que já está na árvore e ainda **não** foi
+aplicada lá —, contra um Postgres descartável com todas as migrations do repositório
+aplicadas. Para repetir a conferência de qualquer afirmação daqui:
+
+```bash
+# quais tabelas existem
+psql -Atc "select table_name from information_schema.tables where table_schema='public' order by 1"
+# quantas colunas tem uma tabela, e quais
+psql -Atc "select ordinal_position, column_name, data_type, is_nullable
+             from information_schema.columns where table_name='crm_opportunities'
+            order by ordinal_position"
+# constraints e índices
+psql -Atc "select conname, pg_get_constraintdef(oid) from pg_constraint
+            where conrelid='quotes'::regclass"
+psql -Atc "select indexdef from pg_indexes where tablename='contacts'"
+```
 
 ## Convenções
 
@@ -105,7 +131,8 @@ roles(id, code UNIQUE, name, is_system)
 resources(code PK, label, group_label, actions text[], supports_own bool, sort_order)
         -- catálogo: reservations, crm.opportunities, finance… — é a fonte de GET /roles/resources
 role_permissions(role_id, resource_code, action, scope) -- action: ver|criar|editar|excluir · scope: all|own
-refresh_tokens(id, user_id, token_hash, family_id, expires_at, revoked_at, replaced_by)
+refresh_tokens(id, user_id, family_id, token_hash, user_agent, ip, expires_at, revoked_at,
+               replaced_by, created_at)
 password_resets(id, user_id, token_hash, expires_at, used_at)
 ```
 
@@ -124,14 +151,19 @@ O eixo **`scope`** é o que o portal_amimoveis não tem e é exatamente o que re
 ## 3. Inventário
 
 ```
-properties(id, name, slug, timezone, address_*, active)
-unit_types(id, property_id, code, name, capacity, consumes, cleaning_fee_cents, sort_order, active)
+properties(id, name, slug, timezone, address, city, state, active)
+unit_types(id, property_id, code, name, capacity, consumes, cleaning_fee_cents,
+           description?, sort_order, active)      -- UNIQUE(property_id, code)
         -- consumes: 'one_member' (produto simples) | 'all_members' (a Completa)
-units(id, property_id, code UNIQUE, name, floor, notes, sort_order, active)
+units(id, property_id, code, name, floor, notes, sort_order, active)
+        -- UNIQUE(property_id, code)
 unit_type_members(unit_type_id, unit_id)   -- PK composta — o vínculo é AQUI, e só aqui
-amenities(id, code, label, icon) · unit_amenities(unit_id, amenity_id)
-unit_photos(id, unit_id, url, sort_order, caption)
 ```
+
+`amenities`, `unit_amenities` e `unit_photos` **ainda não existem no banco** — entram
+com a ficha da unidade. A unicidade é `(property_id, code)` nas duas tabelas, e não
+`code` sozinho como esta página dizia: `property_id` existe em toda tabela justamente
+para caber uma segunda propriedade, e o `AP-01` dela colidiria com o `AP-01` desta.
 
 Oito unidades (`AP-01..03`, `SP-01..04`, `COB-01`) e quatro produtos. A Completa é `consumes='all_members'` e aponta para as oito.
 
@@ -148,7 +180,7 @@ A guarda trava a linha do produto em `FOR UPDATE` antes de contar. Não é zelo:
 ## 4. Calendário comercial e tarifário
 
 ```
-holidays(id, property_id, date UNIQUE, name, active)
+holidays(id, property_id, date, name, active)            -- UNIQUE(property_id, date)
 special_periods(id, property_id, name, kind, starts_on, ends_on, active)
         -- kind: reveillon | carnaval | alta | evento — intervalos PODEM se sobrepor
 date_type_rules(kind PK, precedence int, weekday_mask int)
@@ -158,7 +190,9 @@ rates(id, rate_table_id, unit_type_id, date_type, amount_cents)   -- UNIQUE(rate
 min_nights_rules(id, rate_table_id, date_type, nights)
 commercial_policies(id, property_id, version, deposit_pct, balance_due_days, hold_hours,
                     discount_auto_pct, discount_approval_pct, event_deposit_cents, valid_from,
-                    hold_extension_hours, hold_max_extensions)
+                    hold_extension_hours, hold_max_extensions, quote_validity_days)
+        -- 14 colunas; quote_validity_days entrou em 20260831100000 (D7), NOT NULL DEFAULT 7
+        --   com CHECK (> 0) — validade zero é orçamento que nasce vencido
         -- o limite de `extend-hold` (spec §5) é política versionada e congela com policy_version;
         -- quantas extensões já houve sai de reservation_events, não de contador denormalizado
 cancellation_policies(id, property_id, version, name, valid_from)
@@ -193,13 +227,24 @@ Até `20260827130000` o orçamento era **calculado e jogado fora**: `POST /quote
 
 **Por que tabela própria e não `reservations` em `quote`.** Toda reserva ocupa unidade física — é o que `reservation_units` e `stay_blocks` significam —, e orçamento **não bloqueia data** (spec §4): seria uma reserva permanentemente sem unidade, a exceção que enfraquece a leitura do módulo inteiro. Além disso o funil emite vários orçamentos para a mesma negociação, e cada tentativa viraria linha em `reservations` que nunca foi venda, gastando inclusive número de `WH-2026-…` em proposta recusada.
 
+**O estado `quote` ainda é aceito por `reservations`, e isso é resíduo, não regra.**
+Medido: `reservations_status_check` continua listando `'quote'` no vocabulário e
+`internal/modules/reservas/estados.go` continua com `EstadoQuote` na máquina de
+estados, como origem de `hold` e `cancelled`. Nenhum caminho de aplicação escreve esse
+estado — `select status, count(*) from reservations group by 1` devolve hoje
+`cancelled|8`, `confirmed|1`, `hold|2`, e zero em `quote`. Quem for implementar não
+deve criar reserva em `quote`: o orçamento é `quotes`. Estreitar o `CHECK` e podar a
+máquina é migration com dono, não edição desta página.
+
 **Nenhuma linha aqui toca `stay_blocks`, e isso é a regra, não esquecimento.** Conferido: gravado um orçamento de 15–18/06, `stay_blocks` no período continua com zero linhas e a mesma unidade ainda pode ser vendida para as mesmas datas. Consequência aceita e correta: um orçamento pode virar `409 DATE_CONFLICT` na hora de virar reserva.
 
 **O snapshot fecha, e quem garante é o banco.** `subtotal_cents` sem `quote_nights` é um número sem prova — passa em todos os `CHECK` de coluna e é indistinguível, na leitura, de um orçamento correto. Um `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED` sobre as duas tabelas confere no commit: uma noite para cada dia de `[check_in, check_out)`, todas do produto orçado, somando exatamente o subtotal. Adiado pelo mesmo motivo do §5 — o cabeçalho nasce antes das noites (a FK exige) e portanto nasce com zero noites.
 
 `CHECK (total_cents = subtotal_cents − discount_cents + cleaning_cents + event_deposit_cents)` escreve no banco a identidade do motor (`booking.Build`), que é exata em centavos porque o arredondamento acontece no total e nunca noite a noite. `balance_cents` (saldo) e `avg_nightly_cents` (diária média) **não são colunas**: são `total − sinal` e `total / noites`, e guardar o que se deriva é criar a segunda verdade que um dia diverge.
 
-`valid_until` é o que separa "proposta em pé" de "preço que já venceu" — é por ela que um orçamento expira em vez de precisar ser apagado. É `timestamptz` porque vencimento é instante, e instante tem fuso. **De onde sai o número**: hoje, de quem grava. O dia em que a validade precisar ser configurável ela vira coluna de `commercial_policies`, ao lado de `hold_extension_hours` — não foi feita agora porque `PublicarPoliticaComercial` copia as colunas nome a nome, e uma coluna nova sem esse acerto voltaria ao `DEFAULT` a cada versão publicada, em silêncio.
+`valid_until` é o que separa "proposta em pé" de "preço que já venceu" — é por ela que um orçamento expira em vez de precisar ser apagado. É `timestamptz` porque vencimento é instante, e instante tem fuso. **De onde sai o número**: de quem grava quando informa; do padrão da política quando não informa. Desde `20260831100000` esse padrão é `commercial_policies.quote_validity_days` (§4, dívida **D7**) e não mais a constante `validadePadraoEmDias = 7` do binário — mudar de 7 para 15 dias deixou de exigir recompilar a API. O que **não** muda: `quotes.valid_until` é `NOT NULL` e congelada na emissão (regra 7 do CLAUDE.md), então alterar a política nunca move a validade de orçamento já emitido.
+
+A armadilha que essa coluna traz está nomeada na própria migration: `PublicarPoliticaComercial` monta o `INSERT` listando colunas nome a nome, e enquanto `quote_validity_days` não estiver nessa lista toda publicação de versão nova devolve o campo ao `DEFAULT 7` **em silêncio** — sem erro e sem linha de auditoria. É o item F2-05.
 
 `reservation_id` tem **`UNIQUE` parcial**: uma reserva nasce de um orçamento só. Dois orçamentos reivindicando a mesma venda fariam a conversão contar duas vezes e a auditoria não saber qual preço foi o combinado.
 
@@ -231,7 +276,11 @@ reservation_events(id, reservation_id, type, payload jsonb, actor_id, at)       
 
 **`reservation_nights` é o que faz auditoria, financeiro e BI funcionarem.** Guarda a tarifa efetivamente aplicada em cada noite; mudar o tarifário amanhã não reescreve o passado, e ADR/RevPAR saem de um `GROUP BY`.
 
-Constraints: `CHECK (check_out > check_in)`, `CHECK (guests_count > 0)` e `CHECK (discount_pct BETWEEN 0 AND 100)`.
+Constraints **de `reservations`**: `UNIQUE(code)`, `CHECK (check_out > check_in)` e
+`CHECK (guests_count > 0)`. O teto do desconto — `CHECK (discount_pct BETWEEN 0 AND 100)`
+— mora em **`reservation_pricing`**, não aqui: `discount_pct` mudou de tabela em
+`20260826100000` junto com o resto do snapshot, e esta página seguiu atribuindo o
+`CHECK` a uma tabela que nem tem a coluna.
 
 O teto do banco é sanidade, não alçada. A alçada comercial — ≤ 5% a gestão fecha, 6–10% pede o proprietário, > 10% não autorizado (spec §3) — é **política versionada**, avaliada no domínio e congelada na reserva. Como `CHECK` fixo em 10 ela viraria número de schema: mudar a alçada exigiria migration, e as reservas antigas passariam a violar a regra nova.
 
@@ -289,9 +338,31 @@ contacts(id, property_id, name, email, phone_e164, doc_type, doc_number, birth_d
          city, state, notes, lgpd_basis, marketing_opt_in, consent_at,
          anonymized_at, created_at, updated_at)
 ```
-`UNIQUE(phone_e164) WHERE phone_e164 IS NOT NULL` e índice em `doc_number`. Uma pessoa, um registro: lead, hóspede, corretor e proprietário apontam para cá.
+Uma pessoa, um registro: lead, hóspede, corretor e proprietário apontam para cá. Duas
+unicidades sustentam isso, e são eixos diferentes:
 
-`anonymize(contact_id)` substitui PII por hash e mantém os registros financeiros — atende ao direito de eliminação sem quebrar o razão fiscal.
+- **Telefone** — `contacts_phone_idx`, `UNIQUE(phone_e164) WHERE phone_e164 IS NOT NULL`.
+- **Documento** — `contacts_doc_unico_idx`, `UNIQUE(property_id, coalesce(doc_type,''), doc_number) WHERE doc_number IS NOT NULL AND doc_number <> ''`, desde `20260827150000`.
+
+O índice do documento é novo e o motivo dele é o de sempre nesta base. Antes dele o
+banco aceitava dois CPFs iguais — medido, dois `INSERT` com `11144477735` responderam
+`INSERT 0 1` cada um. Quem segurava era `Repository.TravarDocumento`, um
+`pg_advisory_xact_lock` por `(propriedade, tipo, número)` que funciona (seis criações
+simultâneas pela API deram 1× 201 e 5× 409) e cujo alcance é o problema: seed,
+importação, `psql` ou um segundo serviço criam a duplicata sem encostar na trava, e
+duas fichas com o mesmo CPF são o hóspede com dois históricos e a exportação LGPD
+devolvendo metade da vida da pessoa. `coalesce(doc_type,'')` porque em índice único
+NULO é distinto de NULO, e dois CPFs sem tipo passariam pelo índice feito para
+impedi-los. Parcial porque anonimizar zera `doc_number`, e ficha anonimizada não pode
+colidir com outra.
+
+Há também `contacts_doc_idx` (não único) em `doc_number` para a busca e
+`contacts_name_trgm_idx` em `name`.
+
+**A anonimização ainda não tem função no banco.** Esta página prometia
+`anonymize(contact_id)`; nenhuma migration a criou e `\df` não devolve nada com esse
+nome — hoje `SELECT anonymize(…)` responde `42883`. O direito de eliminação é F2-24, e
+é lá que ela nasce, junto da decisão de o que exatamente sobrevive no razão.
 
 ---
 
@@ -313,10 +384,12 @@ crm_leads(id, property_id, contact_id, source, campaign_id?, status, score,
 crm_lost_reasons(id, property_id, label, sort_order, active, created_at, updated_at)
         -- UNIQUE(property_id, label) chave natural do seed
 crm_opportunities(id, property_id, contact_id NOT NULL, lead_id?, pipeline_id, stage_id, title,
-                  unit_type_id?, check_in?, check_out?, guests_count?, quote_id?, reservation_id?,
+                  unit_type_id?, check_in?, check_out?, guests_count?, reservation_id?,
                   amount_cents, probability, expected_close?, owner_id?, status,
                   lost_reason_id?, entered_stage_at, closed_at?, created_by?, created_at, updated_at)
-                  -- 24 colunas
+                  -- 23 colunas. Sem quote_id: ver a subseção abaixo
+                  -- select count(*) from information_schema.columns
+                  --  where table_name='crm_opportunities'   → 23
 crm_opportunity_event_details(opportunity_id PK, event_type, guests_expected, needs_catering,
                               setup_starts_at, teardown_ends_at, notes, created_at, updated_at)
 crm_stage_history(id, opportunity_id, from_stage_id?, to_stage_id, user_id?, reason?, at)  -- insert-only
@@ -347,9 +420,43 @@ A idempotência da tarefa automática é o caso que mais importa. Feita como `SE
 
 `UNIQUE (pipeline_id, position) DEFERRABLE INITIALLY DEFERRED`. Ao contrário da invariante da casa inteira (§5), que precisou de `CONSTRAINT TRIGGER` porque `CHECK` não é adiável, aqui a constraint nativa dá conta — e adiar é o que permite **reordenar o kanban**: arrastar a etapa 5 para a posição 2 é um `UPDATE` que reescreve quatro linhas, e com unicidade imediata a primeira reescrita já colidiria com a posição que a segunda ainda não liberou. A alternativa seria o truque feio de mandar todo mundo para posições negativas antes de renumerar.
 
-### `quote_id` — o orçamento vigente é uma reserva
+### O orçamento vigente sai de `quotes.opportunity_id` — não há coluna aqui
 
-O orçamento **é** uma linha de `reservations` em status `quote` (spec §5): é ela que carrega `reservation_nights`, a tarifa congelada e a política. `crm_opportunities.quote_id` aponta para ela em vez de copiar o valor, e é isso que faz "ganhar cria a reserva com o orçamento vigente, sem redigitar nada" ser uma promoção de status, e não um recálculo que pode dar outro número — o número que o hóspede ouviu ao telefone.
+**`crm_opportunities` não tem `quote_id`.** Ela existiu de `20260827110000` a
+`20260827150000` apontando para `reservations(id)`, porque naquele momento orçamento
+era uma reserva em status `quote`. `20260827130000` mudou isso: o orçamento virou
+tabela própria (§4a) e a FK não foi repontada. O que sobrou foi pior que uma FK errada
+— coluna que ninguém escrevia e ninguém lia. Medido antes de derrubá-la: a
+oportunidade ganha pelo `/win` ficava com `quote_id = NULL`, e não havia um único
+`SET quote_id` em todo o `apps/api`.
+
+**Quem responde "qual é o orçamento vigente" é o lado do orçamento**, e vigente é o
+último emitido:
+
+```sql
+SELECT q.id FROM quotes q
+ WHERE q.opportunity_id = o.id
+ ORDER BY q.created_at DESC, q.id DESC LIMIT 1
+```
+
+É o que `internal/modules/crm/repository_oportunidades.go` executa, coberto por
+`quotes_oportunidade_idx`. A direção da FK é a decisão, não um detalhe: uma negociação
+emite vários orçamentos, e uma coluna escalar no card só guardaria um — emitir o
+segundo teria de reescrever a oportunidade, e "quanto se orçou antes de fechar" ficaria
+sem resposta. Do lado de `quotes`, cada emissão é linha nova e "vigente" é uma
+ordenação, não um `UPDATE`.
+
+O campo `quote_id` do JSON de `GET /crm/opportunities/{id}` **continua existindo** e é
+o resultado dessa subconsulta: nome de campo do contrato, não coluna do banco. Duas
+armadilhas que esta página já armou uma vez:
+
+- `UPDATE crm_opportunities SET quote_id = …` responde `42703` (coluna inexistente).
+- Repor a coluna por migration "para consertar" reintroduz exatamente a coluna morta
+  que `20260827150000` removeu.
+
+Se um dia o produto quiser **o orçamento escolhido** — diferente do último emitido —,
+a coluna volta apontando para `quotes(id)`, e volta junto com o caminho de aplicação
+que a escreve. Coluna sem dono não entra.
 
 ### O kanban tem um índice, e ele é parcial
 
@@ -366,6 +473,10 @@ As atividades vencidas têm **dois** índices parciais, e de propósito: `(owner
 ---
 
 ## 8. Chat
+
+> **Ainda não existe no banco.** Nenhuma das tabelas abaixo foi criada; o modelo é o
+> desenho do módulo. O recurso RBAC `chat` já está no catálogo de `resources`, o que
+> é normal — a grade de permissões nasce antes das tabelas que ela vai proteger.
 
 ```
 chat_integrations(id, property_id, provider, phone_number, config jsonb, status, is_active)
@@ -385,6 +496,9 @@ chat_quick_replies · chat_labels · chat_conversation_labels
 
 ## 9. Agenda
 
+> **Ainda não existe no banco.** As três tabelas nascem em F2-19; o recurso RBAC
+> `agenda` já está no catálogo.
+
 ```
 agenda_events(id, property_id, type, title, starts_at, ends_at, all_day,
               unit_id?, reservation_id?, contact_id?, assignee_id?, status, notes)
@@ -396,6 +510,16 @@ agenda_blocks(id, property_id, starts_at, ends_at, all_day, reason)
 ---
 
 ## 10. Financeiro
+
+> **Ainda não existe no banco — nenhuma das dez tabelas abaixo, `brokers` inclusive.**
+> Conferido em `information_schema.tables`. O desenho abaixo é ponto de partida da
+> Fase 2, não descrição do que está lá: `brokers` nasce em F2-09 e o restante do
+> schema em F2-10, e é o contrato de F2-08 que decide a forma final. Os recursos RBAC
+> `finance.receivables`, `finance.payables`, `finance.commissions` e `brokers` já
+> existem em `resources` — catálogo de permissão, não tabela de negócio.
+>
+> Duas consequências para quem escreve código agora: `users.broker_id` **não tem FK**
+> (§2) porque o alvo não existe, e qualquer `SELECT` daqui responde `42P01`.
 
 ```
 accounts(id, property_id, code, name, kind)                 -- plano de contas
@@ -421,6 +545,9 @@ Comissão incide sobre diárias, nunca sobre limpeza ou caução. Caução é `r
 
 ## 11. Operação
 
+> **Ainda não existe no banco.** Nenhuma das cinco tabelas foi criada. O recurso RBAC
+> `inventory` já está no catálogo.
+
 ```
 inventory_items(id, property_id, name, category, unit_measure, min_stock, cost_cents)
 unit_inventory(unit_id, item_id, standard_qty)               -- PK composta
@@ -435,6 +562,11 @@ Ordem de manutenção cria `stay_block` de origem `maintenance` — bloqueia o c
 ---
 
 ## 12. Canais / OTA
+
+> **Ainda não existe no banco.** Nenhuma das quatro tabelas foi criada — é por isso
+> que `reservations` ainda não tem `channel_id` (§5) e que `stay_blocks.source='ota'`
+> e `external_ref` existem sem ninguém que os escreva. O recurso RBAC `channels` já
+> está no catálogo.
 
 ```
 channels(id, code, name, kind, active)                       -- kind: ical | api
@@ -452,10 +584,11 @@ channel_conflicts(id, listing_id, unit_id, period, our_reservation_id?, external
 
 ```
 api_tokens(id, name, prefix, token_hash UNIQUE, scopes text[], expires_at, last_used_at, revoked_at, created_by)
-webhooks(id, name, url, events text[], secret, active)
+webhooks(id, name, url, events text[], secret, active)                  -- ↑ ainda não existem
 webhook_deliveries(id, webhook_id, event, payload jsonb, attempt, status_code,
                    response_body, error, next_retry_at, delivered_at, dead_at)
 integration_logs(id, provider, direction, action, status, payload jsonb, error, created_at)
+-- ─────────── daqui para baixo, existe no banco ───────────
 idempotency_keys(key, endpoint, actor_id, property_id, request_hash, status, response_body, created_at)
         -- PK(key, endpoint, actor_id, property_id) — a chave SEM ator vazava resposta entre usuários
 app_settings(namespace, key, value jsonb, is_secret, updated_by, updated_at)      -- PK(namespace, key)
@@ -464,7 +597,13 @@ audit_log(id, property_id, actor_id, action, entity, entity_id, before jsonb, af
 pii_access_log(id, actor_id, contact_id, reason, at)
 ```
 
-`audit_log` particionado por mês a partir do segundo ano.
+**As quatro primeiras ainda não existem no banco** (`api_tokens`, `webhooks`,
+`webhook_deliveries`, `integration_logs`) — entram com o módulo de integrações. As
+quatro de baixo existem e foram conferidas coluna a coluna.
+
+`audit_log` particionado por mês a partir do segundo ano — **ainda não está
+particionado**; hoje é tabela simples, e a partição é decisão de operação, não de
+schema desta fase.
 
 ---
 
@@ -513,20 +652,20 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 | `stay_blocks` | `EXCLUDE USING gist (unit_id WITH =, period WITH &&) WHERE status IN ('hold','confirmed')` — `completed` fica de fora de propósito (§1) |
 | `stay_blocks` | `CHECK (lower(period) < upper(period))` · `CHECK (status<>'hold' OR expires_at IS NOT NULL)` · gist em `period` · parcial em `expires_at` |
 | `stay_blocks` | gist parcial em `period WHERE status IN ('hold','confirmed','completed')` — o mapa e a ocupação · parcial em `owner_id` — o escopo `own` de `calendar` |
-| `reservations` | `UNIQUE(code)` · `CHECK (check_out > check_in)` · `CHECK (discount_pct BETWEEN 0 AND 100)` — alçada é política versionada, não constraint |
+| `reservations` | `UNIQUE(code)` · `CHECK (check_out > check_in)` · `CHECK (guests_count > 0)` — o teto do desconto **não** está aqui: `discount_pct` mora em `reservation_pricing` desde `20260826100000` |
 | `reservation_nights` | `PRIMARY KEY (reservation_id, night)` |
 | `rates` | `UNIQUE(rate_table_id, unit_type_id, date_type)` |
 | `holidays` | `UNIQUE(property_id, date)` |
 | `special_periods` | `CHECK (ends_on >= starts_on)` + gist em `daterange(starts_on, ends_on, '[]')` |
-| `contacts` | `UNIQUE(phone_e164) WHERE phone_e164 IS NOT NULL` · trigram em `name` |
-| `chat_messages` | `UNIQUE(conversation_id, external_id)` |
-| `chat_conversations` | `UNIQUE(integration_id, external_id)` |
-| `channel_events` | `UNIQUE(channel_id, external_uid)` |
+| `contacts` | `UNIQUE(phone_e164) WHERE phone_e164 IS NOT NULL` · `UNIQUE(property_id, coalesce(doc_type,''), doc_number) WHERE doc_number IS NOT NULL AND doc_number <> ''` — documento único por propriedade, e é dele que sai o `409 CONTACT_DUPLICATE` (§6) · trigram em `name` · `(doc_number) WHERE doc_number IS NOT NULL` para a busca |
+| `chat_messages` | `UNIQUE(conversation_id, external_id)` — **tabela ainda não existe** (§8) |
+| `chat_conversations` | `UNIQUE(integration_id, external_id)` — **tabela ainda não existe** (§8) |
+| `channel_events` | `UNIQUE(channel_id, external_uid)` — **tabela ainda não existe** (§12) |
 | `idempotency_keys` | `PRIMARY KEY (key, endpoint, actor_id, property_id)` — sem o ator na chave, o replay devolve a resposta de um usuário a outro |
 | `reservations` | `code` com `DEFAULT proximo_codigo_reserva()` — numeração por ano, densa e sem corrida |
 | `reservations` | `(property_id, status, check_in)` — a listagem · `(unit_type_id, check_in)` — ocupação por produto |
 | `reservations` | parciais em `owner_id`, `broker_id`, `rebooked_from_id`, `created_by` — FKs majoritariamente nulas |
-| `reservation_pricing` | `PRIMARY KEY (reservation_id)` **é** a FK — é isto que faz o 1:1 · `CHECK (discount_cents <= subtotal_cents)` |
+| `reservation_pricing` | `PRIMARY KEY (reservation_id)` **é** a FK — é isto que faz o 1:1 · `CHECK (discount_cents <= subtotal_cents)` · `CHECK (discount_pct BETWEEN 0 AND 100)` — teto de sanidade; a alçada comercial é política versionada, não constraint (§5) |
 | `reservation_units` | `(unit_id)` e parcial em `(stay_block_id)` — a PK começa por `reservation_id` e não serve a busca pela unidade |
 | `reservation_guests` | `(contact_id)` — mesma razão |
 | `reservation_nights` | `(unit_type_id, night)` — ADR/RevPAR saem daqui |
@@ -552,7 +691,42 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 | `crm_activities` | `(owner_id, due_at) WHERE status='pendente'` — a caixa de entrada · `(property_id, due_at) WHERE status='pendente' AND due_at IS NOT NULL` — a varredura de alertas |
 | `crm_activities` · `crm_notes` | `CHECK (num_nonnulls(lead_id, opportunity_id, contact_id) >= 1)` — atividade solta não aparece em tela nenhuma |
 | `crm_lost_reasons` | `UNIQUE(property_id, label)` — chave natural do seed |
-| todas | índice em toda FK |
+| `crm_opportunities` | **não tem `quote_id`** desde `20260827150000`; o orçamento vigente é `quotes.opportunity_id` (§7) |
+| quase todas | índice em toda FK — **não é "todas"**, e a diferença é medível |
+
+A linha anterior dizia `todas`. A consulta abaixo devolve hoje **15** chaves
+estrangeiras sem índice que comece por elas:
+
+```sql
+SELECT c.conrelid::regclass, c.conname
+  FROM pg_constraint c
+ WHERE c.contype = 'f' AND c.connamespace = 'public'::regnamespace
+   AND NOT EXISTS (SELECT 1 FROM pg_index i
+                    WHERE i.indrelid = c.conrelid
+                      AND (i.indkey::int2[])[0:array_length(c.conkey,1)-1] = c.conkey::int2[]);
+```
+
+Nem toda uma delas é dívida. Três grupos, e só o primeiro custa alguma coisa:
+
+- **Coberta como coluna não-inicial de um índice composto** — `rates(unit_type_id)` e
+  os três `date_type` (`rates`, `reservation_nights`, `quote_nights`,
+  `min_nights_rules`) vivem dentro de `UNIQUE` que começa por outra coluna. O join
+  pelo tarifário usa o índice; a varredura por tipo de data, não. Ninguém varre por
+  tipo de data.
+- **Tabela de log, escrita muito e lida por outro eixo** — `audit_log(property_id)`,
+  `pii_access_log(actor_id)`, `reservation_events(actor_id)`,
+  `idempotency_keys(actor_id, property_id)`. O índice pagaria escrita em todo pedido
+  para servir consulta que ninguém faz.
+- **Dívida de verdade, pequena** — `password_resets(user_id)` não tem índice nenhum, e
+  `auth/repository.go:357` faz `UPDATE password_resets SET used_at = now() WHERE
+  user_id = $1 AND used_at IS NULL` a cada troca de senha: hoje é *seq scan* numa
+  tabela de dezenas de linhas, e continua sendo *seq scan* quando ela tiver milhares.
+  `role_permissions(resource_code)` custa menos do que parece — toda leitura da matriz
+  filtra por `role_id`, que é o prefixo da PK; o índice ausente só pesa na checagem de
+  FK quando `resources` muda, e `resources` é catálogo estático.
+
+Fica escrito em vez de virar migration porque índice que ninguém mede é peso de
+escrita comprado no escuro — e `docs/db.md` não é pasta de quem cria migration.
 
 **Disponibilidade por unidade e período não ganha índice próprio.** O `EXCLUDE USING gist (unit_id WITH =, period WITH &&) WHERE status IN ('hold','confirmed')` já cria exatamente esse índice, com exatamente o predicado do mapa de ocupação. Criar um igual ao lado dobraria o custo de escrita sem ganhar leitura nenhuma.
 
@@ -580,6 +754,8 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20260827120000_notificacoes_tempo_real` | gatilhos de `pg_notify` em `stay_blocks`, `reservations` e `crm_opportunities` nos canais `whv_calendar` e `whv_crm`, com payload de identificadores e `v = pg_current_xact_id()` (§13a) |
 | `20260827130000_orcamentos_persistidos` | `quotes` (25 colunas) e `quote_nights`, com os `CHECK` da aritmética do motor e o `CONSTRAINT TRIGGER` adiado que faz o snapshot fechar (§4a). O orçamento deixa de ser calculado e jogado fora — é o que destrava `/win` |
 | `20260827140000_troca_de_consumes_com_venda_viva` | `unit_types.consumes` passa a ser imutável com reserva viva, nas duas direções, com trava de linha contra a venda concorrente (§3). Avisa (`RAISE WARNING`, no log do servidor) sobre estado legado já trocado, sem reparar nem abortar — reclassificação passada pode ter sido decisão comercial legítima |
+| `20260827150000_documento_unico_e_coluna_morta_do_funil` | `contacts_doc_unico_idx` — o `409 CONTACT_DUPLICATE` que a API prometia passa a ter lastro no banco, e não só na trava de aplicação que não alcança seed nem `psql` (§6). E `crm_opportunities.quote_id`, coluna que ninguém escrevia nem lia desde que o orçamento virou tabela própria, é derrubada (§7) |
+| `20260831100000_validade_do_orcamento_versionada` | `commercial_policies.quote_validity_days` (`NOT NULL DEFAULT 7`, `CHECK (> 0)`) — a validade do orçamento sai do binário e vira dado versionado (dívida **D7**, metade de schema; a outra metade é F2-05). **Na árvore, não aplicada no banco do compose em 31/08/2026** — `schema_migrations` lá ainda diz `20260827150000`, e `router.SchemaVersionEsperada` também |
 
 ## 16. Seeds
 

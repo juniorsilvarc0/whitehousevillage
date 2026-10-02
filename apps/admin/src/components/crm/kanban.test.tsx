@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import { PipelineKanban } from "@/components/crm/kanban";
-import { moverEtapa } from "@/lib/crm/acoes";
+import { buscarQuadro, moverEtapa } from "@/lib/crm/acoes";
 import type { CardDaOportunidade, ColunaDoKanban, EtapaDoFunil, QuadroKanban } from "@/lib/crm/tipos";
+import type { FonteDeEventos } from "@/lib/tempo-real/sse";
 
 /**
  * O movimento otimista do kanban — e o desfazer.
@@ -38,6 +39,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/crm/acoes", () => ({
+  buscarQuadro: vi.fn(),
   moverEtapa: vi.fn(),
   ganharOportunidade: vi.fn(),
   perderOportunidade: vi.fn(),
@@ -47,6 +49,56 @@ vi.mock("@/lib/crm/acoes", () => ({
 }));
 
 const moverEtapaMock = vi.mocked(moverEtapa);
+const buscarQuadroMock = vi.mocked(buscarQuadro);
+
+/**
+ * O duplo do `EventSource`, porque o jsdom não tem um — e porque um teste que
+ * abrisse conexão de verdade mediria a rede.
+ *
+ * `abertas` é contador de CLASSE de propósito: a única forma de provar que a
+ * conexão não reabre é contar aberturas ao longo de vários renders, e é essa a
+ * medida que a suíte do hook não sabia fazer enquanto a conexão reabria 220
+ * vezes por segundo em produção.
+ */
+class FonteFalsa implements FonteDeEventos {
+  static abertas = 0;
+  static ultima: FonteFalsa | null = null;
+
+  readyState = 0;
+  private ouvintes = new Map<string, ((evento: MessageEvent<string>) => void)[]>();
+
+  constructor(readonly url: string) {
+    FonteFalsa.abertas += 1;
+    FonteFalsa.ultima = this;
+  }
+
+  addEventListener(tipo: string, ouvinte: (evento: MessageEvent<string>) => void): void {
+    this.ouvintes.set(tipo, [...(this.ouvintes.get(tipo) ?? []), ouvinte]);
+  }
+
+  close(): void {
+    this.readyState = 2;
+  }
+
+  emitir(tipo: string, data: string): void {
+    act(() => {
+      for (const ouvinte of this.ouvintes.get(tipo) ?? []) {
+        ouvinte(new MessageEvent(tipo, { data }));
+      }
+    });
+  }
+}
+
+/** Estável de módulo — a forma que NÃO consegue reproduzir o defeito de
+ *  reconexão, e por isso a que serve a todo teste que não é sobre ele. */
+const criarFonte = (url: string): FonteDeEventos => new FonteFalsa(url);
+const fonte = () => FonteFalsa.ultima!;
+
+/** O `data:` que o barramento entrega quando alguém mexe num card. `topic` vem
+ *  no envelope (o `pg_notify` o monta) e o cliente o ignora: quem separa os
+ *  assuntos é o nome do evento SSE. */
+const oportunidade = (id: string, v: number) =>
+  JSON.stringify({ topic: "crm", entity: "opportunity", id, v });
 
 function etapa(id: string, name: string, position: number, tipo: EtapaDoFunil["type"] = "aberto"): EtapaDoFunil {
   return {
@@ -118,12 +170,18 @@ function quadro(): QuadroKanban {
   };
 }
 
+const MOTIVOS = [{ id: "m-1", label: "Preço acima do orçamento", active: true, usage_count: 3 }];
+
 function montar() {
   render(
     <PipelineKanban
       quadro={quadro()}
-      motivos={[{ id: "m-1", label: "Preço acima do orçamento", active: true, usage_count: 3 }]}
+      motivos={MOTIVOS}
       permissoes={{ editar: true }}
+      filtros={{}}
+      // Sempre injetada: sem isto o hook cairia no `EventSource` do navegador,
+      // que o jsdom não tem, e TODO teste deste arquivo morreria no efeito.
+      criarFonte={criarFonte}
     />,
   );
 }
@@ -173,6 +231,9 @@ beforeEach(() => {
   vi.mocked(toast.error).mockClear();
   vi.mocked(toast.success).mockClear();
   moverEtapaMock.mockReset();
+  buscarQuadroMock.mockReset();
+  FonteFalsa.abertas = 0;
+  FonteFalsa.ultima = null;
 });
 
 describe("PipelineKanban — movimento otimista", () => {
@@ -338,5 +399,151 @@ describe("PipelineKanban — colunas terminais", () => {
 
     expect(moverEtapaMock).not.toHaveBeenCalled();
     expect(cardsDe("Novo lead")).toEqual(["Fernanda Lima", "Rui Barros"]);
+  });
+});
+
+
+/** O quadro como o servidor o devolve DEPOIS de o colega arrastar a Fernanda —
+ *  é isto que o refetch do tempo real traz de volta. */
+function quadroDoColega(): QuadroKanban {
+  const base = quadro();
+  return {
+    ...base,
+    columns: [
+      coluna(NOVO, [card("op-2", "Rui Barros", 300_000)]),
+      coluna(NEGOCIACAO, [FERNANDA]),
+      coluna(GANHO, []),
+      coluna(PERDIDO, []),
+    ],
+    totals: { count: 1, amount_cents: 300_000 },
+  };
+}
+
+/**
+ * O funil ao vivo — a dívida **D10**.
+ *
+ * O barramento existia inteiro e ninguém o consumia: `whv_crm` com dois
+ * gatilhos, `topics=crm` servido e conferido contra a matriz, e um único
+ * consumidor do hook no painel (o mapa). O efeito na casa: duas pessoas no
+ * funil não veem o trabalho uma da outra, e quem está com a tela aberta liga
+ * para o cliente que o colega acabou de ganhar.
+ *
+ * O teste com forma obrigatória é o terceiro. Os treze testes do hook de SSE
+ * ficaram verdes durante um defeito que abria **1957 conexões em 9 segundos**
+ * porque todos passavam uma fábrica estável de módulo — a única forma que não
+ * podia falhar. Aqui a fábrica muda de identidade a cada render, que é o que a
+ * minificação faz com o valor default de um parâmetro, e a cobrança é uma
+ * conexão só.
+ */
+describe("PipelineKanban — o quadro se move sozinho", () => {
+  beforeEach(() => {
+    // `shouldAdvanceTime` porque a janela de agrupamento é temporizador e o
+    // `waitFor` do testing-library é temporizador: sem isso um espera pelo
+    // outro para sempre.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("assina só o tópico crm, e pelo BFF — nunca a API direto", () => {
+    // `EventSource` não manda cabeçalho e o contrato recusa token em query
+    // string (ele pararia no log do proxy). O cookie httpOnly só viaja em mesma
+    // origem, então o caminho é a Route Handler do painel. E o kanban não pede
+    // `calendar`: evento de bloqueio ele descartaria.
+    montar();
+    expect(fonte().url).toBe("/api/stream?topics=crm");
+  });
+
+  it("o card que o colega moveu na outra aba chega sem F5", async () => {
+    buscarQuadroMock.mockResolvedValue({ ok: true, data: quadroDoColega() });
+
+    montar();
+    expect(cardsDe("Novo lead")).toEqual(["Fernanda Lima", "Rui Barros"]);
+    expect(screen.getByText(/2 negócios · R\$\s*15\.000,00/)).toBeTruthy();
+
+    fonte().emitir("crm", oportunidade("op-1", 4_812));
+
+    // A janela de agrupamento é o que junta a rajada de uma transação numa
+    // requisição só; antes dela não sai nada.
+    expect(buscarQuadroMock).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    // O evento chega magro: quem traz o card é o refetch autenticado, com o
+    // MESMO recorte que está na URL — que é onde o `scope='own'` do corretor é
+    // aplicado.
+    expect(buscarQuadroMock).toHaveBeenCalledTimes(1);
+    expect(buscarQuadroMock).toHaveBeenCalledWith({});
+
+    await waitFor(() => expect(cardsDe("Negociação")).toEqual(["Fernanda Lima"]));
+    expect(cardsDe("Novo lead")).toEqual(["Rui Barros"]);
+    // O total do cabeçalho anda junto: ele é o primeiro número que a gestão
+    // olha, e um total parado sobre colunas que se mexeram é pior do que a tela
+    // velha inteira, porque parece atual.
+    expect(screen.getByText(/1 negócio aberto · R\$\s*3\.000,00/)).toBeTruthy();
+  });
+
+  it("não reabre a conexão quando só a identidade de criarFonte muda", () => {
+    // Regressão medida em produção: `criarFonte` chegava ao efeito pelo valor
+    // default de um parâmetro, e a identidade de um default NÃO sobrevive à
+    // minificação. Em `next dev` o efeito rodava uma vez; no build ele passou a
+    // reabrir a conexão a cada repintura — ~220 aberturas por segundo com o
+    // painel parado. Um consumidor novo do hook é exatamente a ocasião de o
+    // defeito voltar, então a cobrança é feita daqui, pelo componente.
+    const tela = () => (
+      <PipelineKanban
+        quadro={quadro()}
+        motivos={MOTIVOS}
+        permissoes={{ editar: true }}
+        // Objeto novo a cada render, como o RSC entrega depois de um refresh.
+        filtros={{}}
+        // Função nova a cada render, de propósito.
+        criarFonte={(url) => new FonteFalsa(url)}
+      />
+    );
+
+    const { rerender } = render(tela());
+    for (let i = 0; i < 5; i += 1) rerender(tela());
+
+    expect(FonteFalsa.abertas).toBe(1);
+  });
+
+  it("evento que não é oportunidade não custa uma requisição", async () => {
+    // O canal `whv_crm` só publica `opportunity` hoje, mas o envelope é
+    // compartilhado e `lead` e `activity` já estão no vocabulário do cliente.
+    // Sem o filtro, uma nota registrada por outra pessoa recarregaria o quadro
+    // de todo mundo.
+    buscarQuadroMock.mockResolvedValue({ ok: true, data: quadro() });
+
+    montar();
+    fonte().emitir("crm", JSON.stringify({ topic: "crm", entity: "lead", id: "l-1", v: 9 }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(buscarQuadroMock).not.toHaveBeenCalled();
+  });
+
+  it("atualização que falha não apaga o quadro — ela se anuncia", async () => {
+    // Dado velho e rotulado como velho é melhor que tela vazia: o operador
+    // continua vendo o último desenho que deu certo e sabe que ele é o último.
+    buscarQuadroMock.mockResolvedValue({
+      ok: false,
+      code: "FORBIDDEN",
+      message: "sem permissão",
+      details: {},
+    });
+
+    montar();
+    fonte().emitir("crm", oportunidade("op-1", 4_813));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    expect(cardsDe("Novo lead")).toEqual(["Fernanda Lima", "Rui Barros"]);
+    expect(await screen.findByText(/A última atualização automática falhou/)).toBeTruthy();
   });
 });

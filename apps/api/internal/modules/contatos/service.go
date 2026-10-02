@@ -11,6 +11,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/pii"
 )
 
 // Servico concentra a regra do módulo. O handler não decide nada e o
@@ -71,7 +72,7 @@ func (s *Servico) Buscar(ctx context.Context, id uuid.UUID) (ContatoCompleto, er
 	if err != nil {
 		return ContatoCompleto{}, err
 	}
-	if err := registrarAcessoPII(ctx, s.repo.pool, id, MotivoDeLeituraFicha); err != nil {
+	if err := pii.Registrar(ctx, s.repo.pool, Entidade, id, pii.MotivoFicha); err != nil {
 		return ContatoCompleto{}, err
 	}
 	v, err := s.repo.Vinculos(ctx, id)
@@ -93,7 +94,7 @@ func (s *Servico) Exportar(ctx context.Context, id uuid.UUID) (Exportacao, error
 	}
 	// Exportar é a maior leitura de dado pessoal que o sistema faz numa chamada
 	// só. Se alguma leitura tem de deixar rastro, é esta.
-	if err := registrarAcessoPII(ctx, s.repo.pool, id, MotivoDeLeituraExportada); err != nil {
+	if err := pii.Registrar(ctx, s.repo.pool, Entidade, id, pii.MotivoExportacao); err != nil {
 		return Exportacao{}, err
 	}
 

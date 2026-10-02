@@ -64,6 +64,15 @@ pagina.on("response", (r) => {
 });
 pagina.on("pageerror", (e) => falhas.push(`erro de página: ${String(e).slice(0, 120)}`));
 
+// Cada `EventSource` aberto é uma requisição a `/api/stream`. A contagem é o
+// único jeito de enxergar a reconexão em laço: ela não produz erro, não produz
+// 5xx e não muda nada na tela — só multiplica conexões contra a API. Ver o
+// bloco "o funil ao vivo" no fim deste arquivo.
+const aberturasDoStream = [];
+pagina.on("request", (r) => {
+  if (r.url().includes("/api/stream")) aberturasDoStream.push(Date.now());
+});
+
 // O que o BFF respondeu ao login fica guardado para o caso de o login falhar.
 // Sem isto a única pista é "o login não saiu de /login", que não distingue
 // credencial recusada, API fora do ar e navegação que não completou — e o
@@ -249,10 +258,63 @@ for (const [alvo, origem] of paraConferir) {
   console.log(`  ${alvo}  (de ${origem})`);
 }
 
+// ── O funil ao vivo: pelo menos uma conexão, e no máximo duas ──────────────
+//
+// Duas coisas que nenhum teste de componente alcança, e que já aconteceram:
+//
+// 1. **Zero conexões.** Foi o estado da dívida D10 por uma fase inteira: o
+//    barramento servido, os gatilhos publicando, o tópico `crm` com RBAC
+//    próprio — e ninguém assinando. Medido em 31/08 contra o painel servido:
+//    duas abas no funil, uma move o card, a outra continua mostrando a coluna
+//    antiga, e `/api/stream` recebe **0** requisições. Um teto sozinho passaria
+//    verde nesse estado, então o piso é metade da guarda.
+//
+// 2. **Conexões demais.** `criarFonte` entrou uma vez na lista de dependências
+//    do efeito do SSE, e a identidade do valor default de um parâmetro não
+//    sobrevive à minificação: em `next dev` uma conexão, no build servido
+//    **1957 em 9 segundos**. A suíte inteira ficou verde durante o defeito
+//    porque todo teste passava uma fábrica estável de módulo. Só a aplicação
+//    servida mostra isso, e só contando.
+//
+// 30 s parados: o defeito de reconexão aparece em dois, mas uma escada de
+// backoff mal fechada leva dezenas — e 30 s é o intervalo em que o teto de 2
+// separa "reconectou uma vez" de "está reconectando sozinho".
+const JANELA_DO_FUNIL_MS = 30_000;
+const marcoDoStream = aberturasDoStream.length;
+
+console.log(`\n  medindo o tempo real do funil por ${JANELA_DO_FUNIL_MS / 1000}s`);
+await pagina.goto(`${BASE}/app/funil`, { waitUntil: "domcontentloaded" });
+const quadroDePe = await pagina
+  .waitForSelector('li[aria-label^="Etapa "]', { timeout: 20000 })
+  .then(() => true)
+  .catch(() => false);
+
+if (!quadroDePe) {
+  falhas.push("/app/funil: o quadro não desenhou nenhuma coluna — não há o que medir de tempo real");
+} else {
+  await pagina.waitForTimeout(JANELA_DO_FUNIL_MS);
+  const abertas = aberturasDoStream.length - marcoDoStream;
+  if (abertas < 1) {
+    falhas.push(
+      "/app/funil: o quadro não abriu conexão nenhuma com /api/stream — " +
+        "o funil voltou a não ter tempo real (dívida D10)",
+    );
+  } else if (abertas > 2) {
+    falhas.push(
+      `/app/funil: ${abertas} aberturas de /api/stream em ${JANELA_DO_FUNIL_MS / 1000}s com a tela parada — ` +
+        "a conexão está reabrindo sozinha (o defeito de dependência do efeito do SSE)",
+    );
+  } else {
+    console.log(`  /app/funil ao vivo com ${abertas} abertura(s) de /api/stream em ${JANELA_DO_FUNIL_MS / 1000}s`);
+  }
+}
+
 await navegador.close();
 if (falhas.length) {
   console.error("\nFALHOU:");
   falhas.forEach((f) => console.error("  ! " + f));
   process.exit(1);
 }
-console.log("\n  fumaça ok — login, telas e TODO link interno sem 5xx, sem 404 e sem aviso de erro");
+console.log(
+  "\n  fumaça ok — login, telas, TODO link interno sem 5xx/404/aviso de erro, e o funil ao vivo com uma conexão",
+);

@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import Link from "next/link";
-import { Columns3, UserPlus } from "lucide-react";
+import { UserPlus } from "lucide-react";
 
 import { AvisoDeErro } from "@/components/crm/avisos";
 import { PipelineKanban } from "@/components/crm/kanban";
@@ -9,24 +9,14 @@ import { CabecalhoDeTela, Nota, Tela } from "@/components/layout/tela";
 import { buttonVariants } from "@/components/ui/button";
 import { can } from "@/lib/auth/permissions";
 import { requireSession } from "@/lib/auth/session";
-import { chamarCrm, listarCrm } from "@/lib/crm/api";
-import type { Funil, MotivoDePerda, QuadroKanban } from "@/lib/crm/tipos";
-import { formatarBRL } from "@/lib/dinheiro";
+import { listarCrm } from "@/lib/crm/api";
+import { carregarQuadro, FiltrosDoFunil } from "@/lib/crm/quadro";
+import type { Funil, MotivoDePerda } from "@/lib/crm/tipos";
 import { cn } from "@/lib/utils";
 
 import { BarraDoFunil } from "./barra";
 
 export const metadata = { title: "Funil" };
-
-type Filtros = {
-  pipeline_id?: string;
-  q?: string;
-  owner_id?: string;
-  unit_type_id?: string;
-  from?: string;
-  to?: string;
-  include_closed?: string;
-};
 
 /**
  * O quadro do funil.
@@ -40,28 +30,26 @@ type Filtros = {
  * aplica isso é o `WHERE` do repositório, não esta tela — aqui o escopo só vira
  * a frase que explica por que o quadro está mais vazio do que o do colega.
  */
-export default async function FunilPage({ searchParams }: { searchParams: Promise<Filtros> }) {
+export default async function FunilPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { user, permissions } = await requireSession();
   if (!can(permissions, "crm.opportunities", "ver")) return <SemAcesso recurso="crm.opportunities" />;
 
-  const filtros = await searchParams;
+  // O MESMO schema e a MESMA busca que a atualização automática usa
+  // (`lib/crm/quadro.ts`). Se a primeira carga e o refetch do tempo real
+  // montassem a query cada um de um jeito, um filtro novo entraria na barra e o
+  // quadro voltaria sem ele a cada evento — sem erro em lugar nenhum.
+  const filtros = FiltrosDoFunil.safeParse(await searchParams).data ?? {};
 
   // As três coleções carregam em paralelo e falham em separado: o módulo do CRM
   // está sendo escrito ao mesmo tempo que esta tela, e uma rota ainda não
   // registrada responde 404 sem que isso diga nada sobre as outras duas.
   const [funis, quadro, motivos] = await Promise.all([
     listarCrm<Funil>("/crm/pipelines", { active: true }),
-    chamarCrm<QuadroKanban>("/crm/opportunities/kanban", {
-      query: {
-        pipeline_id: filtros.pipeline_id,
-        q: filtros.q,
-        owner_id: filtros.owner_id,
-        unit_type_id: filtros.unit_type_id,
-        from: filtros.from,
-        to: filtros.to,
-        include_closed: filtros.include_closed === "true" ? "true" : undefined,
-      },
-    }),
+    carregarQuadro(filtros),
     listarCrm<MotivoDePerda>("/crm/lost-reasons", { active: true }),
   ]);
 
@@ -103,21 +91,14 @@ export default async function FunilPage({ searchParams }: { searchParams: Promis
 
       {quadro.ok ? (
         <>
-          <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
-            <span className="flex items-center gap-2">
-              <Columns3 className="size-4" aria-hidden="true" />
-              <strong className="font-display text-base text-foreground">{quadro.data.pipeline.name}</strong>
-            </span>
-            <span className="font-mono tabular-nums">
-              {quadro.data.totals.count} {quadro.data.totals.count === 1 ? "negócio aberto" : "negócios"} ·{" "}
-              {formatarBRL(quadro.data.totals.amount_cents)}
-            </span>
-          </p>
-
+          {/* Nome do funil, total e selo de tempo real desenham DENTRO do
+              kanban: os três mudam quando um evento repõe o quadro, e o que o
+              RSC pintasse aqui ficaria congelado na primeira carga. */}
           <PipelineKanban
             quadro={quadro.data}
             motivos={motivos.ok ? motivos.data : []}
             permissoes={permissoes}
+            filtros={filtros}
           />
 
           {!motivos.ok ? (

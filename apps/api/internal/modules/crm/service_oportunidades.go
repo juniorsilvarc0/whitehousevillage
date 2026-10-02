@@ -14,6 +14,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
 )
 
 // ListarOportunidades — GET /crm/opportunities.
@@ -619,7 +620,7 @@ func (s *Servico) Ganhar(ctx context.Context, id uuid.UUID, chave string, corpo 
 	if err != nil {
 		return Resultado{}, err
 	}
-	hash, err := impressao(struct {
+	hash, err := idempotencia.Impressao(struct {
 		ID    uuid.UUID     `json:"id"`
 		Corpo PedidoDeGanho `json:"corpo"`
 	}{id, corpo})
@@ -629,7 +630,7 @@ func (s *Servico) Ganhar(ctx context.Context, id uuid.UUID, chave string, corpo 
 
 	var saida Resultado
 	err = s.tx.Do(ctx, func(ctx context.Context) error {
-		guardada, err := s.repo.reservarChave(ctx, chave, rotaDeGanho, hash, donoDo(u))
+		guardada, err := idempotencia.Reservar(ctx, s.repo.pool, chave, rotaDeGanho, hash, idempotencia.DonoDe(u))
 		if err != nil {
 			return err
 		}
@@ -644,7 +645,7 @@ func (s *Servico) Ganhar(ctx context.Context, id uuid.UUID, chave string, corpo 
 		}
 
 		env := envelope{Data: resultado}
-		if err := s.repo.guardarResposta(ctx, chave, rotaDeGanho, donoDo(u), status, env); err != nil {
+		if err := idempotencia.Guardar(ctx, s.repo.pool, chave, rotaDeGanho, idempotencia.DonoDe(u), status, env); err != nil {
 			return err
 		}
 		saida = Resultado{Status: status, Corpo: env}

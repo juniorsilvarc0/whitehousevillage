@@ -4,6 +4,7 @@ import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
 
 import { EstadoVazio } from "@/components/layout/estados";
+import { IndicadorDeTempoReal } from "@/components/tempo-real/indicador";
 import type { DisponibilidadeDoProduto, Produto, UnidadeDaComposicao } from "@/lib/api/comercial";
 import { mensagemDoErro, type Resultado } from "@/lib/acoes/resultado";
 import { somarDias, type DataISO } from "@/lib/datas";
@@ -18,7 +19,6 @@ import { BarraDoMapa } from "./barra";
 import { ModalDeBloqueio, type PedidoDeBloqueio } from "./bloqueio";
 import { DetalheDaOcupacao } from "./detalhe";
 import { GradeDoMapa, type AlvoDaFaixa, type AlvoDoDia, type Selecao } from "./grade";
-import { IndicadorDeTempoReal } from "./indicador";
 import { InspetorDoDia } from "./inspetor";
 import { LegendaDoMapa } from "./legenda";
 

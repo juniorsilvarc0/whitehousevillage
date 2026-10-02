@@ -6,10 +6,12 @@ import { exigir } from "@/lib/acoes/guarda";
 import { detalhesDoZod } from "@/lib/acoes/campos";
 import { chamarCrm, falhaCrm, type ResultadoCrm } from "@/lib/crm/api";
 import { GanhoFormulario, PerdaFormulario } from "@/lib/crm/esquemas";
+import { carregarQuadro, FiltrosDoFunil } from "@/lib/crm/quadro";
 import type {
   Atividade,
   Oportunidade,
   OportunidadeAtualizar,
+  QuadroKanban,
   ResultadoDeGanho,
   ResultadoDeMudancaDeEtapa,
   ResultadoDePerda,
@@ -34,6 +36,41 @@ const FUNIL = "/app/funil";
 function revalidar(oportunidadeId: string): void {
   revalidatePath(FUNIL);
   revalidatePath(`/app/oportunidades/${oportunidadeId}`);
+}
+
+/**
+ * A busca que o tempo real dispara — o quadro do recorte que está na tela.
+ *
+ * É Server Action, e não uma chamada do navegador, pelo mesmo motivo do resto
+ * do painel: o JWT vive em cookie `httpOnly` e o navegador não o lê. O evento
+ * do tópico `crm` chega magro ("mudou a oportunidade X") e a tela refaz o fetch
+ * autenticado — que é onde o `scope='own'` do corretor é aplicado. Um evento
+ * que carregasse o card seria um segundo caminho de leitura, sem permissão.
+ *
+ * Não usa `router.refresh()` por uma razão de custo medida na própria página:
+ * ela carrega TRÊS coleções em paralelo (funis, quadro, motivos de perda), e
+ * das três só o quadro muda quando alguém arrasta um card. Refazer a árvore de
+ * RSC a cada evento de colega seriam duas requisições jogadas fora por evento,
+ * mais a rolagem horizontal do quadro de volta ao começo.
+ *
+ * Não revalida caminho nenhum: esta ação **lê**. `revalidatePath` aqui
+ * marcaria a rota como suja em toda atualização automática, e a próxima
+ * navegação do usuário pagaria uma recarga que ninguém pediu.
+ */
+export async function buscarQuadro(filtros: FiltrosDoFunil): Promise<ResultadoCrm<QuadroKanban>> {
+  const recusa = await exigir("crm.opportunities", "ver");
+  if (recusa) return recusa;
+
+  // Server Action é endpoint público (ver `lib/acoes/guarda.ts`): o recorte
+  // chega do cliente e passa pelo mesmo schema que a página usa. Chave
+  // desconhecida o zod descarta, e é o que impede um filtro inventado de virar
+  // querystring na chamada à API.
+  const analise = FiltrosDoFunil.safeParse(filtros);
+  if (!analise.success) {
+    return falhaCrm("VALIDATION_ERROR", "Recorte do funil inválido.", detalhesDoZod(analise.error));
+  }
+
+  return carregarQuadro(analise.data);
 }
 
 /**

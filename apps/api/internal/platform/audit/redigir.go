@@ -76,24 +76,44 @@ func Sensivel(nome string) bool {
 // Cópia, e não alteração no lugar, porque o mapa que chega pode ser a struct que
 // o service ainda vai usar depois de auditar — mutá-lo faria a auditoria
 // corromper o negócio.
-func Redigir(c Campos) Campos {
+func Redigir(c Campos) Campos { return RedigirCom(c, Sensivel) }
+
+// RedigirCom é a MESMA descida de Redigir com outro critério de campo.
+//
+// Existe porque a descida é a parte difícil e o critério é a parte que muda:
+// `internal/platform/pii` precisa esconder `name`, `email` e `phone_e164`, que
+// não são segredo nenhum — numa unidade ou numa reserva são justamente o que a
+// trilha tem de mostrar, e por isso não entram na lista deste pacote.
+//
+// Uma segunda função de descida escrita ao lado seria a duplicação cara: são as
+// listas aninhadas que vazam (`{"guests":[{"name":…}]}`), e a cópia que
+// esquecesse de entrar nelas falharia ABERTA, publicando o valor. Com um
+// parâmetro, existe uma descida só, e ela já é a testada aqui.
+func RedigirCom(c Campos, sensivel func(nome string) bool) Campos {
 	if len(c) == 0 {
 		return nil
 	}
-	return redigirMapa(c, 0)
+	return redigirMapa(c, 0, sensivel)
 }
 
-func redigirMapa(c Campos, nivel int) Campos {
+func redigirMapa(c Campos, nivel int, sensivel func(string) bool) Campos {
 	if nivel > profundidadeMaxima {
 		return Campos{"_": Redigido}
 	}
 	out := make(Campos, len(c))
 	for chave, valor := range c {
-		if Sensivel(chave) {
+		if sensivel(chave) {
+			// Nulo continua nulo: "o campo foi limpo" é informação de trilha, e
+			// um nulo não carrega segredo nem pessoa. Trocá-lo pela marca faria
+			// a tela de auditoria mostrar "havia algo aqui" onde não havia.
+			if valor == nil {
+				out[chave] = nil
+				continue
+			}
 			out[chave] = Redigido
 			continue
 		}
-		out[chave] = redigirValor(valor, nivel+1)
+		out[chave] = redigirValor(valor, nivel+1, sensivel)
 	}
 	return out
 }
@@ -101,19 +121,19 @@ func redigirMapa(c Campos, nivel int) Campos {
 // redigirValor desce em mapas e listas porque o campo sensível costuma estar um
 // nível abaixo: `{"credenciais": {"token": "..."}}` passaria intacto por um
 // filtro que só olhasse o topo.
-func redigirValor(v any, nivel int) any {
+func redigirValor(v any, nivel int, sensivel func(string) bool) any {
 	if nivel > profundidadeMaxima {
 		return Redigido
 	}
 	switch t := v.(type) {
 	case Campos:
-		return redigirMapa(t, nivel)
+		return redigirMapa(t, nivel, sensivel)
 	case map[string]any:
-		return redigirMapa(Campos(t), nivel)
+		return redigirMapa(Campos(t), nivel, sensivel)
 	case []any:
 		out := make([]any, len(t))
 		for i, item := range t {
-			out[i] = redigirValor(item, nivel+1)
+			out[i] = redigirValor(item, nivel+1, sensivel)
 		}
 		return out
 	default:

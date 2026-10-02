@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { Columns3 } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -20,8 +21,11 @@ import { DialogoDeGanho, type AlvoDeGanho } from "@/components/crm/dialogo-de-ga
 import { DialogoDePerda, type AlvoDePerda } from "@/components/crm/dialogo-de-perda";
 import { useControleDeModal } from "@/components/layout/controle-de-modal";
 import { EstadoVazio } from "@/components/layout/estados";
-import { moverEtapa } from "@/lib/crm/acoes";
+import { IndicadorDeTempoReal } from "@/components/tempo-real/indicador";
+import { buscarQuadro, moverEtapa } from "@/lib/crm/acoes";
+import { mensagemCrm, type CodigoCrm } from "@/lib/crm/codigos";
 import { localizarCard, planejarMovimento } from "@/lib/crm/kanban";
+import type { FiltrosDoFunil } from "@/lib/crm/quadro";
 import type {
   CardDaOportunidade,
   ColunaDoKanban,
@@ -30,6 +34,9 @@ import type {
   QuadroKanban,
 } from "@/lib/crm/tipos";
 import { formatarBRL } from "@/lib/dinheiro";
+import { useAtualizacaoAoVivo } from "@/lib/tempo-real/atualizacao";
+import type { EventoDoStream, Topico } from "@/lib/tempo-real/eventos";
+import type { CriarFonte } from "@/lib/tempo-real/sse";
 import { cn } from "@/lib/utils";
 
 /**
@@ -57,7 +64,36 @@ import { cn } from "@/lib/utils";
  * É a única cor fora dos tokens do design system em toda a tela, e é assim
  * porque ela **é dado** — vem da configuração do funil, que a gestão edita sem
  * deploy. Por vir de dado, passa por validação antes de entrar no `style`.
+ *
+ * ## O quadro se move sozinho, e o selo diz quando parou de se mover
+ *
+ * O kanban assina o tópico `crm` do barramento. O evento chega magro
+ * (`{entity:"opportunity", id, v}`) e a tela **refaz o fetch autenticado** do
+ * mesmo recorte que está na URL — que é onde o `scope='own'` do corretor é
+ * aplicado. Sem isso, duas pessoas no funil não veem o trabalho uma da outra:
+ * quem arrasta o card vê, quem está com a tela aberta ao lado continua vendo o
+ * card na coluna antiga até apertar F5, e liga para o cliente que o colega
+ * acabou de ganhar.
+ *
+ * O selo de tempo real não é enfeite: um quadro que parou de receber eventos é
+ * **visualmente idêntico** a um quadro onde ninguém mexeu. Sem ele, a versão
+ * "ao vivo" seria pior do que a versão sem tempo real, porque ensinaria a
+ * confiar num desenho velho.
  */
+
+/** O kanban assina **só** `crm`. Pedir `calendar` junto abriria a mesma conexão
+ *  para receber evento de bloqueio que esta tela descarta — e o handshake do
+ *  `/stream` confere permissão por tópico, então quem não tem `calendar`
+ *  receberia um `ready` com um tópico a menos, sem nenhuma razão. */
+const TOPICOS: readonly Topico[] = ["crm"];
+
+/** Hoje o canal `whv_crm` só publica `opportunity` (migration `20260827120000`),
+ *  mas o envelope do barramento é compartilhado e `lead` e `activity` já estão
+ *  no vocabulário do cliente. O filtro é o que impede o dia em que um deles
+ *  entrar no canal de virar um refetch do quadro inteiro por nota registrada. */
+function interessaAoFunil(evento: EventoDoStream): boolean {
+  return evento.entity === "opportunity";
+}
 
 /** Uma cor de etapa só entra no `style` se for hex de 3 ou 6 dígitos. Valor
  *  vindo do banco é dado de usuário: inválido derruba silenciosamente a regra
@@ -72,16 +108,43 @@ export function PipelineKanban({
   quadro,
   motivos,
   permissoes,
+  filtros,
+  criarFonte,
 }: {
   quadro: QuadroKanban;
   motivos: MotivoDePerda[];
   permissoes: PermissoesDoFunil;
+  /** O recorte que está na URL. Vai de volta ao servidor a cada atualização
+   *  automática: o evento diz que o funil mudou, e o que a tela precisa é o
+   *  MESMO recorte de novo — nunca o funil inteiro. */
+  filtros: FiltrosDoFunil;
+  /**
+   * Costura de teste, e ela é exigida pela forma do defeito que este componente
+   * não pode reintroduzir.
+   *
+   * `useSSE` resolve a fábrica da conexão por valor default de parâmetro, e a
+   * identidade de um default **não sobrevive à minificação**: no build de
+   * produção ela passou a valer uma função nova a cada render e a conexão
+   * reabria a cada repintura (~220 aberturas por segundo, medidas). A regressão
+   * só é observável re-renderizando com uma fábrica de identidade NOVA — o que
+   * é impossível sem poder injetá-la daqui, porque o default é uma constante de
+   * módulo cuja identidade nunca muda. Em produção fica `undefined` e vale o
+   * default.
+   */
+  criarFonte?: CriarFonte;
 }) {
   const router = useRouter();
   const ganho = useControleDeModal<AlvoDeGanho>();
   const perda = useControleDeModal<AlvoDePerda>();
 
-  const [colunas, setColunas] = React.useState<ColunaDoKanban[]>(quadro.columns);
+  // O quadro inteiro num estado só — colunas **e** totais. Eram dois lugares
+  // até o tempo real: as colunas aqui e o total no cabeçalho desenhado pelo
+  // RSC. Com a atualização automática isso deixaria de fechar, porque o evento
+  // repõe as colunas e o total ficaria no valor da primeira carga — e o total
+  // do funil é o primeiro número que a gestão olha.
+  const [vivo, setVivo] = React.useState<QuadroKanban>(quadro);
+  const colunas = vivo.columns;
+
   const [pendentes, setPendentes] = React.useState<readonly string[]>([]);
   const [arrastando, setArrastando] = React.useState<string | null>(null);
 
@@ -94,11 +157,28 @@ export function PipelineKanban({
    * com as colunas velhas. Num efeito haveria um quadro com o kanban de antes
    * do refresh, logo depois de uma ação que acabou de mudar o funil.
    */
-  const [quadroAnterior, setQuadroAnterior] = React.useState(quadro.columns);
-  if (quadro.columns !== quadroAnterior) {
-    setQuadroAnterior(quadro.columns);
-    setColunas(quadro.columns);
+  const [quadroAnterior, setQuadroAnterior] = React.useState(quadro);
+  if (quadro !== quadroAnterior) {
+    setQuadroAnterior(quadro);
+    setVivo(quadro);
   }
+
+  /**
+   * A assinatura do barramento — o mesmo hook que o mapa de ocupação usa.
+   *
+   * `aoAtualizar` é o `setVivo` direto, e é de propósito: o que o servidor
+   * devolve é a verdade, inclusive por cima de um movimento otimista que ainda
+   * não foi confirmado. O palpite otimista dura o voo de uma requisição; a
+   * resposta do `/stage` chega logo atrás e o `router.refresh()` dela repõe o
+   * quadro gravado.
+   */
+  const aoVivo = useAtualizacaoAoVivo<QuadroKanban, CodigoCrm>({
+    topicos: TOPICOS,
+    interessa: interessaAoFunil,
+    buscar: React.useCallback(() => buscarQuadro(filtros), [filtros]),
+    aoAtualizar: setVivo,
+    criarFonte,
+  });
 
   const etapas = React.useMemo(() => colunas.map((coluna) => coluna.stage), [colunas]);
 
@@ -150,12 +230,12 @@ export function PipelineKanban({
     // não uma transformação inversa — que repõe o quadro se a API recusar.
     const anterior = colunas;
 
-    setColunas(plano.colunas);
+    setVivo((atual) => ({ ...atual, columns: plano.colunas }));
     marcar(cardId, true);
     try {
       const resultado = await moverEtapa(cardId, destinoId, plano.origem);
       if (!resultado.ok) {
-        setColunas(anterior);
+        setVivo((atual) => ({ ...atual, columns: anterior }));
         notificar(resultado);
         return;
       }
@@ -199,6 +279,41 @@ export function PipelineKanban({
   return (
     <>
       <AvisosDoCrm />
+
+      {/* Nome do funil, total do funil e o selo de tempo real na mesma linha —
+          e os três saem do MESMO estado. O total desenhado pelo servidor, fora
+          deste componente, ficaria parado enquanto as colunas se mexem. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <Columns3 className="size-4" aria-hidden="true" />
+            <strong className="font-display text-base text-foreground">{vivo.pipeline.name}</strong>
+          </span>
+          <span className="font-mono tabular-nums">
+            {vivo.totals.count} {vivo.totals.count === 1 ? "negócio aberto" : "negócios"} ·{" "}
+            {formatarBRL(vivo.totals.amount_cents)}
+          </span>
+        </p>
+
+        <IndicadorDeTempoReal
+          estado={aoVivo.tempoReal.estado}
+          atualizando={aoVivo.atualizando}
+          atualizadoEm={aoVivo.atualizadoEm}
+          aoReconectar={aoVivo.tempoReal.reconectar}
+          assunto="funil"
+        />
+      </div>
+
+      {aoVivo.falha ? (
+        <p
+          role="status"
+          className="rounded-lg border border-alcada-atencao/40 bg-alcada-atencao/10 px-3 py-2 text-xs text-foreground"
+        >
+          A última atualização automática falhou ({mensagemCrm(aoVivo.falha)}) — o quadro mostra o
+          desenho anterior. Recarregue a página para ver o funil de agora.
+        </p>
+      ) : null}
+
       <DndContext sensors={sensores} onDragStart={aoIniciarArrasto} onDragEnd={aoTerminarArrasto}>
         {/* O quadro rola **dentro** do próprio container: tabela que estoura a
             página horizontalmente é anti-padrão declarado (docs/ui.md §10). */}

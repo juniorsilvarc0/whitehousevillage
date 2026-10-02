@@ -15,6 +15,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
 )
 
 // Handler expõe os endpoints do módulo: decodifica, valida FORMA, chama o
@@ -750,7 +751,7 @@ func (h *Handler) Ganhar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Obrigatória porque isto cria reserva (CLAUDE.md, convenções de API).
-	chave, err := ChaveDeIdempotencia(r.Header.Get("Idempotency-Key"))
+	chave, err := idempotencia.Chave(r.Header.Get(idempotencia.NomeDoHeader))
 	if err != nil {
 		httpx.Error(w, r, err)
 		return

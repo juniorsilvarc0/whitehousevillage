@@ -12,6 +12,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/money"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
 )
 
 // As ações que movem a reserva pela máquina de estados.
@@ -32,7 +33,7 @@ func (s *Servico) Confirmar(ctx context.Context, id uuid.UUID, chave string, cor
 	if err != nil {
 		return Resultado{}, err
 	}
-	hash, err := impressao(corpo)
+	hash, err := idempotencia.Impressao(corpo)
 	if err != nil {
 		return Resultado{}, err
 	}
@@ -40,7 +41,7 @@ func (s *Servico) Confirmar(ctx context.Context, id uuid.UUID, chave string, cor
 
 	var saida Resultado
 	err = s.tx.Do(ctx, func(ctx context.Context) error {
-		guardada, err := s.repo.reservarChave(ctx, chave, rota, hash, donoDo(u))
+		guardada, err := idempotencia.Reservar(ctx, s.repo.pool, chave, rota, hash, idempotencia.DonoDe(u))
 		if err != nil {
 			return err
 		}
@@ -138,7 +139,7 @@ func (s *Servico) Confirmar(ctx context.Context, id uuid.UUID, chave string, cor
 			return err
 		}
 		env := envelope{Data: reserva}
-		if err := s.repo.guardarResposta(ctx, chave, rota, donoDo(u), http.StatusOK, env); err != nil {
+		if err := idempotencia.Guardar(ctx, s.repo.pool, chave, rota, idempotencia.DonoDe(u), http.StatusOK, env); err != nil {
 			return err
 		}
 		saida = Resultado{Status: http.StatusOK, Corpo: env}
@@ -374,7 +375,7 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 	if err != nil {
 		return Resultado{}, err
 	}
-	hash, err := impressao(corpo)
+	hash, err := idempotencia.Impressao(corpo)
 	if err != nil {
 		return Resultado{}, err
 	}
@@ -382,7 +383,7 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 
 	var saida Resultado
 	err = s.tx.Do(ctx, func(ctx context.Context) error {
-		guardada, err := s.repo.reservarChave(ctx, chave, rota, hash, donoDo(u))
+		guardada, err := idempotencia.Reservar(ctx, s.repo.pool, chave, rota, hash, idempotencia.DonoDe(u))
 		if err != nil {
 			return err
 		}
@@ -507,7 +508,7 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 			Diferenca:         nova.Total - e.Total,
 			Credito:           credito,
 		}}
-		if err := s.repo.guardarResposta(ctx, chave, rota, donoDo(u), http.StatusCreated, env); err != nil {
+		if err := idempotencia.Guardar(ctx, s.repo.pool, chave, rota, idempotencia.DonoDe(u), http.StatusCreated, env); err != nil {
 			return err
 		}
 		saida = Resultado{Status: http.StatusCreated, Corpo: env, Local: localDaReserva(nova.ID)}

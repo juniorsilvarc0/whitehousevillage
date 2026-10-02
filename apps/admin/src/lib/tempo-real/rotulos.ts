@@ -12,6 +12,14 @@ import type { EstadoDoTempoReal } from "./sse";
  * conexão e não ajuda quem vende; "pode haver mudança não mostrada" é sobre o
  * que está na tela, que é o que importa para decidir se vale um F5.
  */
+/**
+ * De que tela o texto fala. São duas hoje — o mapa de ocupação e o quadro do
+ * funil —, e a diferença aparece só onde a frase nomeia o assunto: dizer "o
+ * mapa se atualiza sozinho" numa tela que não é o mapa é o tipo de texto que
+ * ensina o operador a não ler o indicador.
+ */
+export type AssuntoDoTempoReal = "mapa" | "funil";
+
 export type DescricaoDoTempoReal = {
   rotulo: string;
   detalhe: string;
@@ -21,12 +29,18 @@ export type DescricaoDoTempoReal = {
   ofereceReconectar: boolean;
 };
 
-export function descreverTempoReal(estado: EstadoDoTempoReal): DescricaoDoTempoReal {
+export function descreverTempoReal(
+  estado: EstadoDoTempoReal,
+  assunto: AssuntoDoTempoReal = "mapa",
+): DescricaoDoTempoReal {
   switch (estado) {
     case "ligado":
       return {
         rotulo: "Ao vivo",
-        detalhe: "O mapa se atualiza sozinho quando alguém vende, bloqueia ou cancela.",
+        detalhe:
+          assunto === "funil"
+            ? "O quadro se atualiza sozinho quando alguém move, ganha ou perde um negócio."
+            : "O mapa se atualiza sozinho quando alguém vende, bloqueia ou cancela.",
         tom: "ok",
         ofereceReconectar: false,
       };
@@ -54,7 +68,10 @@ export function descreverTempoReal(estado: EstadoDoTempoReal): DescricaoDoTempoR
     case "sem_rede":
       return {
         rotulo: "Sem rede",
-        detalhe: "O navegador está offline. O mapa volta a se atualizar sozinho quando a rede voltar.",
+        detalhe:
+          assunto === "funil"
+            ? "O navegador está offline. O quadro volta a se atualizar sozinho quando a rede voltar."
+            : "O navegador está offline. O mapa volta a se atualizar sozinho quando a rede voltar.",
         tom: "falha",
         ofereceReconectar: false,
       };

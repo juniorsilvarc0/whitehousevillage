@@ -13,6 +13,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
 )
 
 // Handler expõe os endpoints do módulo: decodifica, valida forma, chama o
@@ -90,7 +91,7 @@ func (h *Handler) Listar(w http.ResponseWriter, r *http.Request) {
 
 // Criar — POST /reservations
 func (h *Handler) Criar(w http.ResponseWriter, r *http.Request) {
-	chave, err := ChaveDeIdempotencia(r.Header.Get("Idempotency-Key"))
+	chave, err := idempotencia.Chave(r.Header.Get(idempotencia.NomeDoHeader))
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
@@ -198,7 +199,7 @@ func (h *Handler) Confirmar(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	chave, err := ChaveDeIdempotencia(r.Header.Get("Idempotency-Key"))
+	chave, err := idempotencia.Chave(r.Header.Get(idempotencia.NomeDoHeader))
 	if err != nil {
 		httpx.Error(w, r, err)
 		return
@@ -253,7 +254,7 @@ func (h *Handler) Remarcar(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, err)
 		return
 	}
-	chave, err := ChaveDeIdempotencia(r.Header.Get("Idempotency-Key"))
+	chave, err := idempotencia.Chave(r.Header.Get(idempotencia.NomeDoHeader))
 	if err != nil {
 		httpx.Error(w, r, err)
 		return

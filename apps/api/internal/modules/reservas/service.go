@@ -14,6 +14,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
 )
 
 // Servico orquestra o ciclo de vida da reserva.
@@ -154,14 +155,14 @@ func (s *Servico) Criar(ctx context.Context, chave string, corpo ReservaCriar) (
 	if err != nil {
 		return Resultado{}, err
 	}
-	hash, err := impressao(corpo)
+	hash, err := idempotencia.Impressao(corpo)
 	if err != nil {
 		return Resultado{}, err
 	}
 
 	var saida Resultado
 	err = s.tx.Do(ctx, func(ctx context.Context) error {
-		guardada, err := s.repo.reservarChave(ctx, chave, rotaDeCriacao, hash, donoDo(u))
+		guardada, err := idempotencia.Reservar(ctx, s.repo.pool, chave, rotaDeCriacao, hash, idempotencia.DonoDe(u))
 		if err != nil {
 			return err
 		}
@@ -176,7 +177,7 @@ func (s *Servico) Criar(ctx context.Context, chave string, corpo ReservaCriar) (
 		}
 
 		env := envelope{Data: reserva}
-		if err := s.repo.guardarResposta(ctx, chave, rotaDeCriacao, donoDo(u), http.StatusCreated, env); err != nil {
+		if err := idempotencia.Guardar(ctx, s.repo.pool, chave, rotaDeCriacao, idempotencia.DonoDe(u), http.StatusCreated, env); err != nil {
 			return err
 		}
 		saida = Resultado{Status: http.StatusCreated, Corpo: env, Local: localDaReserva(reserva.ID)}
@@ -563,7 +564,7 @@ func (s *Servico) Descartar(ctx context.Context, id uuid.UUID) error {
 
 // ─────────────────────────── Auxiliares ─────────────────────────────
 
-func repetir(g *respostaGuardada) Resultado {
+func repetir(g *idempotencia.Resposta) Resultado {
 	return Resultado{Status: g.Status, Bruto: g.Corpo, Local: localDoCorpo(g.Corpo)}
 }
 

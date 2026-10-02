@@ -9,6 +9,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
 )
 
 func optAusente() httpx.Opt[string]       { return httpx.Opt[string]{} }
@@ -136,38 +137,29 @@ func TestStatusDaQueryRecusaEstadoInventado(t *testing.T) {
 	}
 }
 
-func TestChaveDeIdempotenciaEhObrigatoriaEDelimitada(t *testing.T) {
-	if _, err := ChaveDeIdempotencia("   "); err == nil {
-		t.Fatal("chave ausente tem de ser recusada: criar reserva é irreversível")
-	}
-	if _, err := ChaveDeIdempotencia("curta"); err == nil {
-		t.Fatal("chave abaixo de 8 caracteres deveria ser recusada (minLength do contrato)")
-	}
-	chave, err := ChaveDeIdempotencia("  chave-de-teste-0001  ")
-	if err != nil || chave != "chave-de-teste-0001" {
-		t.Fatalf("chave = %q, err = %v", chave, err)
-	}
-}
-
 // A impressão do corpo é o que decide entre "repetição" e IDEMPOTENCY_MISMATCH.
 // Ela tem de ignorar formatação e reagir a CONTEÚDO.
+//
+// A função é de `internal/platform/idempotencia`; o que se prova AQUI é o DTO
+// desta rota — que as tags json de ReservaCriar sobrevivam à ida e volta, que é
+// o que faz duas ordens de campo produzirem a mesma impressão.
 func TestImpressaoIgnoraFormatacaoEReageAConteudo(t *testing.T) {
 	produto, contato := uuid.New(), uuid.New()
 	a := ReservaCriar{UnitTypeID: produto, ContactID: contato, CheckIn: "2026-11-20", CheckOut: "2026-11-23", Hospedes: 2}
 	b := a
 
-	ha, err := impressao(a)
+	ha, err := idempotencia.Impressao(a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hb, _ := impressao(b)
+	hb, _ := idempotencia.Impressao(b)
 	if ha != hb {
 		t.Fatal("o mesmo pedido produziu impressões diferentes")
 	}
 
 	c := a
 	c.Hospedes = 3
-	hc, _ := impressao(c)
+	hc, _ := idempotencia.Impressao(c)
 	if ha == hc {
 		t.Fatal("mudar o número de hóspedes tem de mudar a impressão")
 	}
@@ -180,7 +172,7 @@ func TestImpressaoIgnoraFormatacaoEReageAConteudo(t *testing.T) {
 	if err := json.Unmarshal([]byte(bruto), &d); err != nil {
 		t.Fatal(err)
 	}
-	hd, _ := impressao(d)
+	hd, _ := idempotencia.Impressao(d)
 	if ha != hd {
 		t.Fatal("a ordem dos campos no JSON não pode mudar a impressão")
 	}
