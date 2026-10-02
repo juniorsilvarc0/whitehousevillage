@@ -17,7 +17,7 @@ O que desacopla o time é o **contrato**: `apps/api/openapi/openapi.yaml` + `doc
 | **`db-migrations`** | `apps/api/migrations/**`, `apps/api/cmd/seed/**`, `docs/db.md` | Migrations up/down, constraints, índices, seed idempotente | Go de aplicação, front, infra |
 | **`backend-go`** | `apps/api/internal/{modules,platform,auth,jobs,realtime}/**`, `cmd/{api,worker}` | Handlers, services, repositórios, jobs, SSE, testes de unidade | Migrations, `internal/domain`, front |
 | **`integracoes`** | `apps/api/internal/modules/{chat,channels,integrations}/**`, `docs/integracao.md` | uazapi, iCal, webhooks, tokens, MCP, agente de IA | Reservas, financeiro, front |
-| **`next-frontend`** | `apps/admin/**` | Telas, design system, componentes, testes de componente | Qualquer coisa em `apps/api` |
+| **`next-frontend`** | `apps/admin/**`, `apps/site/**` | Telas, design system, componentes, testes de componente — no painel de gestão **e no front de cliente** (`apps/site`, importado em 02/10/2026; ver `docs/unificacao-site-crm.md`) | Qualquer coisa em `apps/api`. E, no site, **qualquer cálculo de preço, disponibilidade ou política**: isso é da API |
 | **`devops`** | `infra/**`, `Dockerfile*`, `.github/workflows/**`, `Makefile` | Compose, Traefik, CI, backup, observabilidade, deploy | Código de aplicação |
 | **`qa-testes`** | `**/*_test.go`, `apps/admin/**/*.test.{ts,tsx}`, `tests/e2e/**`, `docs/testing.md` | Testes de integração, e2e, teste de concorrência do overbooking | Código de produção — **reporta, não conserta** |
 

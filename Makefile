@@ -21,9 +21,11 @@ REPETICOES_CONCORRENCIA ?= 10
 # `make smoke` (vazio = o padrão do próprio script); SMOKE_URL_OU_PADRAO é o que
 # o `smoke-stack` sonda, porque ele precisa de um endereço concreto.
 SMOKE_URL_OU_PADRAO ?= $(if $(SMOKE_URL),$(SMOKE_URL),http://localhost:$(ADMIN_PORT))
-SMOKE_API           ?= http://localhost:$(API_PORT)
+# API_HOST_PORT, não API_PORT: a porta do host e a porta que o processo escuta
+# dentro do container são variáveis diferentes (ver a nota em infra/docker-compose.yml).
+SMOKE_API           ?= http://localhost:$(API_HOST_PORT)
 ADMIN_PORT          ?= 3100
-API_PORT            ?= 8080
+API_HOST_PORT       ?= 8080
 
 .PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed smoke smoke-stack esperar check lint fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
 

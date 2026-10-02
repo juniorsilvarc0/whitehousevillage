@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="pt-BR" class="no-js">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#1A1F18" />
+    <meta name="robots" content="noindex, nofollow" />
+
+    <title>Gestão comercial · White House Village</title>
+
+    <link rel="icon" href="/assets/logo.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet" />
+
+    <link rel="stylesheet" href="/styles/tokens.css" />
+    <link rel="stylesheet" href="/styles/base.css" />
+    <link rel="stylesheet" href="/styles/disponibilidade.css" />
+    <link rel="stylesheet" href="/styles/admin.css" />
+
+    <script>document.documentElement.classList.remove('no-js');</script>
+</head>
+<body class="admin">
+    <div class="adm">
+        <!-- ═══ SIDEBAR ═══ -->
+        <aside class="side">
+            <div class="side__brand">
+                <img src="/assets/logo.png" alt="White House" />
+                <span>Gestão<br />comercial</span>
+            </div>
+
+            <nav class="side__group" aria-label="Navegação do painel">
+                <span class="side__label">Operação</span>
+                <a class="side__link" href="#/painel"><i>◧</i> Painel</a>
+                <a class="side__link" href="#/calendario"><i>▦</i> Calendário</a>
+                <a class="side__link" href="#/reservas"><i>≡</i> Reservas <span class="badge" data-badge-reservas>0</span></a>
+                <a class="side__link" href="#/leads"><i>◇</i> Leads &amp; funil <span class="badge" data-badge-leads>0</span></a>
+                <span class="side__label">Configuração comercial</span>
+                <a class="side__link" href="#/tarifas"><i>$</i> Tabela de tarifas</a>
+                <a class="side__link" href="#/politica"><i>§</i> Política comercial</a>
+            </nav>
+
+            <div class="side__foot">
+                <div class="side__user">
+                    <span class="side__avatar">JR</span>
+                    <span>
+                        <b>Junior Silva</b>
+                        <small>Gestão comercial</small>
+                    </span>
+                </div>
+                <a class="side__exit" href="/">← Ver site público</a>
+            </div>
+        </aside>
+
+        <!-- ═══ ÁREA DE TRABALHO ═══ -->
+        <div>
+            <header class="top">
+                <div class="top__title" data-view-title>
+                    Painel
+                    <small>Visão geral da operação</small>
+                </div>
+                <div class="top__spacer"></div>
+                <label class="top__search">
+                    <span aria-hidden="true">⌕</span>
+                    <input type="search" placeholder="Buscar cliente, reserva, data…" data-busca />
+                </label>
+                <span class="top__date">Quinta, 20 de agosto de 2026</span>
+                <a class="btn-sm btn-sm--gold" href="#/calendario">+ Nova reserva</a>
+            </header>
+
+            <main class="work">
+                <div class="view is-active" id="v-painel">
+                    <div class="metrics" data-metrics></div>
+                    <div class="card" data-alertas></div>
+                    <div class="card" data-ocupacao-produto></div>
+                    <div class="card" data-receita></div>
+                    <div class="card" data-movimento></div>
+                </div>
+
+                <div class="view" id="v-calendario">
+                    <div class="card" data-mapa></div>
+                    <div class="cal-layout">
+                        <div>
+                            <div class="card">
+                                <div class="card__head">
+                                    <div class="card__title">
+                                        Disponibilidade
+                                        <small>Clique no check-in e no check-out para montar o orçamento</small>
+                                    </div>
+                                    <div class="card__actions">
+                                        <button class="btn-sm btn-sm--ghost" data-prev>←</button>
+                                        <button class="btn-sm btn-sm--ghost" data-next>→</button>
+                                    </div>
+                                </div>
+                                <div class="toolbar" style="border:0;padding:0;margin-bottom:var(--space-4)">
+                                    <div class="field">
+                                        <label for="produto">Produto</label>
+                                        <select id="produto" data-produto></select>
+                                    </div>
+                                    <div class="field">
+                                        <label for="hospedes">Hóspedes</label>
+                                        <select id="hospedes" data-hospedes></select>
+                                    </div>
+                                </div>
+                                <div class="legend">
+                                    <span class="legend__item"><i class="legend__dot legend__dot--free"></i> Livre</span>
+                                    <span class="legend__item"><i class="legend__dot legend__dot--hold"></i> Pré-reserva (48h)</span>
+                                    <span class="legend__item"><i class="legend__dot legend__dot--busy"></i> Reservado</span>
+                                    <span class="legend__item"><i class="legend__dot legend__dot--block"></i> Bloqueado</span>
+                                    <span class="legend__item"><i class="legend__dot legend__dot--special"></i> Data especial</span>
+                                </div>
+                                <div class="calendars" data-calendars></div>
+                            </div>
+                        </div>
+                        <aside class="quote" data-quote></aside>
+                    </div>
+                </div>
+
+                <div class="view" id="v-reservas">
+                    <div class="metrics" data-metrics-reservas></div>
+                    <div class="card">
+                        <div class="card__head">
+                            <div class="card__title">
+                                Reservas
+                                <small>Fonte única — substitui o caderno e o WhatsApp</small>
+                            </div>
+                            <div class="card__actions filters" data-filtros></div>
+                        </div>
+                        <div class="tbl-wrap" data-tabela-reservas></div>
+                    </div>
+                </div>
+
+                <div class="view" id="v-leads">
+                    <div class="metrics" data-metrics-leads></div>
+                    <div class="card">
+                        <div class="card__head">
+                            <div class="card__title">
+                                Funil comercial
+                                <small>Todo lead entra aqui — e sai confirmado ou com motivo de perda</small>
+                            </div>
+                        </div>
+                        <div class="kanban" data-kanban></div>
+                    </div>
+                    <div class="card" data-perdas></div>
+                </div>
+
+                <div class="view" id="v-tarifas">
+                    <div class="notice">
+                        <span aria-hidden="true">✎</span>
+                        <span>
+                            <b>Tabela Comercial V1 — decidida na reunião</b>
+                            Altere os valores abaixo e clique em salvar: o calendário e os orçamentos passam a usar a nova tabela imediatamente.
+                        </span>
+                    </div>
+                    <div class="card">
+                        <div class="card__head">
+                            <div class="card__title">
+                                Tarifas por diária
+                                <small>Por produto e tipo de data</small>
+                            </div>
+                            <div class="card__actions">
+                                <button class="btn-sm" data-salvar-tarifas>Salvar tabela</button>
+                            </div>
+                        </div>
+                        <div class="tbl-wrap" data-tabela-tarifas></div>
+                    </div>
+                    <div class="card" data-datas-especiais></div>
+                </div>
+
+                <div class="view" id="v-politica">
+                    <div class="notice">
+                        <span aria-hidden="true">§</span>
+                        <span>
+                            <b>Regras que a gestão aplica sem consultar os proprietários</b>
+                            Enquanto estes campos estiverem definidos, o atendimento responde na hora. O que ficar em branco vira consulta — e consulta perde reserva.
+                        </span>
+                    </div>
+                    <div class="card">
+                        <div class="card__head">
+                            <div class="card__title">
+                                Política comercial
+                                <small>Sinal, prazos, alçadas e mínimos</small>
+                            </div>
+                            <div class="card__actions">
+                                <button class="btn-sm" data-salvar-politica>Salvar política</button>
+                            </div>
+                        </div>
+                        <div class="policy" data-politica></div>
+                    </div>
+                    <div class="card" data-pendencias></div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <div class="toast" data-toast role="status" aria-live="polite"></div>
+
+    <script src="/scripts/data.js"></script>
+    <script src="/scripts/admin.js"></script>
+</body>
+</html>

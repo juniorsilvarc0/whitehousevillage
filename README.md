@@ -4,6 +4,8 @@ ERP + CRM de gestão de aluguel por temporada e eventos da **White House Village
 
 Substitui o caderno e o WhatsApp como fonte da verdade: disponibilidade em tempo real, reservas com ciclo de vida e dinheiro, CRM com funil e SLA, atendimento por WhatsApp, agenda, financeiro, inventário, área de corretores, BI e integrações.
 
+Desde 02/10/2026 o **site de vendas** também vive aqui (`apps/site`): o cliente consulta datas e reserva no site, a gestão opera no painel, e os dois falam com a mesma API. O site ainda calcula preço em JavaScript com dados fictícios — a dívida e o plano para quitá-la estão em [`docs/unificacao-site-crm.md`](docs/unificacao-site-crm.md).
+
 ## Stack
 
 | Camada | Tecnologia |
@@ -11,6 +13,7 @@ Substitui o caderno e o WhatsApp como fonte da verdade: disponibilidade em tempo
 | API | **Go 1.25** · chi v5 · pgx/v5 nativo · River (jobs) · golang-migrate · JWT |
 | Banco | **PostgreSQL 16** (`btree_gist`, `daterange`, `LISTEN/NOTIFY`) |
 | Admin | **Next.js 16** (App Router, RSC) · React 19 · TypeScript · Tailwind v4 CSS-first · shadcn/ui (base-nova sobre Base UI) |
+| Site | HTML/CSS/JS sem build, servido por **nginx 1.27** |
 | Realtime | SSE com fan-out por `LISTEN/NOTIFY` |
 | Infra | Docker Compose + Traefik (SSL Let's Encrypt) em VPS |
 
@@ -19,6 +22,7 @@ Substitui o caderno e o WhatsApp como fonte da verdade: disponibilidade em tempo
 ```
 apps/api/      backend Go — cmd/{api,worker,migrate,seed} + internal/{platform,domain,modules}
 apps/admin/    painel Next.js — app/(app)/** + features/** + components/**
+apps/site/     front de cliente — nginx, estático, sem build (ver docs/unificacao-site-crm.md)
 docs/          PRD, spec funcional, modelo de dados, infra, integrações, API, UI, agentes, roadmap
 infra/         compose, Traefik, Dockerfiles, backup
 .claude/agents/  time de agentes especializados
@@ -28,14 +32,17 @@ infra/         compose, Traefik, Dockerfiles, backup
 
 ```bash
 cp .env.example .env
-make up          # sobe postgres + api + admin
+make up          # sobe postgres + api + admin + site
 make migrate     # aplica migrations (passo explícito, nunca no boot)
 make seed        # produtos, unidades, tarifas, perfis e usuários de teste
 make check       # lint + typecheck + testes
 ```
 
-- API: http://localhost:8080 · `/healthz` `/readyz` `/metrics`
-- Admin: http://localhost:3000
+- API: http://localhost:8080 · `/healthz` `/readyz` `/metrics` (`API_HOST_PORT`)
+- Admin: http://localhost:3100 (`ADMIN_PORT`)
+- Site: http://localhost:3200 (`SITE_PORT`)
+
+As três portas são do **host** e saem do `.env` — troque-as quando outro projeto já estiver usando. Dentro do Compose elas são fixas (8080, 3000 e 80), porque é nisso que o painel, o healthcheck e o `API_INTERNAL_URL` se apoiam.
 
 ## A regra que sustenta o produto
 

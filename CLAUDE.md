@@ -1,6 +1,6 @@
 # White House Village Manager — instruções do repositório
 
-ERP + CRM de gestão de temporada e eventos. Backend Go, painel Next.js, Postgres. Leia `docs/prd.md` e `docs/spec.md` antes de qualquer implementação; o contrato é `apps/api/openapi/openapi.yaml` e o modelo é `docs/db.md`.
+ERP + CRM de gestão de temporada e eventos, **mais o site de vendas por onde o cliente reserva**. Backend Go (`apps/api`), painel de gestão em Next.js (`apps/admin`), front de cliente em HTML/CSS/JS servido por nginx (`apps/site`), Postgres. Leia `docs/prd.md` e `docs/spec.md` antes de qualquer implementação; o contrato é `apps/api/openapi/openapi.yaml` e o modelo é `docs/db.md`.
 
 ## Regras inegociáveis
 
@@ -27,6 +27,13 @@ make up · make migrate · make seed · make check · make psql
 
 `/api/v1`; lista devolve `{"data":[...],"meta":{page,per_page,total,total_pages}}`; erro devolve `{"error":{code,message,details}}` com `code` estável. `Idempotency-Key` é obrigatório em POST que cria reserva ou dinheiro.
 
+## O site de vendas vive aqui desde 02/10/2026
+
+`apps/site` é o front de cliente — era um MVP separado, em `/Users/junior/DEV/spincode/whitehouse`, e foi importado para cá. **Ele ainda calcula preço em JavaScript a partir de dados mocados**, o que contraria as regras 1, 4 e 7 acima. Isso é dívida conhecida, com plano escrito: `docs/unificacao-site-crm.md` tem a ordem, o dono e o critério de pronto de cada passo. Duas coisas valem desde já:
+
+- **O site pergunta, não calcula.** Nenhuma regra de tarifa, disponibilidade ou política nasce em `apps/site`. Ele chama a API.
+- Enquanto o passo **A2** daquele plano não entrar, nenhum número que o site exibe vale como preço.
+
 ## O que este repositório não é
 
-Não é o site público de marketing (que vive em `/Users/junior/DEV/spincode/whitehouse`). Aqui é só gestão administrativa.
+Não é multi-tenant, não emite documento fiscal e não roda modelo de IA próprio.

@@ -70,7 +70,9 @@ services:
     <<: *imagem-api
     environment:
       APP_ENV: ${APP_ENV:-development}
-      API_PORT: ${API_PORT:-8080}
+      # Porta que o PROCESSO escuta dentro do container: fixa em 8080, de propósito.
+      # Não sai de variável do .env — ver a nota em `ports`, logo abaixo.
+      API_PORT: "8080"
       DATABASE_URL: ${DATABASE_URL}
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
@@ -79,7 +81,15 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-America/Fortaleza}
     ports:
-      - "${API_PORT:-8080}:8080"
+      # Porta do HOST em variável PRÓPRIA. Até 02/10/2026 a MESMA `API_PORT` valia
+      # para as duas pontas do mapeamento, e o custo medido nesta sessão foi:
+      # trocar API_PORT no .env para liberar a 8080 do host fez a API escutar numa
+      # porta que o mapeamento não publicava, o painel perdeu a API em
+      # API_INTERNAL_URL=http://api:8080, e a sessão terminou com um arquivo de
+      # override escrito à mão só para mover a porta do host.
+      # O 8080 interno é contrato (painel, healthcheck, API_INTERNAL_URL); só o
+      # lado de fora é negociável.
+      - "${API_HOST_PORT:-8080}:8080"
     # A imagem é distroless (sem shell, sem curl), então o healthcheck só pode
     # ser o próprio binário. `cmd/api -healthcheck` sonda o /healthz local e sai
     # 0/1 sem abrir pool nem tentar escutar porta.
@@ -129,6 +139,39 @@ services:
       - "${ADMIN_PORT:-3100}:3000"
     depends_on:
       - api
+    restart: unless-stopped
+
+  # Site público (apps/site): HTML/CSS/JS servido por nginx, SEM build de front.
+  # Sem `depends_on: api` e sem variável de API: hoje ele não chama a API nenhuma
+  # — tarifa, calendário e orçamento saem de public/scripts/data.js, no navegador.
+  # Inventar API_BASE_URL aqui só criaria a ilusão de integração que não existe.
+  site:
+    build:
+      context: ..
+      dockerfile: apps/site/Dockerfile
+    ports:
+      - "${SITE_PORT:-3200}:80"
+    volumes:
+      # Só em dev: o conteúdo do repositório por cima do que a imagem copiou, para
+      # editar um arquivo e dar F5 sem rebuildar — é como o MVP original era usado.
+      # Em produção o mount não existe e vale o COPY da imagem.
+      - ../apps/site/public:/usr/share/nginx/html:ro
+    environment:
+      TZ: ${TZ:-America/Fortaleza}
+    # nginx:alpine não tem curl; tem o wget do busybox. `--spider` não baixa o
+    # corpo e falha com status != 2xx, que é exatamente o que se quer sondar.
+    #
+    # 127.0.0.1 e não `localhost`: dentro do container `localhost` resolve primeiro
+    # para ::1 e o `listen 80` do nosso nginx.conf só sobe em IPv4 — a primeira
+    # versão desta linha deixou o container `unhealthy` com
+    # "can't connect to remote host: Connection refused" enquanto o site servia 200
+    # na porta publicada. Medido aqui, 4 falhas seguidas.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
 
 volumes:
