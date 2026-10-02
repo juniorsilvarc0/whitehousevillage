@@ -102,15 +102,21 @@ Configuração, uma vez só:
    (inclusive os outros projetos). Quem protege os outros projetos é o
    `deploy.sh`, que só mexe em `whv-gestao` — e por isso o workflow não roda
    outro comando além dele.
-2. **Chave SSH do deploy** (na sua máquina):
+2. **Chave SSH do deploy** (na sua máquina, que entra na VPS com o atalho
+   `ssh gondor` do `~/.ssh/config`):
    ```bash
-   ssh-keygen -t ed25519 -N "" -C "github-deploy-whv" -f whv_deploy
-   # `deploy` não tem senha (--disabled-password), então ssh-copy-id não serve:
-   # quem instala a chave é o root, que já entra na VPS.
-   cat whv_deploy.pub | ssh root@82.29.59.229 'install -d -m 700 -o deploy -g deploy /home/deploy/.ssh && cat >> /home/deploy/.ssh/authorized_keys && chown deploy:deploy /home/deploy/.ssh/authorized_keys && chmod 600 /home/deploy/.ssh/authorized_keys'
-   ssh -i whv_deploy deploy@82.29.59.229 'id && docker ps --format "{{.Names}}" | head -3'   # tem de entrar sem senha
-   ssh-keyscan -t ed25519 82.29.59.229                    # confira contra: sudo ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub
+   ssh -G gondor | grep -E '^(user|hostname|port) '     # porta ≠ 22 vira o segredo VPS_PORT
+   ssh-keygen -t ed25519 -N "" -C "github-deploy-whv" -f ~/.ssh/whv_deploy
+   # `deploy` não tem senha (--disabled-password): ssh-copy-id não serve, quem
+   # instala a chave é o acesso que você já tem.
+   cat ~/.ssh/whv_deploy.pub | ssh gondor 'sudo install -d -m 700 -o deploy -g deploy /home/deploy/.ssh && sudo tee -a /home/deploy/.ssh/authorized_keys >/dev/null && sudo chown deploy:deploy /home/deploy/.ssh/authorized_keys && sudo chmod 600 /home/deploy/.ssh/authorized_keys'
+   # prova: o MESMO atalho, trocando só usuário e chave — entra sem senha
+   ssh -i ~/.ssh/whv_deploy -o IdentitiesOnly=yes deploy@gondor 'id && docker ps --format "{{.Names}}" | head -3'
+   # impressão digital lida do próprio servidor (VPS_KNOWN_HOSTS)
+   ssh gondor 'cat /etc/ssh/ssh_host_ed25519_key.pub'
    ```
+   `VPS_KNOWN_HOSTS` = `82.29.59.229 ` + a linha acima (com porta ≠ 22:
+   `[82.29.59.229]:PORTA ` + a linha).
 3. **Leitura do repositório pela VPS** (o repositório é privado): como `deploy`,
    gere outra chave (`ssh-keygen -t ed25519 -N "" -f ~/.ssh/github`), cadastre o
    `.pub` em GitHub → repositório → Settings → *Deploy keys* (**sem** permissão de
@@ -119,7 +125,7 @@ Configuração, uma vez só:
    depois `git -C /opt/whv-gestao config core.sshCommand "ssh -i ~/.ssh/github"`.
 4. **`infra/.env.production`** na VPS, preenchido (passo do primeiro deploy acima).
 5. **Segredos no GitHub** (Settings → Secrets and variables → Actions):
-   `VPS_HOST` = `82.29.59.229`, `VPS_USER` = `deploy`, `VPS_SSH_KEY` = conteúdo de
+   `VPS_HOST` = `82.29.59.229`, `VPS_PORT` (só se ≠ 22), `VPS_USER` = `deploy`, `VPS_SSH_KEY` = conteúdo de
    `whv_deploy` (a privada), `VPS_KNOWN_HOSTS` = a linha do `ssh-keyscan`.
 6. Opcional: Settings → Environments → `producao` → *Required reviewers*, para cada
    deploy esperar um clique seu.

@@ -9,6 +9,7 @@ name: Deploy
 #
 # Segredos do repositório (Settings → Secrets and variables → Actions):
 #   VPS_HOST          82.29.59.229
+#   VPS_PORT          porta do SSH (opcional; vazio = 22)
 #   VPS_USER          usuário de deploy (ver docs/infra.md §0, "CD")
 #   VPS_SSH_KEY       chave privada desse usuário (ed25519, sem senha)
 #   VPS_KNOWN_HOSTS   saída de `ssh-keyscan -t ed25519 82.29.59.229`, conferida
@@ -54,10 +55,11 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
           # O commit exato que o CI aprovou — não "o que estiver na main agora".
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
-          ssh -i ~/.ssh/id_deploy -o StrictHostKeyChecking=yes -o BatchMode=yes \
+          ssh -i ~/.ssh/id_deploy -p "${VPS_PORT:-22}" -o StrictHostKeyChecking=yes -o BatchMode=yes \
             "$VPS_USER@$VPS_HOST" "set -euo pipefail
               cd /opt/whv-gestao
               git fetch --quiet origin main
