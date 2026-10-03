@@ -81,7 +81,7 @@ func TestPreReservaPublicaSeguraADataPeloMesmoCaminhoDoPainel(t *testing.T) {
 	a := subirAPI(t)
 	exigirSeed(t, a)
 	produto := a.produtoPublico(t, "cobertura")
-	entrada, saida := janelaAPartirDeHoje(211, noitesDaVitrine)
+	entrada, saida := a.janelaLivreDaUnidade(t, "COB-01", 200, noitesDaVitrine)
 	telefone := telefoneDoSite()
 
 	orcado := envelopeDe[orcamentoPublicoQA](t, a.chamar(t, http.MethodPost, "/public/quotes", "",
@@ -156,14 +156,19 @@ func TestPreReservaPublicaSeguraADataPeloMesmoCaminhoDoPainel(t *testing.T) {
 }
 
 // O critério de pronto do B1: dois visitantes, a mesma data, ao mesmo tempo.
-// Dez rodadas, cada uma numa janela própria da cobertura (unidade única).
+// Dez rodadas, cada uma numa janela ainda livre da cobertura (unidade única).
+//
+// A janela é PROCURADA no banco, e não fixa: a CI repete este teste dez vezes
+// no mesmo banco (`make it-concorrencia`), e cada rodada deixa a sua janela
+// segura por 48h. Com datas fixas, da segunda repetição em diante os dois
+// visitantes recebiam 409 — o teste falhava pelo motivo certo no lugar errado.
 func TestPreReservaPublicaConcorrenteUmLevaOOutroRecebe409(t *testing.T) {
 	a := subirAPI(t)
 	exigirSeed(t, a)
 	produto := a.produtoPublico(t, "cobertura")
 
 	for rodada := 0; rodada < 10; rodada++ {
-		entrada, saida := janelaAPartirDeHoje(230+rodada*8, noitesDaVitrine)
+		entrada, saida := a.janelaLivreDaUnidade(t, "COB-01", 200, noitesDaVitrine)
 		var (
 			wg      sync.WaitGroup
 			largada = make(chan struct{})
@@ -317,4 +322,28 @@ func TestPreReservaPublicaLimitaPorIP(t *testing.T) {
 	if r := a.preReservar(t, "203.0.113.100", "site-"+uuid.NewString(), pedido); r.Status == http.StatusTooManyRequests {
 		t.Fatal("o limite de um IP vazou para outro")
 	}
+}
+
+// janelaLivreDaUnidade devolve a primeira janela de `noites` noites, a partir
+// de `aPartirDe` dias de hoje, sem nenhum bloco de estadia na unidade. Qualquer
+// bloco conta como ocupado (conservador: hold expirado ainda não varrido pelo
+// worker também). O teto de 3000 dias é largo de propósito: a CI repete o
+// teste de concorrência dez vezes no mesmo banco, cem janelas de 4 noites, e a
+// reserva não tem horizonte máximo (só o calendário público tem).
+func (a *ambiente) janelaLivreDaUnidade(t *testing.T, unidade string, aPartirDe, noites int) (string, string) {
+	t.Helper()
+	var entrada time.Time
+	err := a.pool.QueryRow(a.ctx, `
+		SELECT d::date
+		  FROM generate_series(current_date + $2::int, current_date + 3000, interval '1 day') AS d
+		 WHERE NOT EXISTS (
+		        SELECT 1 FROM stay_blocks sb JOIN units u ON u.id = sb.unit_id
+		         WHERE u.code = $1
+		           AND sb.period && daterange(d::date, d::date + $3::int, '[)'))
+		 ORDER BY d
+		 LIMIT 1`, unidade, aPartirDe, noites).Scan(&entrada)
+	if err != nil {
+		t.Fatalf("nenhuma janela livre de %d noites em %s: %v", noites, unidade, err)
+	}
+	return entrada.Format("2006-01-02"), entrada.AddDate(0, 0, noites).Format("2006-01-02")
 }
