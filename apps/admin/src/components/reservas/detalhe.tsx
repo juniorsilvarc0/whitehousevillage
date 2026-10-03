@@ -1,6 +1,6 @@
 import * as React from "react";
 import Link from "next/link";
-import { BedDouble, Lock, PartyPopper, Phone, Undo2, Users } from "lucide-react";
+import { BedDouble, Globe, Lock, Mail, MessageCircle, PartyPopper, Phone, Undo2, UserRound, Users } from "lucide-react";
 
 import { EstadoVazio } from "@/components/layout/estados";
 import { Nota } from "@/components/layout/tela";
@@ -9,8 +9,11 @@ import { EtiquetaDeEstado } from "@/components/reservas/etiqueta-de-estado";
 import { LinhaDoTempo } from "@/components/reservas/linha-do-tempo";
 import { FaixaDePrazo } from "@/components/reservas/prazo-do-hold";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import type { Produto, UnidadeDaComposicao } from "@/lib/api/comercial";
 import { classeDoTipo, rotuloDoTipo } from "@/lib/comercial/tipos-de-data";
+import { formatarTelefone } from "@/lib/contatos/telefone";
+import { linkDoWhatsApp, mensagemDaReserva } from "@/lib/contatos/whatsapp";
 import { formatarData, formatarDataCurta, formatarInstante } from "@/lib/datas";
 import { formatarBRL, formatarPct } from "@/lib/dinheiro";
 import { ESTADOS } from "@/lib/reservas/estados";
@@ -75,6 +78,8 @@ export function DetalheDaReserva({
           />
         </div>
       </header>
+
+      <Cliente completo={completo} />
 
       <p className="text-sm text-muted-foreground">{ESTADOS[r.status].explicacao}</p>
 
@@ -409,19 +414,123 @@ function Hospedes({ completo }: { completo: ReservaCompleta }) {
                 ) : null}
               </span>
               {hospede.phone_e164 ? (
-                <a
-                  href={`tel:${hospede.phone_e164}`}
-                  className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground"
-                >
-                  <Phone className="size-3.5" aria-hidden="true" />
-                  {hospede.phone_e164}
-                </a>
+                <span className="flex items-center gap-3">
+                  <a
+                    href={`tel:${hospede.phone_e164}`}
+                    className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    <Phone className="size-3.5" aria-hidden="true" />
+                    {formatarTelefone(hospede.phone_e164)}
+                  </a>
+                  <LinkDoWhatsApp
+                    telefone={hospede.phone_e164}
+                    texto={mensagemDaReserva(hospede.name, completo.reservation.code)}
+                    compacto
+                  />
+                </span>
               ) : null}
             </li>
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+/**
+ * Quem reservou — no topo, porque é a primeira coisa que a gestão faz com uma
+ * pré-reserva: falar com o cliente para receber o sinal.
+ *
+ * O titular sai da rooming list (que já traz telefone e e-mail cheios e grava o
+ * rastro em `pii_access_log` na leitura do `/full`); sem rooming list, sobra o
+ * nome do contato da reserva e o link para a ficha.
+ */
+function Cliente({ completo }: { completo: ReservaCompleta }) {
+  const r = completo.reservation;
+  const titular = completo.guests.find((h) => h.is_lead_guest) ?? completo.guests[0] ?? null;
+  const nome = titular?.name ?? r.contact_name;
+  const telefone = titular?.phone_e164 ?? null;
+  const email = titular?.email ?? null;
+  const contatoId = titular?.contact_id ?? r.contact_id;
+
+  return (
+    <section
+      aria-label="Cliente"
+      className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/60 bg-card p-4"
+    >
+      <div className="flex min-w-0 items-start gap-3">
+        <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
+          <UserRound className="size-4" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Cliente</p>
+          <p className="truncate text-base font-medium">{nome}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+            {telefone ? (
+              <a href={`tel:${telefone}`} className="flex items-center gap-1.5 font-mono hover:text-foreground">
+                <Phone className="size-3.5" aria-hidden="true" />
+                {formatarTelefone(telefone)}
+              </a>
+            ) : (
+              <span>Sem telefone na ficha</span>
+            )}
+            {email ? (
+              <a href={`mailto:${email}`} className="flex items-center gap-1.5 hover:text-foreground">
+                <Mail className="size-3.5" aria-hidden="true" />
+                {email}
+              </a>
+            ) : null}
+            {r.source === "site" ? (
+              <span className="flex items-center gap-1.5">
+                <Globe className="size-3.5" aria-hidden="true" />
+                Reservou pelo site
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {telefone ? <LinkDoWhatsApp telefone={telefone} texto={mensagemDaReserva(nome, r.code)} /> : null}
+        <Link href={`/app/contatos/${contatoId}`} className={buttonVariants({ variant: "outline", size: "md" })}>
+          Ver ficha
+        </Link>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Abre a conversa do WhatsApp com o número do hóspede e uma primeira mensagem
+ * citando o código da reserva. Número fora de E.164 não ganha botão.
+ */
+function LinkDoWhatsApp({ telefone, texto, compacto }: { telefone: string; texto: string; compacto?: boolean }) {
+  const href = linkDoWhatsApp(telefone, texto);
+  if (!href) return null;
+  if (compacto) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="flex items-center gap-1 text-xs font-medium text-[#1f8f4e] hover:underline"
+        aria-label="Abrir conversa no WhatsApp"
+      >
+        <MessageCircle className="size-3.5" aria-hidden="true" />
+        WhatsApp
+      </a>
+    );
+  }
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={cn(buttonVariants({ size: "md" }), "bg-none bg-[#1f8f4e] text-white hover:brightness-110")}
+    >
+      <MessageCircle aria-hidden="true" />
+      Chamar no WhatsApp
+    </a>
   );
 }
 

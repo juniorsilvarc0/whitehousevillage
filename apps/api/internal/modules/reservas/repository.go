@@ -912,7 +912,7 @@ func (r *Repository) NoitesDe(ctx context.Context, reserva uuid.UUID) ([]NoiteDa
 // HospedesDe devolve a rooming list, titular primeiro.
 func (r *Repository) HospedesDe(ctx context.Context, reserva uuid.UUID) ([]HospedeDaReserva, error) {
 	const q = `
-		SELECT c.id, c.name, c.phone_e164, g.is_lead_guest
+		SELECT c.id, c.name, c.phone_e164, c.email, g.is_lead_guest
 		  FROM reservation_guests g
 		  JOIN contacts c ON c.id = g.contact_id
 		 WHERE g.reservation_id = $1
@@ -927,7 +927,7 @@ func (r *Repository) HospedesDe(ctx context.Context, reserva uuid.UUID) ([]Hospe
 	var out []HospedeDaReserva
 	for linhas.Next() {
 		var h HospedeDaReserva
-		if err := linhas.Scan(&h.ContactID, &h.Nome, &h.Telefone, &h.Titular); err != nil {
+		if err := linhas.Scan(&h.ContactID, &h.Nome, &h.Telefone, &h.Email, &h.Titular); err != nil {
 			return nil, db.MapError(err)
 		}
 		out = append(out, h)

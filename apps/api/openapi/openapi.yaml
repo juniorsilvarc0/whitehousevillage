@@ -7135,6 +7135,7 @@ components:
         contact_id:    { type: string, format: uuid }
         name:          { type: string }
         phone_e164:    { type: [string, "null"], example: "+5585999990000", description: "Cheio — esta leitura registra cada hóspede em `pii_access_log`." }
+        email:         { type: [string, "null"], format: email, description: "Cheio, pela mesma regra do telefone: é de onde a gestão fala com o hóspede." }
         is_lead_guest: { type: boolean, description: O titular da estadia. }
 
     EventoDaReserva:
