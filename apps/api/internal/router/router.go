@@ -136,6 +136,7 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 
 	limitadorDeLogin := auth.LimitadorDeLogin()
 	limitadorDaVitrine := LimitadorDaVitrine()
+	limitadorDePreReserva := LimitadorDePreReserva()
 
 	// As sondas primeiro, na RAIZ e fora do prefixo — ver Rota.NaRaiz.
 	for _, rota := range tabela {
@@ -159,6 +160,9 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 				}
 				if EhDaVitrine(rota) {
 					h = limitadorDaVitrine.Middleware(h)
+				}
+				if rota.Path == RotaDePreReservaPublica {
+					h = limitadorDePreReserva.Middleware(h)
 				}
 				pub.Method(rota.Metodo, rota.Path, h)
 			}
@@ -194,6 +198,15 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 // ele faz o que promete; com duas, o limite multiplica. O limitador
 // distribuído (B0 do plano) é pré-requisito antes de subir a segunda réplica.
 func LimitadorDaVitrine() *httpx.Limitador { return httpx.NovoLimitador(120, time.Minute) }
+
+// RotaDePreReservaPublica é a única rota pública que grava.
+const RotaDePreReservaPublica = "/public/holds"
+
+// LimitadorDePreReserva freia a pré-reserva pública por IP: 6 por hora, além
+// dos 120/min da vitrine. Uma família faz uma, talvez duas; a sétima na mesma
+// hora é alguém tentando segurar o calendário sem pagar. O teto por telefone
+// (módulo vitrine) cobre quem troca de IP; este cobre quem troca de telefone.
+func LimitadorDePreReserva() *httpx.Limitador { return httpx.NovoLimitador(6, time.Hour) }
 
 // EhDaVitrine diz se a rota é da superfície pública do site.
 func EhDaVitrine(r Rota) bool {

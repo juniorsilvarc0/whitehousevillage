@@ -35,6 +35,9 @@
     ano: 0, mes: 0,
     checkin: null, checkout: null,
     consulta: null,         // data sob consulta clicada (sem check-in)
+    cliente: { name: '', phone: '', email: '', consent: false },  // formulário da pré-reserva
+    envio: null,            // { chave, pedido, enviando, erro } da pré-reserva em curso
+    preReserva: null,       // resposta 201 de POST /public/holds
     dias: {},               // `${produtoId}|${data}` → dia da API
     orcamento: null,        // { chave, dados } | { chave, erro }
     carregando: false
@@ -122,7 +125,7 @@
     el.produto.addEventListener('change', async () => {
       state.produto = el.produto.value;
       state.checkin = state.checkout = null;
-      state.orcamento = null; state.consulta = null;
+      state.orcamento = null; state.consulta = null; state.preReserva = null; state.envio = null;
       state.hospedes = Math.min(state.hospedes, unit().capacity);
       renderHospedes();
       await recarregar();
@@ -130,6 +133,12 @@
     el.hospedes.addEventListener('change', () => {
       state.hospedes = Number(el.hospedes.value);
       orcar();
+    });
+    el.quote.addEventListener('click', ev => {
+      if (!ev.target.closest('[data-hold-nova]')) return;
+      state.preReserva = null; state.envio = null;
+      state.checkin = state.checkout = null; state.orcamento = null;
+      render();
     });
     $('[data-prev]').addEventListener('click', () => shiftMonth(-1));
     $('[data-next]').addEventListener('click', () => shiftMonth(1));
@@ -247,6 +256,7 @@
     }
     if (!escolhendoSaida) {
       state.checkin = s; state.checkout = null; state.orcamento = null; state.consulta = null;
+      state.preReserva = null; state.envio = null;
       render();
       return;
     }
@@ -325,6 +335,11 @@
     const P = state.politica;
     const head = cabecalho(u);
 
+    if (state.preReserva) {
+      el.quote.innerHTML = head + confirmacaoDePreReserva(state.preReserva, P);
+      return;
+    }
+
     if (u.on_request || (state.consulta && !state.checkin)) {
       const link = linkConsulta(u, state.consulta, null);
       el.quote.innerHTML = head + `
@@ -399,10 +414,11 @@
         <div class="row"><span>Diária média</span><b>${WH.brl(c.avg_nightly_cents)}</b></div>
       </div>
 
-      <div class="quote__actions">
-        ${WHATSAPP ? `<a class="btn btn--dark" data-wa target="_blank" rel="noopener" href="#">Pedir pré-reserva no WhatsApp</a>` : ''}
-      </div>
+      ${formularioDePreReserva(P)}
+      ${WHATSAPP ? `<a class="btn btn--secondary" data-wa target="_blank" rel="noopener" href="#">Prefiro falar no WhatsApp</a>` : ''}
       <p class="quote__note">Valores da tabela vigente. A pré-reserva segura a data por ${P.hold_hours}h; sem o sinal, a data é liberada automaticamente.</p>`;
+
+    ligarFormulario();
 
     const wa = el.quote.querySelector('[data-wa]');
     if (wa) {
@@ -418,6 +434,130 @@
       ];
       wa.href = `https://wa.me/${WHATSAPP}?text=` + encodeURIComponent(linhas.join('\n'));
     }
+  }
+
+  /* ─────────── Pré-reserva (POST /public/holds) ───────────
+     O site não promete o que o banco não fez: "data segura" só aparece com o
+     201 na mão. Conflito (alguém levou a data entre o calendário e o envio)
+     vira aviso e recarga do calendário — nunca uma segunda tentativa
+     automática. */
+  function formularioDePreReserva(P) {
+    const c = state.cliente, e = state.envio || {};
+    const det = (e.erro && e.erro.details) || {};
+    const erroDe = campo => det[campo] ? `<span class="hold__err">${WH.esc(det[campo])}</span>` : '';
+    const geral = e.erro && e.erro.code !== 'VALIDATION_ERROR'
+      ? `<div class="quote__hint quote__hint--${e.erro.code === 'DATE_CONFLICT' ? 'block' : 'warn'}">${WH.esc(mensagemDoEnvio(e.erro))}</div>` : '';
+    return `
+      <form class="hold" data-hold novalidate>
+        <p class="hold__title">Garanta a data agora</p>
+        <label class="hold__field"><span>Nome completo</span>
+          <input name="name" autocomplete="name" required minlength="2" maxlength="120" value="${WH.esc(c.name)}">${erroDe('name')}</label>
+        <label class="hold__field"><span>WhatsApp com DDD</span>
+          <input name="phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="(86) 99999-9999" value="${WH.esc(c.phone)}">${erroDe('phone')}</label>
+        <label class="hold__field"><span>E-mail <small>(opcional)</small></span>
+          <input name="email" type="email" autocomplete="email" value="${WH.esc(c.email)}">${erroDe('email')}</label>
+        <label class="hold__consent"><input name="consent" type="checkbox"${c.consent ? ' checked' : ''}>
+          <span>Autorizo a White House a usar meus dados para esta reserva e para falar comigo sobre ela.</span></label>
+        ${erroDe('consent')}
+        ${geral}
+        <button class="btn btn--dark" type="submit"${e.enviando ? ' disabled' : ''}>${e.enviando ? 'Reservando…' : 'Fazer pré-reserva'}</button>
+        <p class="quote__note">Sem pagamento agora. A data fica segura por ${P.hold_hours}h; para confirmar, paga-se o sinal de ${P.deposit_pct}%.</p>
+      </form>`;
+  }
+
+  function mensagemDoEnvio(erro) {
+    switch (erro.code) {
+      case 'DATE_CONFLICT': return 'Essas datas acabaram de ser reservadas por outra pessoa. Escolha outras no calendário.';
+      case 'HOLD_LIMIT_REACHED': return erro.message;
+      case 'RATE_LIMITED': return 'Muitas tentativas seguidas. Tente de novo mais tarde ou fale com a gente pelo WhatsApp.';
+      case 'NETWORK': return 'Sem conexão. Tente de novo — se a primeira tentativa chegou, a mesma pré-reserva é devolvida, sem duplicar.';
+      default: return erro.message || 'Não foi possível concluir agora.';
+    }
+  }
+
+  function ligarFormulario() {
+    const form = el.quote.querySelector('[data-hold]');
+    if (!form) return;
+    form.addEventListener('input', () => {
+      state.cliente = {
+        name: form.name.value, phone: form.phone.value,
+        email: form.email.value, consent: form.consent.checked
+      };
+    });
+    form.addEventListener('submit', ev => { ev.preventDefault(); preReservar(); });
+  }
+
+  async function preReservar() {
+    const u = unit(), c = state.cliente;
+    const pedido = {
+      unit_type_id: u.unit_type_id, check_in: state.checkin, check_out: state.checkout,
+      guests_count: state.hospedes, name: c.name.trim(), phone: c.phone.trim(), consent: !!c.consent
+    };
+    if (c.email.trim()) pedido.email = c.email.trim();
+    if (!pedido.consent) {
+      state.envio = { erro: { code: 'VALIDATION_ERROR', details: { consent: 'é preciso aceitar para reservar.' } } };
+      renderQuote();
+      return;
+    }
+    /* Mesma tentativa (mesmo pedido) → mesma chave: um reenvio depois de uma
+       queda de rede devolve a pré-reserva que já existe. Pedido diferente →
+       chave nova. */
+    const assinatura = JSON.stringify(pedido);
+    const chave = state.envio && state.envio.assinatura === assinatura && state.envio.chave
+      ? state.envio.chave : WH.novaChave();
+    state.envio = { chave, assinatura, enviando: true };
+    renderQuote();
+    try {
+      state.preReserva = await WH.api.preReservar(pedido, chave);
+      state.envio = null;
+      /* As noites agora são dele: o calendário relido mostra a data tomada,
+         como qualquer outro visitante vai vê-la. */
+      state.dias = {};
+      state.checkin = state.checkout = null; state.orcamento = null;
+      await recarregar();
+    } catch (erro) {
+      state.envio = { chave, assinatura, erro };
+      if (erro.code === 'DATE_CONFLICT') {
+        /* O calendário que o visitante via estava velho: some com o cache e
+           redesenha, para a data tomada aparecer ocupada. */
+        state.dias = {};
+        state.envio = { erro };
+        await recarregar();
+        return;
+      }
+      renderQuote();
+    }
+  }
+
+  function confirmacaoDePreReserva(r, P) {
+    const expira = new Date(r.hold_expires_at);
+    const quando = expira.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Fortaleza' });
+    let wa = '';
+    if (WHATSAPP) {
+      const texto = [
+        `Olá! Fiz a pré-reserva *${r.code}* no site da White House.`, '',
+        `*${r.product_name}*`,
+        `Check-in: ${WH.dataBR(r.check_in)} · Check-out: ${WH.dataBR(r.check_out)}`,
+        `Hóspedes: ${r.guests_count}`,
+        `Total: ${WH.brl(r.total_cents)} · Sinal: ${WH.brl(r.deposit_cents)}`, '',
+        'Como faço o pagamento do sinal?'
+      ].join('\n');
+      wa = `<a class="btn btn--dark" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}?text=${encodeURIComponent(texto)}">Enviar o código no WhatsApp</a>`;
+    }
+    return `
+      <div class="hold-ok" data-hold-ok>
+        <p class="hold-ok__eyebrow">Pré-reserva feita</p>
+        <p class="hold-ok__code">${WH.esc(r.code)}</p>
+        <p class="hold-ok__lead">${WH.esc(r.product_name)} está segura para você até <b>${WH.esc(quando)}</b>.</p>
+        <div class="quote__signal">
+          <div class="row"><span>${WH.dataCurta(r.check_in)} → ${WH.dataCurta(r.check_out)} · ${r.night_count} ${r.night_count === 1 ? 'noite' : 'noites'}</span><b>${WH.brl(r.total_cents)}</b></div>
+          <div class="row"><span>Sinal (${P.deposit_pct}%) para confirmar</span><b>${WH.brl(r.deposit_cents)}</b></div>
+          <div class="row"><span>Saldo até ${P.balance_due_days} dias antes</span><b>${WH.brl(r.balance_cents)}</b></div>
+        </div>
+        <p class="hold-ok__next">Próximo passo: pagar o sinal até o prazo. Envie o código pelo WhatsApp e a nossa equipe passa os dados do pagamento. Sem o sinal, a data é liberada automaticamente.</p>
+        ${wa}
+        <button class="btn btn--secondary" type="button" data-hold-nova>Fazer outra consulta</button>
+      </div>`;
   }
 
   /* ─────────── Indicadores públicos do mês ─────────── */

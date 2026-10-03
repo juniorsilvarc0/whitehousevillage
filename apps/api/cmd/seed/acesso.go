@@ -248,38 +248,7 @@ type linhaDaMatriz struct {
 // antes de qualquer I/O: é função pura de propósito, para o teste conferir a
 // matriz sem precisar de banco.
 func montarMatriz() ([]linhaDaMatriz, error) {
-	catalogo := make(map[string]recurso, len(catalogoSeed))
-	for _, r := range catalogoSeed {
-		catalogo[r.codigo] = r
-	}
-
 	var linhas []linhaDaMatriz
-
-	acrescentar := func(codigoPerfil string, cs []concessao) error {
-		for _, c := range cs {
-			r, ok := catalogo[c.recurso]
-			if !ok {
-				return fmt.Errorf("perfil %q concede o recurso %q, que não está no catálogo", codigoPerfil, c.recurso)
-			}
-			if c.escopo == escopoOwn && !r.suportaOwn {
-				// Escopo `own` num recurso sem dono é permissão que o SQL não
-				// consegue honrar: viraria filtro vazio ou filtro ignorado, e
-				// nos dois casos a tela mente sobre o que o usuário vê.
-				return fmt.Errorf("perfil %q pede escopo own em %q, que não tem dono", codigoPerfil, c.recurso)
-			}
-			acoes := c.acoes
-			if acoes == nil {
-				acoes = r.acoes
-			}
-			for _, a := range acoes {
-				if !contem(r.acoes, a) {
-					return fmt.Errorf("perfil %q concede %q em %q, ação que o recurso não oferece", codigoPerfil, a, c.recurso)
-				}
-				linhas = append(linhas, linhaDaMatriz{codigoPerfil, c.recurso, a, c.escopo})
-			}
-		}
-		return nil
-	}
 
 	// admin recebe o catálogo inteiro em `all` — gerado, e não digitado, para
 	// que recurso novo não nasça inacessível até alguém lembrar de conceder.
@@ -287,14 +256,56 @@ func montarMatriz() ([]linhaDaMatriz, error) {
 	for _, r := range catalogoSeed {
 		todas = append(todas, concessao{r.codigo, nil, escopoAll})
 	}
-	if err := acrescentar("admin", todas); err != nil {
+	l, err := expandirConcessoes("admin", todas)
+	if err != nil {
 		return nil, err
 	}
+	linhas = append(linhas, l...)
+
 	// Ordem fixa na iteração: percorrer o mapa direto tornaria o log e a
 	// conferência do seed diferentes a cada execução.
 	for _, codigo := range []string{"usuario", "corretor"} {
-		if err := acrescentar(codigo, matrizSeed[codigo]); err != nil {
+		l, err := expandirConcessoes(codigo, matrizSeed[codigo])
+		if err != nil {
 			return nil, err
+		}
+		linhas = append(linhas, l...)
+	}
+	return linhas, nil
+}
+
+// expandirConcessoes resolve as concessões de um perfil em linhas e recusa,
+// antes de qualquer I/O, recurso fora do catálogo, ação que o recurso não
+// oferece e escopo `own` em recurso sem dono. É a mesma régua para a matriz
+// dos perfis de gente (acima) e para o perfil de serviço da vitrine
+// (vitrine.go).
+func expandirConcessoes(codigoPerfil string, cs []concessao) ([]linhaDaMatriz, error) {
+	catalogo := make(map[string]recurso, len(catalogoSeed))
+	for _, r := range catalogoSeed {
+		catalogo[r.codigo] = r
+	}
+
+	var linhas []linhaDaMatriz
+	for _, c := range cs {
+		r, ok := catalogo[c.recurso]
+		if !ok {
+			return nil, fmt.Errorf("perfil %q concede o recurso %q, que não está no catálogo", codigoPerfil, c.recurso)
+		}
+		if c.escopo == escopoOwn && !r.suportaOwn {
+			// Escopo `own` num recurso sem dono é permissão que o SQL não
+			// consegue honrar: viraria filtro vazio ou filtro ignorado, e
+			// nos dois casos a tela mente sobre o que o usuário vê.
+			return nil, fmt.Errorf("perfil %q pede escopo own em %q, que não tem dono", codigoPerfil, c.recurso)
+		}
+		acoes := c.acoes
+		if acoes == nil {
+			acoes = r.acoes
+		}
+		for _, a := range acoes {
+			if !contem(r.acoes, a) {
+				return nil, fmt.Errorf("perfil %q concede %q em %q, ação que o recurso não oferece", codigoPerfil, a, c.recurso)
+			}
+			linhas = append(linhas, linhaDaMatriz{codigoPerfil, c.recurso, a, c.escopo})
 		}
 	}
 	return linhas, nil

@@ -47,6 +47,8 @@ func TestNenhumaRotaFicaSemClassificacao(t *testing.T) {
 				"GET /public/policy":       true,
 				"GET /public/availability": true,
 				"POST /public/quotes":      true,
+				// Pré-reserva do próprio cliente (B1): a única pública que grava.
+				"POST /public/holds": true,
 			}
 			if !publicasPermitidas[chave] {
 				t.Errorf("%s ficou pública sem estar na lista fechada", chave)

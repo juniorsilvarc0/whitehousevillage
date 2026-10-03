@@ -161,7 +161,10 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (ReservaCompleta, 
 
 // ─────────────────────────── POST /reservations ─────────────────────
 
-const rotaDeCriacao = "POST /reservations"
+// RotaDeCriacao é o `endpoint` das chaves de idempotência da criação. Exportada
+// porque a pré-reserva do site (módulo vitrine) passa por este mesmo Criar e
+// precisa reconhecer a repetição de uma chave já usada.
+const RotaDeCriacao = "POST /reservations"
 
 // Criar emite a pré-reserva: recalcula o orçamento, congela o snapshot, aloca
 // a(s) unidade(s) e segura o calendário — tudo numa transação.
@@ -182,7 +185,7 @@ func (s *Servico) Criar(ctx context.Context, chave string, corpo ReservaCriar) (
 
 	var saida Resultado
 	err = s.tx.Do(ctx, func(ctx context.Context) error {
-		guardada, err := idempotencia.Reservar(ctx, s.repo.pool, chave, rotaDeCriacao, hash, idempotencia.DonoDe(u))
+		guardada, err := idempotencia.Reservar(ctx, s.repo.pool, chave, RotaDeCriacao, hash, idempotencia.DonoDe(u))
 		if err != nil {
 			return err
 		}
@@ -205,7 +208,7 @@ func (s *Servico) Criar(ctx context.Context, chave string, corpo ReservaCriar) (
 		}
 
 		env := envelope{Data: reserva}
-		if err := idempotencia.Guardar(ctx, s.repo.pool, chave, rotaDeCriacao, idempotencia.DonoDe(u), http.StatusCreated, env); err != nil {
+		if err := idempotencia.Guardar(ctx, s.repo.pool, chave, RotaDeCriacao, idempotencia.DonoDe(u), http.StatusCreated, env); err != nil {
 			return err
 		}
 		saida = Resultado{Status: http.StatusCreated, Corpo: env, Local: localDaReserva(reserva.ID)}

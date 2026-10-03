@@ -9,8 +9,9 @@ import "net/http"
 // ValidarTabela), toda `/public/*` passa pelo limitador por IP (router.go) e
 // nenhuma resposta carrega dado de terceiro (o recorte é do módulo vitrine).
 //
-// Nenhuma grava. Pré-reserva e lead públicos (B1/B3) dependem de decisões do
-// dono do negócio listadas no §8 do plano, e entram como rotas novas aqui.
+// Só uma grava: POST /public/holds (B1), a pré-reserva do próprio cliente, que
+// passa pelo MESMO serviço de reservas do painel, assinada pela conta de
+// serviço do site, e ganha um segundo limitador, mais apertado (router.go).
 //
 // Sem guarda contra handler nulo, como inventário e reservas: o teste de
 // contrato monta a tabela com Deps zerado e PRECISA enxergar estas rotas —
@@ -38,6 +39,13 @@ func rotasVitrine(d Deps) []Rota {
 			Metodo: http.MethodPost, Path: "/public/quotes", Acesso: AcessoPublico,
 			Motivo:  "orçamento do visitante pelo mesmo motor do painel; sem desconto, não grava e não segura data",
 			Handler: d.Vitrine.Orcar,
+		},
+		{
+			Metodo: http.MethodPost, Path: "/public/holds", Acesso: AcessoPublico,
+			Motivo: "pré-reserva feita pelo próprio cliente no site: o mesmo reservas.Criar do painel (idempotência, " +
+				"orçamento no servidor, EXCLUDE contra overbooking), assinado pela conta de serviço do site; " +
+				"consentimento LGPD obrigatório, teto por telefone e limite próprio por IP",
+			Handler: d.Vitrine.PreReservar,
 		},
 	}
 }
