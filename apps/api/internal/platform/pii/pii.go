@@ -61,6 +61,9 @@ const (
 	MotivoExportacao      = "export"
 	MotivoListaDeHospedes = "rooming_list"
 	MotivoOportunidade    = "opportunity"
+	// MotivoListaDeReservas — GET /reservations: o telefone do cliente de cada
+	// reserva da página, para a gestão chamar quem fez a pré-reserva.
+	MotivoListaDeReservas = "reservation_list"
 )
 
 var motivosConhecidos = map[string]bool{
@@ -68,6 +71,7 @@ var motivosConhecidos = map[string]bool{
 	MotivoExportacao:      true,
 	MotivoListaDeHospedes: true,
 	MotivoOportunidade:    true,
+	MotivoListaDeReservas: true,
 }
 
 // inserePorEntidade amarra a entidade lida à coluna que a registra.
