@@ -62,17 +62,30 @@
      Prazo da pré-reserva, sinal e saldo vêm de /api/v1/public/policy. O HTML
      traz uma frase sem número, que fica no lugar se a API não responder: frase
      vaga é melhor que número que o banco já não confirma. */
+  /* O gestor pode editar a frase no painel; {horas}, {sinal} e {dias} viram os
+     números da política. Sem a política, fica a frase do HTML — a não ser que a
+     editada não dependa de número nenhum. */
+  const FRASES_DA_POLITICA = {
+    curto: 'Consulte o calendário em tempo real, monte o orçamento da sua estadia e garanta a data com uma pré-reserva de {horas} horas.',
+    completo: 'A pré-reserva bloqueia o calendário por {horas} horas. A confirmação acontece com o sinal de {sinal}%; o saldo vence {dias} dias antes do check-in.'
+  };
   const textosDaPolitica = document.querySelectorAll('[data-politica-texto]');
   if (textosDaPolitica.length && window.WH) {
-    WH.api.politica().then(P => {
+    const editados = window.WH_CONTEUDO || Promise.resolve({});
+    const escrever = (P) => editados.then(valores => {
       textosDaPolitica.forEach(el => {
-        /* Texto editado pelo gestor no painel vale mais que a frase-padrão. */
-        if (el.hasAttribute('data-cms-aplicado')) return;
-        el.textContent = el.dataset.politicaTexto === 'curto'
-          ? `Consulte o calendário em tempo real, monte o orçamento da sua estadia e garanta a data com uma pré-reserva de ${P.hold_hours} horas.`
-          : `A pré-reserva bloqueia o calendário por ${P.hold_hours} horas. A confirmação acontece com o sinal de ${P.deposit_pct}%; o saldo vence ${P.balance_due_days} dias antes do check-in.`;
+        const chave = el.dataset.cmsParagrafos;
+        const editado = chave && typeof valores[chave] === 'string' && valores[chave].trim() ? valores[chave] : null;
+        const modelo = editado || FRASES_DA_POLITICA[el.dataset.politicaTexto];
+        if (!modelo) return;
+        if (!P) {
+          if (editado && !/\{[a-z-]+\}/.test(editado)) el.textContent = editado;
+          return;
+        }
+        el.textContent = WH.cru('', modelo, { horas: P.hold_hours, sinal: P.deposit_pct, dias: P.balance_due_days });
       });
-    }).catch(() => { /* fica a frase sem número */ });
+    });
+    WH.api.politica().then(escrever, () => escrever(null));
   }
 
   /* ─── Cards de acomodação (home) ───
@@ -109,7 +122,7 @@
         const menor = precos.length ? Math.min.apply(null, precos) : null;
         const titulo = t.tituloEditado ? t.titulo
           : (g.produtos.length === 1 ? g.produtos[0].name : g.titulo);
-        const quantos = g.produtos.length > 1 ? `${g.produtos.length} opções` : '';
+        const quantos = g.produtos.length > 1 ? WH.cru('acomodacoes.opcoes', '{n} opções', { n: g.produtos.length }) : '';
         return `
       <article class="unit-card" data-reveal>
         <div class="unit-card__media scene ${t.scene}" data-categoria="${WH.esc(g.chave)}">
@@ -122,10 +135,10 @@
           ${t.desc ? `<p class="unit-card__desc">${WH.esc(t.desc)}</p>` : ''}
           <div class="unit-card__price">
             ${menor != null
-              ? `<span class="v">${WH.brl(menor)}</span><span class="l">/ diária · a partir de</span>`
-              : `<span class="v">Sob consulta</span><span class="l">fale com a gente</span>`}
+              ? `<span class="v">${WH.brl(menor)}</span><span class="l">${WH.t('acomodacoes.preco-sufixo', '/ diária · a partir de')}</span>`
+              : `<span class="v">${WH.t('acomodacoes.sob-consulta', 'Sob consulta')}</span><span class="l">${WH.t('acomodacoes.sob-consulta-nota', 'fale com a gente')}</span>`}
           </div>
-          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html?produto=${encodeURIComponent(g.produtos[0].code)}">Ver disponibilidade</a>
+          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html?produto=${encodeURIComponent(g.produtos[0].code)}">${WH.t('acomodacoes.botao-card', 'Ver disponibilidade')}</a>
         </div>
       </article>`;
       }).join('');
@@ -137,15 +150,15 @@
         });
       }
       animar();
-    }).catch(() => {
+    }).catch(() => editados.then(() => {
       grid.innerHTML = `
       <article class="unit-card is-visible">
         <div class="unit-card__body">
-          <h3 class="unit-card__title">Acomodações</h3>
-          <p class="unit-card__desc">Não conseguimos carregar as acomodações agora. Consulte datas e valores na central de reservas.</p>
-          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html">Ver disponibilidade</a>
+          <h3 class="unit-card__title">${WH.t('acomodacoes.falha-titulo', 'Acomodações')}</h3>
+          <p class="unit-card__desc">${WH.t('acomodacoes.falha-texto', 'Não conseguimos carregar as acomodações agora. Consulte datas e valores na central de reservas.')}</p>
+          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html">${WH.t('acomodacoes.botao-card', 'Ver disponibilidade')}</a>
         </div>
       </article>`;
-    });
+    }));
   }
 })();

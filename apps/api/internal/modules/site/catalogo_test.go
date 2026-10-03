@@ -10,45 +10,87 @@ import (
 	"github.com/google/uuid"
 )
 
-// chavesDoContrato é a lista do docs/site-cms.md §4, escrita à mão e na
-// ordem das seções. Mudar o catálogo sem mudar o contrato (e esta lista)
-// acende aqui — o site e o painel procuram exatamente estas chaves.
+// chavesDoContrato é a lista do docs/site-cms.md §4 (rodada 1, 72 chaves) e
+// §4b (rodada 2, 118 chaves), escrita à mão na ordem do painel: em cada seção,
+// as chaves da rodada 1 e depois as da rodada 2. Mudar o catálogo sem mudar o
+// contrato (e esta lista) acende aqui — o site e o painel procuram exatamente
+// estas chaves.
 var chavesDoContrato = func() []string {
-	k := []string{
-		// 1. Google e redes
-		"seo.inicio.titulo", "seo.inicio.descricao", "seo.disponibilidade.titulo", "seo.disponibilidade.descricao",
-		// 2. Marca
-		"marca.logo",
-		// 3. Topo (capa)
-		"inicio.local", "inicio.titulo", "inicio.texto", "inicio.video", "inicio.numeros",
-		// 4. Faixa de temas
-		"faixa.itens",
-		// 5. A casa
-		"casa.rotulo", "casa.titulo", "casa.texto", "casa.foto", "casa.numeros",
-		// 6. Acomodações
-		"acomodacoes.rotulo", "acomodacoes.titulo", "acomodacoes.texto",
-	}
-	for _, c := range []string{"duplex", "suites", "grand-villa", "classic-villa", "completa"} {
-		for _, f := range []string{"titulo", "selo", "descricao", "itens", "foto"} {
-			k = append(k, "categoria."+c+"."+f)
-		}
-	}
-	return append(k,
-		// 7. Eventos
-		"eventos.rotulo", "eventos.titulo", "eventos.texto", "eventos.cards",
-		// 8. Estrutura
-		"estrutura.rotulo", "estrutura.titulo", "estrutura.texto", "estrutura.itens",
-		// 9. Localização
-		"local.rotulo", "local.titulo", "local.texto", "local.itens", "local.foto",
-		// 10. Chamada final
-		"chamada.titulo", "chamada.texto",
-		// 11. Rodapé e contato
-		"rodape.texto", "rodape.email", "rodape.horario", "rodape.endereco", "rodape.copyright",
-		// 12. Página de disponibilidade
-		"disp.rotulo", "disp.titulo", "disp.texto", "disp.tarifas.rotulo", "disp.tarifas.titulo", "disp.chamada.titulo",
-		// 13. Página não encontrada
-		"erro.titulo", "erro.texto",
-	)
+	var k []string
+	add := func(chaves ...string) { k = append(k, chaves...) }
+
+	// 1. Google e redes
+	add("seo.inicio.titulo", "seo.inicio.descricao", "seo.disponibilidade.titulo", "seo.disponibilidade.descricao")
+	add("seo.erro.titulo")
+	// 2. Marca
+	add("marca.logo", "marca.nome", "marca.subtitulo", "marca.icone")
+	// §4b. Menu e botões
+	add("menu.inicio", "menu.acomodacoes", "menu.eventos", "menu.estrutura")
+	add("menu.disponibilidade", "menu.reservar", "menu.falar-com-reservas", "menu.whatsapp-flutuante")
+	add("menu.pular")
+	// 3. Topo (capa)
+	add("inicio.local", "inicio.titulo", "inicio.texto", "inicio.video")
+	add("inicio.numeros", "inicio.botao-disponibilidade", "inicio.botao-acomodacoes", "inicio.rolar")
+	// 4. Faixa de temas
+	add("faixa.itens")
+	// 5. A casa
+	add("casa.rotulo", "casa.titulo", "casa.texto", "casa.foto")
+	add("casa.numeros", "casa.foto-legenda")
+	// 6. Acomodações (as categorias antes dos campos da rodada 2)
+	add("acomodacoes.rotulo", "acomodacoes.titulo", "acomodacoes.texto", "categoria.duplex.titulo")
+	add("categoria.duplex.selo", "categoria.duplex.descricao", "categoria.duplex.itens", "categoria.duplex.foto")
+	add("categoria.suites.titulo", "categoria.suites.selo", "categoria.suites.descricao", "categoria.suites.itens")
+	add("categoria.suites.foto", "categoria.grand-villa.titulo", "categoria.grand-villa.selo", "categoria.grand-villa.descricao")
+	add("categoria.grand-villa.itens", "categoria.grand-villa.foto", "categoria.classic-villa.titulo", "categoria.classic-villa.selo")
+	add("categoria.classic-villa.descricao", "categoria.classic-villa.itens", "categoria.classic-villa.foto", "categoria.completa.titulo")
+	add("categoria.completa.selo", "categoria.completa.descricao", "categoria.completa.itens", "categoria.completa.foto")
+	add("acomodacoes.botao", "acomodacoes.botao-card", "acomodacoes.preco-sufixo", "acomodacoes.sob-consulta")
+	add("acomodacoes.sob-consulta-nota", "acomodacoes.opcoes", "acomodacoes.falha-titulo", "acomodacoes.falha-texto")
+	// 7. Eventos
+	add("eventos.rotulo", "eventos.titulo", "eventos.texto", "eventos.cards")
+	// 8. Estrutura
+	add("estrutura.rotulo", "estrutura.titulo", "estrutura.texto", "estrutura.itens")
+	// 9. Localização
+	add("local.rotulo", "local.titulo", "local.texto", "local.itens")
+	add("local.foto", "local.foto-legenda")
+	// 10. Chamada final
+	add("chamada.titulo", "chamada.texto", "chamada.botao-datas", "chamada.botao-whatsapp")
+	// 11. Rodapé e contato
+	add("rodape.texto", "rodape.email", "rodape.horario", "rodape.endereco")
+	add("rodape.copyright", "rodape.titulo-navegue", "rodape.titulo-reservas", "rodape.titulo-endereco")
+	add("rodape.whatsapp")
+	// 12. Página de disponibilidade
+	add("disp.rotulo", "disp.titulo", "disp.texto", "disp.tarifas.rotulo")
+	add("disp.tarifas.titulo", "disp.chamada.titulo", "disp.campo-produto", "disp.campo-hospedes")
+	add("disp.legenda-livre", "disp.legenda-indisponivel", "disp.legenda-consulta", "disp.legenda-especial")
+	add("disp.tarifas.texto", "disp.tarifas.minimos", "disp.tabela-produto", "disp.tabela-capacidade")
+	add("disp.tabela-consulta", "disp.tabela-pacotes", "disp.chamada.texto", "disp.chamada.botao-inicio")
+	// §4b. Calendário
+	add("calendario.carregando", "calendario.noite-livre", "calendario.noites-livres", "calendario.falha")
+	add("calendario.falha-mes", "calendario.botao-whatsapp", "calendario.dia-minimo", "calendario.dia-consulta")
+	add("calendario.dia-indisponivel", "calendario.aviso-passou", "calendario.aviso-consulta", "calendario.aviso-indisponivel")
+	add("calendario.aviso-longa", "calendario.aviso-intervalo", "calendario.kpi-livres", "calendario.kpi-diaria")
+	add("calendario.kpi-diaria-nota", "calendario.kpi-sinal", "calendario.kpi-sinal-nota", "calendario.kpi-pre-reserva")
+	add("calendario.kpi-pre-reserva-nota")
+	// §4b. Orçamento
+	add("orcamento.titulo", "orcamento.selo", "orcamento.detalhes", "orcamento.check-in")
+	add("orcamento.check-out", "orcamento.escolha-entrada", "orcamento.escolha-saida", "orcamento.calculando")
+	add("orcamento.sinal", "orcamento.saldo", "orcamento.saldo-prazo", "orcamento.pre-reserva")
+	add("orcamento.pre-reserva-prazo", "orcamento.consulta-produto", "orcamento.consulta-data", "orcamento.consulta-datas")
+	add("orcamento.botao-consultar", "orcamento.limpeza", "orcamento.total", "orcamento.sinal-valor")
+	add("orcamento.saldo-valor", "orcamento.diaria-media", "orcamento.botao-whatsapp", "orcamento.nota")
+	// §4b. Formulário de pré-reserva
+	add("pre-reserva.titulo", "pre-reserva.nome", "pre-reserva.whatsapp", "pre-reserva.whatsapp-exemplo")
+	add("pre-reserva.email", "pre-reserva.opcional", "pre-reserva.consentimento", "pre-reserva.consentimento-falta")
+	add("pre-reserva.botao", "pre-reserva.enviando", "pre-reserva.nota", "pre-reserva.erro-conflito")
+	add("pre-reserva.erro-tentativas", "pre-reserva.erro-conexao", "pre-reserva.erro-geral", "pre-reserva.ok-rotulo")
+	add("pre-reserva.ok-texto", "pre-reserva.ok-proximo", "pre-reserva.ok-botao-whatsapp", "pre-reserva.ok-botao-nova")
+	// §4b. Mensagens prontas do WhatsApp
+	add("whatsapp.mensagem-consulta", "whatsapp.mensagem-orcamento", "whatsapp.mensagem-pre-reserva", "whatsapp.pergunta-sinal")
+	// 13. Página não encontrada
+	add("erro.titulo", "erro.texto", "erro.rotulo", "erro.botao-disponibilidade")
+	add("erro.botao-inicio")
+	return k
 }()
 
 var formatoDeChave = regexp.MustCompile(`^[a-z0-9]+([.-][a-z0-9]+)*$`)
@@ -64,14 +106,15 @@ func TestCatalogoTemExatamenteAsChavesDoContratoNaOrdem(t *testing.T) {
 		t.Fatalf("catálogo diverge do docs/site-cms.md §4.\ncatálogo (%d): %v\ncontrato (%d): %v",
 			len(noCatalogo), noCatalogo, len(chavesDoContrato), chavesDoContrato)
 	}
-	if len(noCatalogo) != 72 {
-		t.Fatalf("esperadas 72 chaves, há %d", len(noCatalogo))
+	if len(noCatalogo) != 190 {
+		t.Fatalf("esperadas 190 chaves (72 do §4 + 118 do §4b), há %d", len(noCatalogo))
 	}
 }
 
 func TestSecoesNaOrdemDoContrato(t *testing.T) {
-	esperado := []string{"seo", "marca", "inicio", "faixa", "casa", "acomodacoes", "eventos",
-		"estrutura", "local", "chamada", "rodape", "disp", "erro"}
+	esperado := []string{"seo", "marca", "menu", "inicio", "faixa", "casa", "acomodacoes", "eventos",
+		"estrutura", "local", "chamada", "rodape", "disp", "calendario", "orcamento", "pre-reserva",
+		"whatsapp", "erro"}
 	var got []string
 	for _, s := range Catalogo() {
 		got = append(got, s.Chave)

@@ -17,6 +17,7 @@ import {
   itemVazio,
   limiteDe,
   listaComFotoFaltando,
+  marcadoresFaltando,
   mover,
   mudou,
   remover,
@@ -194,6 +195,19 @@ export function CampoDoSiteEditor({
             </span>
           ) : null}
         </div>
+      ) : null}
+
+      {typeof rascunho === "string" && marcadoresFaltando(campo.default_value, rascunho).length > 0 ? (
+        <p className="text-xs text-muted-foreground" data-aviso-marcador>
+          O texto original tem{" "}
+          {marcadoresFaltando(campo.default_value, rascunho).map((m, i) => (
+            <React.Fragment key={m}>
+              {i > 0 ? ", " : null}
+              <code className="rounded bg-muted px-1">{m}</code>
+            </React.Fragment>
+          ))}
+          , que o site troca pelo número ou nome certo. Sem ele, essa informação não aparece.
+        </p>
       ) : null}
 
       {campo.kind === "imagem" ? (

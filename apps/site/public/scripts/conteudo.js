@@ -126,6 +126,7 @@
     var url = enderecoSeguro(v.url);
     if (!url) return;
     var alt = typeof v.alt === 'string' ? v.alt : '';
+    if (el.tagName === 'LINK') { el.setAttribute('href', url); return; }
     if (el.tagName === 'IMG') {
       el.setAttribute('src', url);
       /* Logo decorativo (o link ao redor já tem nome): o alt continua vazio. */
@@ -224,6 +225,9 @@
       document.querySelectorAll('[' + attr + ']').forEach(function (el) {
         var chave = el.getAttribute(attr);
         if (!Object.prototype.hasOwnProperty.call(valores, chave)) return;
+        /* Frase com prazo e sinal: quem escreve é o main.js, que troca {horas},
+           {sinal} e {dias} pelos números da política vigente. */
+        if (el.hasAttribute('data-politica-texto')) return;
         try {
           par[1](el, valores[chave]);
           el.setAttribute('data-cms-aplicado', '');
@@ -253,10 +257,43 @@
       .then(function (v) { clearTimeout(relogio); return v; });
   }
 
+  /* Valores já carregados, para os textos que o JavaScript desenha (orçamento,
+     formulário, avisos). Vazio até a resposta chegar. */
+  var carregados = {};
+
+  /* Preenche {nome} com o valor de `vars`. O texto é escapado antes; o valor
+     também, a não ser que venha como {html: '...'} — marcação feita pelo próprio
+     site, nunca pelo conteúdo editado. Marcador sem valor fica como está. */
+  function preencher(modelo, vars) {
+    return escapar(modelo).replace(/\{([a-z][a-z0-9-]*)\}/g, function (todo, nome) {
+      if (!vars || !Object.prototype.hasOwnProperty.call(vars, nome)) return todo;
+      var v = vars[nome];
+      if (v && typeof v === 'object' && typeof v.html === 'string') return v.html;
+      return escapar(v == null ? '' : v);
+    });
+  }
+
+  /* Texto pronto para ir para innerHTML: o editado, se houver, senão o padrão. */
+  function t(chave, padrao, vars) {
+    var v = carregados[chave];
+    return preencher(typeof v === 'string' && v.trim() ? v : padrao, vars);
+  }
+
+  /* O texto cru (sem escapar), para quem vai usar textContent ou montar a
+     mensagem do WhatsApp. */
+  function cru(chave, padrao, vars) {
+    var v = carregados[chave];
+    var modelo = typeof v === 'string' && v.trim() ? v : padrao;
+    return modelo.replace(/\{([a-z][a-z0-9-]*)\}/g, function (todo, nome) {
+      return vars && Object.prototype.hasOwnProperty.call(vars, nome) ? String(vars[nome]) : todo;
+    });
+  }
+
   window.WH_CONTEUDO = buscar().then(function (valores) {
+    carregados = valores;
     aplicar(valores);
     return valores;
   }, function () { return {}; });
 
-  window.WH_CMS = { escapar: escapar, tituloHTML: tituloHTML, paragrafosDe: paragrafosDe, enderecoSeguro: enderecoSeguro, aplicarImagem: aplicarImagem };
+  window.WH_CMS = { t: t, cru: cru, preencher: preencher, escapar: escapar, tituloHTML: tituloHTML, paragrafosDe: paragrafosDe, enderecoSeguro: enderecoSeguro, aplicarImagem: aplicarImagem };
 })();

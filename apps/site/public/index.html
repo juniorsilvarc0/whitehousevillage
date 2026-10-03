@@ -10,7 +10,7 @@
 
     <!-- O número do WhatsApp não mora neste arquivo: o nginx o escreve por SSI a
          partir de uma única linha (whv_whatsapp em apps/site/nginx.conf). -->
-    <link rel="icon" href="/assets/logo.png" />
+    <link rel="icon" href="/assets/logo.png" data-cms-img="marca.icone" />
 
     <link rel="stylesheet" href="/styles/fonts.css" />
     <link rel="stylesheet" href="/styles/tokens.css" />
@@ -21,25 +21,25 @@
     <script>document.documentElement.classList.remove('no-js');</script>
 </head>
 <body>
-    <a href="#main" class="skip-link">Pular para o conteúdo</a>
+    <a href="#main" class="skip-link" data-cms="menu.pular">Pular para o conteúdo</a>
 
     <header class="site-header site-header--over-hero" id="site-header">
         <div class="site-header__inner">
             <a class="site-header__logo" href="/" aria-label="White House — página inicial">
                 <img src="/assets/logo.png" alt="" width="78" height="42" data-cms-img="marca.logo" data-cms-decorativa />
                 <span class="site-header__wordmark">
-                    <b>WHITE HOUSE</b>
-                    <span>Village</span>
+                    <b data-cms="marca.nome">WHITE HOUSE</b>
+                    <span data-cms="marca.subtitulo">Village</span>
                 </span>
             </a>
             <nav class="site-header__nav" aria-label="Principal">
-                <a href="/" aria-current="page">Início</a>
-                <a href="/#acomodacoes">Acomodações</a>
-                <a href="/#eventos">Eventos</a>
-                <a href="/#estrutura">Estrutura</a>
-                <a href="/disponibilidade.html">Disponibilidade</a>
+                <a href="/" aria-current="page" data-cms="menu.inicio">Início</a>
+                <a href="/#acomodacoes" data-cms="menu.acomodacoes">Acomodações</a>
+                <a href="/#eventos" data-cms="menu.eventos">Eventos</a>
+                <a href="/#estrutura" data-cms="menu.estrutura">Estrutura</a>
+                <a href="/disponibilidade.html" data-cms="menu.disponibilidade">Disponibilidade</a>
             </nav>
-            <a href="/disponibilidade.html" class="btn btn--primary site-header__cta">Reservar</a>
+            <a href="/disponibilidade.html" class="btn btn--primary site-header__cta" data-cms="menu.reservar">Reservar</a>
             <button class="menu-toggle" aria-label="Abrir menu" aria-expanded="false" aria-controls="mobile-nav">
                 <span class="menu-toggle__bar"></span>
                 <span class="menu-toggle__bar"></span>
@@ -49,11 +49,11 @@
     </header>
 
     <nav class="mobile-nav" id="mobile-nav" aria-label="Menu">
-        <a href="/">Início</a>
-        <a href="/#acomodacoes">Acomodações</a>
-        <a href="/#eventos">Eventos</a>
-        <a href="/#estrutura">Estrutura</a>
-        <a href="/disponibilidade.html">Disponibilidade</a>
+        <a href="/" data-cms="menu.inicio">Início</a>
+        <a href="/#acomodacoes" data-cms="menu.acomodacoes">Acomodações</a>
+        <a href="/#eventos" data-cms="menu.eventos">Eventos</a>
+        <a href="/#estrutura" data-cms="menu.estrutura">Estrutura</a>
+        <a href="/disponibilidade.html" data-cms="menu.disponibilidade">Disponibilidade</a>
     </nav>
 
     <main id="main">
@@ -74,8 +74,8 @@
                 </div>
                 <aside class="hero__side">
                     <div class="hero__ctas" data-reveal>
-                        <a href="/disponibilidade.html" class="btn btn--primary">Ver disponibilidade</a>
-                        <a href="#acomodacoes" class="btn btn--light">Acomodações</a>
+                        <a href="/disponibilidade.html" class="btn btn--primary" data-cms="inicio.botao-disponibilidade">Ver disponibilidade</a>
+                        <a href="#acomodacoes" class="btn btn--light" data-cms="inicio.botao-acomodacoes">Acomodações</a>
                     </div>
                     <div class="hero__meta" data-reveal data-cms-lista="inicio.numeros">
                         <template><div><span class="num" data-cms-campo="valor"></span><span class="label" data-cms-campo="rotulo"></span></div></template>
@@ -94,7 +94,7 @@
                     </div>
                 </aside>
             </div>
-            <div class="hero__scroll-cue" aria-hidden="true">Role para descobrir</div>
+            <div class="hero__scroll-cue" aria-hidden="true" data-cms="inicio.rolar">Role para descobrir</div>
         </section>
 
         <!-- ═══ FAIXA ═══ -->
@@ -117,7 +117,7 @@
             <div class="container">
                 <div class="intro__grid">
                     <figure class="intro__media scene scene--sunset" data-reveal data-cms-img="casa.foto">
-                        <span class="scene__label">Pôr do sol · Praia do Coqueiro</span>
+                        <span class="scene__label" data-cms="casa.foto-legenda">Pôr do sol · Praia do Coqueiro</span>
                     </figure>
                     <div>
                         <p class="eyebrow" data-reveal data-cms="casa.rotulo">A casa</p>
@@ -146,7 +146,7 @@
                         <h2 class="section-head__title" data-cms-titulo="acomodacoes.titulo">Escolha o seu <em>formato</em> de estadia</h2>
                         <p class="section-head__lead" data-cms-paragrafos="acomodacoes.texto">Seis duplex, quatro Pool Suítes e duas villas — você escolhe exatamente onde ficar. Valores a partir da diária de baixa temporada; fins de semana, feriados, alta temporada, Réveillon e Carnaval têm tarifa própria.</p>
                     </div>
-                    <a href="/disponibilidade.html" class="btn btn--ghost" data-reveal>Ver calendário e tarifas →</a>
+                    <a href="/disponibilidade.html" class="btn btn--ghost" data-reveal data-cms="acomodacoes.botao">Ver calendário e tarifas →</a>
                 </header>
                 <div class="units__grid" data-units></div>
             </div>
@@ -230,7 +230,7 @@
                         </ul>
                     </div>
                     <figure class="location__media scene scene--pool" data-reveal data-cms-img="local.foto">
-                        <span class="scene__label">Área da piscina</span>
+                        <span class="scene__label" data-cms="local.foto-legenda">Área da piscina</span>
                     </figure>
                 </div>
             </div>
@@ -245,8 +245,8 @@
                         <p class="cta-banner__lead" data-politica-texto="curto" data-cms-paragrafos="chamada.texto">Consulte o calendário em tempo real, monte o orçamento da sua estadia e garanta a data com uma pré-reserva.</p>
                     </div>
                     <div class="cta-banner__actions" data-reveal>
-                        <a href="/disponibilidade.html" class="btn btn--primary">Consultar datas</a>
-                        <a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener" class="btn btn--light">WhatsApp</a>
+                        <a href="/disponibilidade.html" class="btn btn--primary" data-cms="chamada.botao-datas">Consultar datas</a>
+                        <a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener" class="btn btn--light" data-cms="chamada.botao-whatsapp">WhatsApp</a>
                     </div>
                 </div>
             </div>
@@ -261,24 +261,24 @@
                     <p data-cms-paragrafos="rodape.texto">Condomínio de temporada e eventos na Praia do Coqueiro — Luís Correia, Piauí.</p>
                 </div>
                 <div>
-                    <h4>Navegue</h4>
+                    <h4 data-cms="rodape.titulo-navegue">Navegue</h4>
                     <ul>
-                        <li><a href="/#acomodacoes">Acomodações</a></li>
-                        <li><a href="/#eventos">Eventos</a></li>
-                        <li><a href="/#estrutura">Estrutura</a></li>
-                        <li><a href="/disponibilidade.html">Disponibilidade</a></li>
+                        <li><a href="/#acomodacoes" data-cms="menu.acomodacoes">Acomodações</a></li>
+                        <li><a href="/#eventos" data-cms="menu.eventos">Eventos</a></li>
+                        <li><a href="/#estrutura" data-cms="menu.estrutura">Estrutura</a></li>
+                        <li><a href="/disponibilidade.html" data-cms="menu.disponibilidade">Disponibilidade</a></li>
                     </ul>
                 </div>
                 <div>
-                    <h4>Reservas</h4>
+                    <h4 data-cms="rodape.titulo-reservas">Reservas</h4>
                     <ul>
-                        <li><a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener">WhatsApp oficial</a></li>
+                        <li><a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener" data-cms="rodape.whatsapp">WhatsApp oficial</a></li>
                         <li><a href="mailto:reservas@whitehouse.com.br" data-cms-email="rodape.email">reservas@whitehouse.com.br</a></li>
                         <li data-cms="rodape.horario">Atendimento 8h — 20h</li>
                     </ul>
                 </div>
                 <div>
-                    <h4>Endereço</h4>
+                    <h4 data-cms="rodape.titulo-endereco">Endereço</h4>
                     <ul data-cms-linhas="rodape.endereco">
                         <li>Praia do Coqueiro</li>
                         <li>Luís Correia — PI</li>
@@ -291,7 +291,7 @@
         </div>
     </footer>
 
-    <a class="wa-float" href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener">💬 Falar com reservas</a>
+    <a class="wa-float" href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener" data-cms="menu.whatsapp-flutuante">💬 Falar com reservas</a>
 
     <script src="/scripts/conteudo.js"></script>
     <script src="/scripts/vitrine.js"></script>

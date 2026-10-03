@@ -202,7 +202,30 @@ func juntar(grupos ...[]Campo) []Campo {
 
 // ─────────────────────────── O catálogo ─────────────────────────────────────
 
-var catalogo = []Secao{
+// catalogo é o catálogo completo: a rodada 1 (§4, abaixo) com a rodada 2
+// (§4b, catalogo_rodada2.go) costurada por montarCatalogo.
+var catalogo = montarCatalogo()
+
+// ordemDasSecoesNovas diz depois de qual seção da rodada 1 entra cada seção
+// nova da rodada 2 (docs/site-cms.md §4b, "Seções novas, na ordem do painel").
+var ordemDasSecoesNovas = map[string][]string{
+	"marca": {"menu"},
+	"disp":  {"calendario", "orcamento", "pre-reserva", "whatsapp"},
+}
+
+func montarCatalogo() []Secao {
+	out := make([]Secao, 0, len(catalogoRodada1)+len(secoesDaRodada2))
+	for _, s := range catalogoRodada1 {
+		s.Campos = append(append([]Campo{}, s.Campos...), camposDaRodada2[s.Chave]...)
+		out = append(out, s)
+		for _, nova := range ordemDasSecoesNovas[s.Chave] {
+			out = append(out, secoesDaRodada2[nova])
+		}
+	}
+	return out
+}
+
+var catalogoRodada1 = []Secao{
 	{Chave: "seo", Rotulo: "Google e redes", Campos: []Campo{
 		texto("seo.inicio.titulo", "Título da página inicial (aba do navegador e Google)",
 			"Aparece na aba do navegador e no resultado do Google. Ideal: até 60 letras.",
@@ -341,8 +364,11 @@ var catalogo = []Secao{
 	}},
 	{Chave: "chamada", Rotulo: "Chamada final", Campos: []Campo{
 		titulo("chamada.titulo", "Título", "Sua data ainda está *livre*?"),
-		longo("chamada.texto", "Texto", "",
-			"Consulte o calendário em tempo real, monte o orçamento da sua estadia e garanta a data com uma pré-reserva."),
+		// §4b: o original passa a ser a frase que o visitante vê hoje, com o
+		// prazo da política no lugar de {horas}.
+		longo("chamada.texto", "Texto",
+			"{horas} vira o prazo da pré-reserva da política em vigor. Se o sistema não responder, o site mostra a frase sem o número.",
+			"Consulte o calendário em tempo real, monte o orçamento da sua estadia e garanta a data com uma pré-reserva de {horas} horas."),
 	}},
 	{Chave: "rodape", Rotulo: "Rodapé e contato", Campos: []Campo{
 		longo("rodape.texto", "Frase do rodapé", "Aparece embaixo do logotipo, no rodapé de todas as páginas.",

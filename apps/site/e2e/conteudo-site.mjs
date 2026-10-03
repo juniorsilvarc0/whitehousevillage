@@ -48,6 +48,11 @@ const EDITADO = {
   'rodape.email': 'contato@exemplo.com.br',
   'rodape.endereco': 'Rua Um\nBairro Dois\nCidade',
   'chamada.texto': 'Chamada editada pelo gestor.',
+  'menu.reservar': 'Reserve já',
+  'marca.icone': { url: '/api/v1/public/media/44444444-4444-4444-4444-444444444444', alt: '' },
+  'acomodacoes.botao-card': 'Quero ver',
+  'acomodacoes.opcoes': '{n} apartamentos',
+  'local.foto-legenda': 'Legenda nova',
   'categoria.duplex.titulo': 'Duplex editado',
   'categoria.duplex.selo': 'Selo novo',
   'categoria.duplex.itens': [{ texto: 'item editado' }],
@@ -59,6 +64,30 @@ const PRODUTOS = [
   { id: 'b', code: 'duplex-brisa', name: 'Duplex Brisa', from_price_cents: 95000 },
   { id: 'c', code: 'grand-villa', name: 'Grand Villa', from_price_cents: 300000 }
 ];
+
+// Central de reservas inventada, para desenhar orçamento e formulário.
+const HOJE = '2026-11-02';
+const PRODUTO_DISP = { unit_type_id: 'u1', code: 'grand-villa', name: 'Grand Villa', capacity: 8, on_request: false,
+  from_price_cents: 300000, rates: [{ date_type: 'normal', price_cents: 300000 }], packages: [] };
+const POLITICA = { today: HOJE, hold_hours: 48, deposit_pct: 30, balance_due_days: 7 };
+function diasDe(url) {
+  const u = new URL(url);
+  const out = [];
+  for (let d = new Date(u.searchParams.get('from') + 'T12:00:00Z'); d.toISOString().slice(0, 10) < u.searchParams.get('to'); d.setUTCDate(d.getUTCDate() + 1)) {
+    out.push({ date: d.toISOString().slice(0, 10), available: true, on_request: false, price_cents: 300000, date_type: 'normal', min_nights: 1 });
+  }
+  return out;
+}
+const ORCAMENTO = { lines: [{ date_type: 'normal', label: 'Diária normal', nights: 2, subtotal_cents: 600000 }], cleaning_cents: 20000,
+  night_count: 2, total_cents: 620000, deposit_cents: 186000, balance_cents: 434000, avg_nightly_cents: 300000 };
+async function centralInventada(page, valores) {
+  await page.route('**/api/v1/public/site', r => (valores ? json(r, { values: valores }) : r.fulfill({ status: 502, body: '' })));
+  await page.route('**/api/v1/public/products', r => json(r, [PRODUTO_DISP]));
+  await page.route('**/api/v1/public/policy', r => json(r, POLITICA));
+  await page.route('**/api/v1/public/availability**', r => json(r, diasDe(r.request().url())));
+  await page.route('**/api/v1/public/quotes', r => json(r, ORCAMENTO));
+}
+const DEEP = '/disponibilidade.html?produto=grand-villa&checkin=2026-11-10&checkout=2026-11-12';
 
 const json = (route, data) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data }) });
 
@@ -75,6 +104,10 @@ try {
     confere(await page.locator('.hero__meta > div').count() === 3, 'três números originais na capa');
     confere(await page.locator('.amenities__grid > .amenity').count() === 8, 'oito itens de estrutura');
     confere(await page.locator('.events__grid > article').count() === 3, 'três cards de evento');
+    confere((await page.locator('.site-header__nav a').allTextContents()).join('|') === 'Início|Acomodações|Eventos|Estrutura|Disponibilidade', 'menu original');
+    confere((await page.textContent('[data-cms="menu.reservar"]')) === 'Reservar', 'botão Reservar original');
+    confere((await page.getAttribute('link[rel=icon]', 'href')) === '/assets/logo.png', 'ícone da aba original');
+    confere((await page.textContent('.unit-card__desc')).startsWith('Não conseguimos carregar'), 'aviso de acomodações sem a central');
     if (CAPTURAS) await page.screenshot({ path: CAPTURAS + '/site-original.png', fullPage: true });
     await page.close();
   }
@@ -123,6 +156,11 @@ try {
   confere((await card.locator('.unit-card__specs li').first().textContent()) === 'item editado', 'itens da categoria editados');
   confere((await card.locator('.unit-card__media').evaluate(e => getComputedStyle(e).backgroundImage)).includes('3333'), 'foto da categoria no card');
   confere((await page.locator('.unit-card').nth(1).locator('.unit-card__title').textContent()) === 'Grand Villa', 'categoria não editada fica como está');
+  confere((await page.textContent('[data-cms="menu.reservar"]')) === 'Reserve já', 'botão do topo editado');
+  confere((await page.getAttribute('link[rel=icon]', 'href')).includes('4444'), 'ícone da aba editado');
+  confere((await card.locator('.unit-card__cta').textContent()) === 'Quero ver', 'botão do card editado (texto desenhado pelo JavaScript)');
+  confere((await card.locator('.unit-card__specs li').last().textContent()) === '2 apartamentos', 'marcador {n} trocado no card');
+  confere((await page.textContent('.location__media .scene__label')) === 'Legenda nova', 'legenda do fundo desenhado editada');
   confere(pedidosDeFora.length === 0, 'nenhum pedido a host de fora' + (pedidosDeFora.length ? ': ' + pedidosDeFora.join(', ') : ''));
 
   if (CAPTURAS) {
@@ -142,6 +180,47 @@ try {
     await p.evaluate(() => window.WH_CONTEUDO);
     confere(await p.innerHTML(sel) === 'Editado <em>aqui</em>', caminho + ': ' + chave);
     confere(await p.textContent('[data-cms="rodape.copyright"]') === '© Teste', caminho + ': rodapé');
+    await p.close();
+  }
+
+  // ── 4. Textos desenhados pelo JavaScript (orçamento e pré-reserva) ──
+  console.log('4. orçamento e formulário: original e editado');
+  {
+    const p = await browser.newPage();
+    await centralInventada(p, null);
+    await p.goto(BASE + DEEP, { waitUntil: 'load' });
+    await p.waitForSelector('[data-hold] button[type=submit]');
+    confere((await p.textContent('[data-hold] button[type=submit]')).trim() === 'Fazer pré-reserva', 'sem edição: botão "Fazer pré-reserva"');
+    confere((await p.textContent('.quote__title')) === 'Seu orçamento', 'sem edição: título do orçamento');
+    confere((await p.textContent('.hold__consent span')).startsWith('Autorizo a White House'), 'sem edição: autorização original');
+    confere((await p.textContent('.quote__note')).includes('48h'), 'sem edição: prazo da política na nota');
+    confere((await p.textContent('.cta-banner__lead')).includes('48 horas') && (await p.textContent('.cta-banner__lead')).includes('30%'), 'sem edição: frase da política com números');
+    confere((await p.textContent('[data-cms="disp.legenda-livre"]')) === 'Livre', 'sem edição: legenda');
+    if (CAPTURAS) await p.screenshot({ path: CAPTURAS + '/disp-original.png', fullPage: true });
+    await p.close();
+  }
+  {
+    const p = await browser.newPage();
+    await centralInventada(p, {
+      'pre-reserva.botao': 'Segurar a <b>data</b>',
+      'pre-reserva.nota': 'Fica segura {horas}h, sinal {sinal}%. {inexistente}',
+      'orcamento.titulo': 'Quanto fica',
+      'disp.chamada.texto': 'Segura por {horas} horas e pronto.',
+      'disp.legenda-livre': 'Disponível',
+      'menu.disponibilidade': 'Calendário',
+      'calendario.noites-livres': '{n} livres — {acomodacao}'
+    });
+    await p.goto(BASE + DEEP, { waitUntil: 'load' });
+    await p.waitForSelector('[data-hold] button[type=submit]');
+    confere((await p.textContent('[data-hold] button[type=submit]')).trim() === 'Segurar a <b>data</b>', 'botão do formulário editado, HTML como texto');
+    confere(await p.locator('[data-hold] button[type=submit] b').count() === 0, 'nenhuma marcação injetada no botão');
+    confere((await p.textContent('.quote__title')) === 'Quanto fica', 'título do orçamento editado');
+    confere((await p.textContent('form .quote__note')) === 'Fica segura 48h, sinal 30%. {inexistente}', 'marcadores trocados pelos números da política');
+    confere((await p.textContent('.cta-banner__lead')) === 'Segura por 48 horas e pronto.', 'frase da política editada, com o número');
+    confere((await p.textContent('[data-cms="disp.legenda-livre"]')) === 'Disponível', 'legenda editada');
+    confere((await p.locator('[data-cms="menu.disponibilidade"]').allTextContents()).every(x => x === 'Calendário'), 'menu editado em todos os lugares');
+    confere(/^\d+ livres — Grand Villa$/.test(await p.textContent('.calendar__sub')), 'resumo do mês editado');
+    if (CAPTURAS) await p.screenshot({ path: CAPTURAS + '/disp-editado.png', fullPage: true });
     await p.close();
   }
 } finally {

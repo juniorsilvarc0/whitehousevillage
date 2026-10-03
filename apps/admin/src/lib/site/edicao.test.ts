@@ -7,6 +7,7 @@ import {
   itemVazio,
   limiteDe,
   listaComFotoFaltando,
+  marcadoresFaltando,
   mover,
   mudou,
   paragrafos,
@@ -171,5 +172,17 @@ describe("mensagemDoSite", () => {
   });
   it("arquivo grande demais", () => {
     expect(mensagemDoSite({ code: "INTERNAL", details: {} }, 413)).toMatch(/^Arquivo grande demais/);
+  });
+});
+
+describe("marcadoresFaltando", () => {
+  it("aponta o {marcador} do original que sumiu do texto editado", () => {
+    const original = "A pré-reserva segura a data por {horas}h; sinal de {sinal}%.";
+    expect(marcadoresFaltando(original, "Segura por {horas}h.")).toEqual(["{sinal}"]);
+    expect(marcadoresFaltando(original, "Segura por {horas}h, sinal {sinal}%.")).toEqual([]);
+  });
+  it("texto sem marcador e valor que não é texto não geram aviso", () => {
+    expect(marcadoresFaltando("Reservar", "Reserve já")).toEqual([]);
+    expect(marcadoresFaltando({ url: "/x" }, "")).toEqual([]);
   });
 });

@@ -190,5 +190,16 @@ window.WH = (function () {
   /* Escapa texto antes de ir para innerHTML — nomes vêm do banco. */
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  return { api, novaChave, textoDe, categoriaEditada, agrupar, CATEGORIAS, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
+  /* Textos editáveis no painel (menu "Site"), com o texto de fábrica como
+     reserva. `t` devolve HTML já escapado; `cru`, o texto puro. Os dois trocam
+     {marcadores} pelos valores passados — números que vêm da API. */
+  const semCms = {
+    t: (chave, padrao, vars) => esc(padrao).replace(/\{([a-z][a-z0-9-]*)\}/g, (m, n) =>
+      vars && n in vars ? (vars[n] && typeof vars[n] === 'object' ? vars[n].html : esc(vars[n])) : m),
+    cru: (chave, padrao, vars) => padrao.replace(/\{([a-z][a-z0-9-]*)\}/g, (m, n) => vars && n in vars ? String(vars[n]) : m)
+  };
+  const t = (chave, padrao, vars) => (window.WH_CMS || semCms).t(chave, padrao, vars);
+  const cru = (chave, padrao, vars) => (window.WH_CMS || semCms).cru(chave, padrao, vars);
+
+  return { t, cru, api, novaChave, textoDe, categoriaEditada, agrupar, CATEGORIAS, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
 })();

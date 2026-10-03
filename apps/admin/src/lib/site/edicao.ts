@@ -49,6 +49,17 @@ export function paragrafos(texto: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Marcadores `{nome}` do texto original que sumiram do texto editado. O site
+ * troca cada marcador por um número ou nome do sistema (prazo, sinal, nome da
+ * acomodação); sem ele, a informação deixa de aparecer. Não é erro — é aviso.
+ */
+export function marcadoresFaltando(original: unknown, texto: string): string[] {
+  if (typeof original !== "string") return [];
+  const nomes = [...new Set([...original.matchAll(/\{([a-z][a-z0-9-]*)\}/g)].map((m) => m[0]))];
+  return nomes.filter((m) => !texto.includes(m));
+}
+
 /** Limite de caracteres de cada tipo, quando o catálogo não disser outro. */
 export function limiteDe(campo: Pick<CampoDoSite, "kind" | "max">): number | null {
   if (campo.max && campo.max > 0) return campo.max;

@@ -83,6 +83,14 @@ describe("CampoDoSiteEditor", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toBe("Texto longo demais."));
   });
 
+  it("avisa quando o {marcador} do texto original some", () => {
+    const nota = titulo({ key: "orcamento.nota", label: "Nota", kind: "texto_longo", value: "Segura por {horas}h.", default_value: "Segura por {horas}h." });
+    render(<CampoDoSiteEditor campo={nota} podeEditar acoes={acoes()} />);
+    expect(document.querySelector("[data-aviso-marcador]")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Nota"), { target: { value: "Segura por um dia." } });
+    expect(document.querySelector("[data-aviso-marcador]")?.textContent).toContain("{horas}");
+  });
+
   it("sem permissão de editar: nada de Salvar nem Restaurar", () => {
     render(<CampoDoSiteEditor campo={titulo({ is_default: false })} podeEditar={false} acoes={acoes()} />);
     expect(screen.queryByRole("button", { name: "Salvar" })).toBeNull();
