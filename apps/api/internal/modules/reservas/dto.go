@@ -211,7 +211,11 @@ type HospedeDaReserva struct {
 	ContactID uuid.UUID `json:"contact_id"`
 	Nome      string    `json:"name"`
 	Telefone  *string   `json:"phone_e164"`
-	Titular   bool      `json:"is_lead_guest"`
+	// Email vai cheio pelo mesmo motivo do telefone: é a ficha da reserva,
+	// de onde a gestão fala com o hóspede — e a mesma leitura já grava o
+	// rastro em pii_access_log.
+	Email   *string `json:"email"`
+	Titular bool    `json:"is_lead_guest"`
 }
 
 // EventoDaReserva é uma linha de `reservation_events` — append-only.

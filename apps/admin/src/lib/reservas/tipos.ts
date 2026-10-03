@@ -98,6 +98,7 @@ export type HospedeDaReserva = {
   contact_id: string;
   name: string;
   phone_e164: string | null;
+  email: string | null;
   is_lead_guest: boolean;
 };
 
