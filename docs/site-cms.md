@@ -134,7 +134,26 @@ campos `categoria.<c>.*` quando editados.
 
 - Volume `midia` montado em `/data/midia` no contêiner da API (dev e prod),
   variável `MEDIA_DIR=/data/midia`.
-- **Na VPS (passo manual do dono, uma vez):** o nginx do host que atende
-  `gestor.whitehousevillage.com.br` precisa de `client_max_body_size 300m;`
-  — o padrão (1 MB) recusa qualquer foto. O site público não precisa (só GET).
-- Backup: o volume `midia` entra no backup junto com o banco.
+  A imagem da API (distroless, `nonroot` uid 65532) já traz `/data/midia` com
+  esse dono; o volume novo herda na primeira montagem. Só a API monta (o worker
+  não). Nome no host: `whv-gestao_midia` na VPS, `whitehousevillage_midia` no dev.
+  Sobrevive a todo redeploy; o `deploy.sh` confere o mount ao fim.
+- **Na VPS (passo manual do dono, uma vez):** em `/etc/nginx/sites-available/whv-gestao`,
+  no(s) bloco(s) `server` de `gestor`/`corretor` (o que tem
+  `proxy_pass http://127.0.0.1:3110`), uma linha `client_max_body_size 300m;`
+  abaixo do `server_name`; depois `sudo nginx -t && sudo systemctl reload nginx`.
+  O padrão (1 MB) recusa qualquer foto com `413`. O bloco do `www` não muda (só
+  GET), nem nada fora desse arquivo. Passo a passo e conferência:
+  `docs/infra.md` §0, "Nginx do host já configurado?".
+- Site (nginx de `apps/site`): `/api/v1/public/media/` tem location própria —
+  sem buffer (vídeo passa em fluxo), `Range`/`If-Range` repassados, 206 e
+  `Content-Range` da API intactos, e **sem** o `Cache-Control: no-store` da
+  vitrine (que somado ao `immutable` da API anularia o cache).
+- Backup: `make backup` grava o dump e o tar do volume com o mesmo carimbo; na
+  VPS, comandos em `docs/infra.md` §5.1.
+- Prazos que dependem da API (código da aplicação, não da infra): o
+  `http.Server` de `cmd/api` tem `ReadTimeout` 30 s e `WriteTimeout` 60 s. O
+  upload de 300 MB e o envio de um vídeo a cliente lento precisam estender o
+  prazo **na própria rota** (`http.ResponseController.SetReadDeadline` /
+  `SetWriteDeadline`). Na VPS o buffer do nginx do host esconde isso; no dev,
+  sem nginx do host na frente do painel, não esconde.

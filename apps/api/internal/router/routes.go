@@ -11,6 +11,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/site"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/stream"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
@@ -94,6 +95,9 @@ type Deps struct {
 
 	// Vitrine é a superfície pública do site de vendas (rotas_vitrine.go).
 	Vitrine *vitrine.Handler
+
+	// Site é a área administrativa do site de vendas (rotas_site.go).
+	Site *site.Handler
 }
 
 // Rotas devolve a tabela completa da API v1, concatenando os grupos.
@@ -117,6 +121,7 @@ func Rotas(d Deps) []Rota {
 		// evita reescrever um arquivo de outro agente.
 		func(d Deps) []Rota { return rotasContatos(d.Contatos) },
 		rotasVitrine,
+		rotasSite,
 	} {
 		todas = append(todas, grupo(d)...)
 	}
@@ -184,8 +189,15 @@ func rotasNucleo(d Deps) []Rota {
 // confere que todo path listado aqui existe de fato na tabela — sem isso,
 // renomear `/stream` devolveria o SSE ao teto sem uma linha vermelha em lugar
 // nenhum.
+//
+// As duas rotas de ARQUIVO do site também ficam fora: o upload de um vídeo de
+// 300 MB numa conexão de celular passa de 50 s com folga, e o teto cancelaria
+// o contexto antes do INSERT em site_media; a entrega do vídeo (Range) idem.
+// Cada uma estende o próprio prazo de rede (internal/modules/site/handler.go).
 var rotasDeLongaDuracao = map[string]bool{
-	"/stream": true,
+	"/stream":          true,
+	RotaDeEnvioDeMidia: true,
+	RotaDaMidiaPublica: true,
 }
 
 // EhDeLongaDuracao diz se a rota fica aberta por tempo indeterminado.

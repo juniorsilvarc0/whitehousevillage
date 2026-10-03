@@ -20,6 +20,10 @@ type Config struct {
 	CORSOrigins []string
 	LogLevel    string
 	Timezone    string
+
+	// MediaDir é o volume das fotos e vídeos enviados pelo painel para o site
+	// (docs/site-cms.md §8). Em contêiner, /data/midia; em dev, ./data/midia.
+	MediaDir string
 }
 
 // Load lê o ambiente. Em desenvolvimento aceita padrões; em produção exige os
@@ -33,6 +37,7 @@ func Load() (Config, error) {
 		LogLevel:    env("LOG_LEVEL", "info"),
 		Timezone:    env("TZ", "America/Fortaleza"),
 		CORSOrigins: split(env("CORS_ORIGINS", "http://localhost:3000")),
+		MediaDir:    env("MEDIA_DIR", "./data/midia"),
 	}
 
 	var err error

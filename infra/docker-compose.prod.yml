@@ -27,8 +27,9 @@
 # RBAC da API.
 #
 # A API NÃO é publicada. O painel é BFF (o navegador nunca fala com a API) e o
-# site ainda não chama a API (passo A2 do docs/unificacao-site-crm.md). Rota
-# que ninguém precisa alcançar de fora não ganha nome no DNS.
+# site chega a ela só pelo próprio nginx, e só em /api/v1/public/* (passo A2 do
+# docs/unificacao-site-crm.md). Rota que ninguém precisa alcançar de fora não
+# ganha nome no DNS.
 #
 # Uso: infra/deploy.sh (na VPS). Variáveis em infra/.env.production (modelo em
 # infra/.env.production.example), nunca no repositório.
@@ -115,6 +116,15 @@ services:
       APP_ENV: production
       API_PORT: "8080"
       TZ: America/Fortaleza
+      MEDIA_DIR: /data/midia
+    # Fotos e vídeos enviados pelo painel (docs/site-cms.md §8). Volume nomeado:
+    # com `name: whv-gestao` ele vira `whv-gestao_midia` no host — prefixo
+    # próprio, nenhum outro projeto da VPS o enxerga. Sobrevive a todo redeploy
+    # (o deploy.sh nunca roda `down`, muito menos `down -v`) e herda da imagem o
+    # dono nonroot de /data/midia na primeira montagem. Entra no backup junto
+    # com o banco (docs/infra.md §5.1). Só a API monta; o worker não usa mídia.
+    volumes:
+      - midia:/data/midia
     # `borda` além de `interna`: o nginx do site encaminha /api/v1/public/* para
     # `api:8080` (passo A2 da unificação), e o site só vive na borda. Estar na
     # borda NÃO publica a API: sem label do Traefik e sem `ports`, ela continua
@@ -209,3 +219,5 @@ networks:
 volumes:
   pgdata:
   acme:
+  # Fotos e vídeos do site. NUNCA apagar: não há outra cópia além do backup.
+  midia:

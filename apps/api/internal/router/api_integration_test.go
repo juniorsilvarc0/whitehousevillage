@@ -59,6 +59,8 @@ func subirAPI(t *testing.T) *ambiente {
 		AccessTTL:   15 * time.Minute,
 		RefreshTTL:  720 * time.Hour,
 		CORSOrigins: []string{"http://localhost:3000"},
+		// Volume de mídia do site descartável por teste (docs/site-cms.md).
+		MediaDir: t.TempDir(),
 	}
 
 	h, err := New(Opcoes{Config: cfg, Pool: pool})

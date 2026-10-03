@@ -49,6 +49,9 @@ func TestNenhumaRotaFicaSemClassificacao(t *testing.T) {
 				"POST /public/quotes":      true,
 				// Pré-reserva do próprio cliente (B1): a única pública que grava.
 				"POST /public/holds": true,
+				// Conteúdo e mídia do site editados pela gestão (rotas_site.go).
+				"GET /public/site":       true,
+				"GET /public/media/{id}": true,
 			}
 			if !publicasPermitidas[chave] {
 				t.Errorf("%s ficou pública sem estar na lista fechada", chave)
@@ -136,16 +139,25 @@ func TestValidarTabelaPegaRotaSemPermissao(t *testing.T) {
 // do §5 de docs/unificacao-site-crm.md. O teste olha a TABELA real: uma rota
 // pública nova sob /public/ entra no freio sem ninguém lembrar, e uma rota
 // pública FORA de /public/ que não seja sonda nem /auth acende aqui.
+//
+// A única exceção ao limitador da vitrine é a entrega de mídia, que passa por
+// um limitador PRÓPRIO (EhMidiaPublica) — e a exceção é uma rota só, por path
+// exato: se mais alguma /public/ escapar do freio da vitrine, acende aqui.
 func TestTodaRotaPublicaDeNegocioFicaAtrasDoLimitador(t *testing.T) {
-	vitrine := 0
+	vitrine, midia := 0, 0
 	for _, r := range tabela(t) {
 		if r.Acesso != AcessoPublico {
 			continue
 		}
 		if strings.HasPrefix(r.Path, "/public/") {
 			vitrine++
-			if !EhDaVitrine(r) {
-				t.Errorf("%s %s é da vitrine e não passa pelo limitador", r.Metodo, r.Path)
+			daVitrine, daMidia := EhDaVitrine(r), EhMidiaPublica(r)
+			if daMidia {
+				midia++
+			}
+			if daVitrine == daMidia {
+				t.Errorf("%s %s precisa passar por exatamente um limitador (vitrine=%v, mídia=%v)",
+					r.Metodo, r.Path, daVitrine, daMidia)
 			}
 			continue
 		}
@@ -155,5 +167,24 @@ func TestTodaRotaPublicaDeNegocioFicaAtrasDoLimitador(t *testing.T) {
 	}
 	if vitrine == 0 {
 		t.Fatal("nenhuma rota /public/ na tabela: a vitrine sumiu do router")
+	}
+	if midia != 1 {
+		t.Fatalf("esperada exatamente uma rota de mídia pública (%s), achei %d", RotaDaMidiaPublica, midia)
+	}
+}
+
+// As rotas de arquivo do site ficam fora do teto de 50 s; as de JSON, dentro.
+func TestRotasDeArquivoDoSiteFicamForaDoTeto(t *testing.T) {
+	for _, r := range tabela(t) {
+		switch r.Path {
+		case RotaDeEnvioDeMidia, RotaDaMidiaPublica:
+			if !EhDeLongaDuracao(r) {
+				t.Errorf("%s %s está sob o teto de 50 s: upload/entrega de vídeo seria cortado", r.Metodo, r.Path)
+			}
+		case "/site/content", "/site/content/{key}", "/public/site":
+			if EhDeLongaDuracao(r) {
+				t.Errorf("%s %s escapou do teto por requisição", r.Metodo, r.Path)
+			}
+		}
 	}
 }

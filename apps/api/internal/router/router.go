@@ -3,7 +3,9 @@ package router
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/site"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/stream"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
@@ -88,7 +91,12 @@ func New(o Opcoes) (http.Handler, error) {
 
 		// Vitrine: as rotas /public/* do site de vendas.
 		Vitrine: vitrine.NovoHandler(o.Pool, tx),
+
+		// Site: conteúdo editável do site de vendas e o volume de mídia.
+		Site: site.NovoHandler(o.Pool, tx, o.Config.MediaDir),
 	}
+
+	prepararVolumeDeMidia(o.Config.MediaDir)
 
 	tabela := Rotas(deps)
 	if err := ValidarTabela(tabela); err != nil {
@@ -122,10 +130,9 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 	r.Use(httpx.Recoverer)
 	r.Use(httpx.RequestLogger)
 	r.Use(httpx.CORS(cfg.CORSOrigins))
-	// Teto absoluto por requisição: consulta presa não deve segurar conexão
-	// para sempre. Abaixo do WriteTimeout do servidor, para o cliente receber a
-	// resposta de timeout em vez da conexão cortada.
-	r.Use(middleware.Timeout(50 * time.Second))
+	// O teto absoluto por requisição (middleware.Timeout) é aplicado POR ROTA,
+	// em comTeto, e não aqui: as rotas de longa duração (SSE, upload e entrega
+	// de vídeo — rotasDeLongaDuracao) precisam ficar fora dele.
 
 	r.NotFound(func(w http.ResponseWriter, req *http.Request) {
 		httpx.Error(w, req, apperr.NotFound("Recurso"))
@@ -137,11 +144,12 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 	limitadorDeLogin := auth.LimitadorDeLogin()
 	limitadorDaVitrine := LimitadorDaVitrine()
 	limitadorDePreReserva := LimitadorDePreReserva()
+	limitadorDeMidia := LimitadorDeMidia()
 
 	// As sondas primeiro, na RAIZ e fora do prefixo — ver Rota.NaRaiz.
 	for _, rota := range tabela {
 		if rota.NaRaiz {
-			r.Method(rota.Metodo, rota.Path, rota.Handler)
+			r.Method(rota.Metodo, rota.Path, comTeto(rota, rota.Handler))
 		}
 	}
 
@@ -158,13 +166,16 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 					// (5 erros em 15 min) fica no service.
 					h = limitadorDeLogin.Middleware(h)
 				}
-				if EhDaVitrine(rota) {
+				switch {
+				case EhMidiaPublica(rota):
+					h = limitadorDeMidia.Middleware(h)
+				case EhDaVitrine(rota):
 					h = limitadorDaVitrine.Middleware(h)
 				}
 				if rota.Path == RotaDePreReservaPublica {
 					h = limitadorDePreReserva.Middleware(h)
 				}
-				pub.Method(rota.Metodo, rota.Path, h)
+				pub.Method(rota.Metodo, rota.Path, comTeto(rota, h))
 			}
 		})
 
@@ -180,7 +191,7 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 				if rota.Acesso == AcessoPermissao {
 					h = auth.Middleware(rota.Recurso, rota.Acao)(h)
 				}
-				priv.Method(rota.Metodo, rota.Path, h)
+				priv.Method(rota.Metodo, rota.Path, comTeto(rota, h))
 			}
 		})
 	})
@@ -208,7 +219,46 @@ const RotaDePreReservaPublica = "/public/holds"
 // (módulo vitrine) cobre quem troca de IP; este cobre quem troca de telefone.
 func LimitadorDePreReserva() *httpx.Limitador { return httpx.NovoLimitador(6, time.Hour) }
 
-// EhDaVitrine diz se a rota é da superfície pública do site.
+// EhDaVitrine diz se a rota é da superfície pública do site e passa pelo
+// limitador de 120/min. A mídia pública tem limitador próprio (EhMidiaPublica).
 func EhDaVitrine(r Rota) bool {
-	return r.Acesso == AcessoPublico && strings.HasPrefix(r.Path, "/public/")
+	return r.Acesso == AcessoPublico && strings.HasPrefix(r.Path, "/public/") && !EhMidiaPublica(r)
+}
+
+// EhMidiaPublica diz se a rota é a entrega de foto/vídeo do site.
+func EhMidiaPublica(r Rota) bool {
+	return r.Acesso == AcessoPublico && r.Path == RotaDaMidiaPublica
+}
+
+// LimitadorDeMidia freia a entrega de foto e vídeo do site por IP: 1200 por
+// minuto. Um <video> pede o arquivo em pedaços (Range) — dezenas de pedidos
+// para tocar um vídeo de capa —, e uma página com várias fotos soma outros
+// tantos. Sob os 120/min da vitrine, o vídeo travaria no meio para um
+// visitante comum; 1200 ainda corta quem baixa em laço.
+func LimitadorDeMidia() *httpx.Limitador { return httpx.NovoLimitador(1200, time.Minute) }
+
+// tetoPorRequisicao: consulta presa não deve segurar conexão para sempre.
+// Abaixo do WriteTimeout do servidor, para o cliente receber a resposta de
+// timeout em vez da conexão cortada.
+const tetoPorRequisicao = 50 * time.Second
+
+// comTeto aplica o teto por requisição, exceto às rotas de longa duração.
+func comTeto(rota Rota, h http.Handler) http.Handler {
+	if EhDeLongaDuracao(rota) {
+		return h
+	}
+	return middleware.Timeout(tetoPorRequisicao)(h)
+}
+
+// prepararVolumeDeMidia cria o diretório de mídia se faltar. Não derruba a
+// subida: sem o volume a API inteira continua servindo, e só o envio de
+// arquivo falha (com erro claro no log) — melhor que o painel todo fora.
+func prepararVolumeDeMidia(dir string) {
+	if dir == "" {
+		slog.Warn("MEDIA_DIR vazio: envio de fotos e vídeos do site desligado")
+		return
+	}
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		slog.Error("não consegui preparar o volume de mídia do site", "dir", dir, "err", err)
+	}
 }

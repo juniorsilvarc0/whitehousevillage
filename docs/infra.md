@@ -5,7 +5,8 @@
 > escritos e validados com `docker compose config`, mas **ainda não executados
 > numa VPS**. **Não existem**: serviço de `backup` automático, restore verificado,
 > `/metrics`, push de imagem para registry. O backup que existe é `make backup`,
-> manual; `make restore` reprova de propósito. O worker **não** usa River: é um
+> manual (banco + volume `midia` das fotos/vídeos do site; na VPS, os comandos
+> de §5.1); `make restore` reprova de propósito. O worker **não** usa River: é um
 > loop próprio com um job (`holds.expire`). As seções 2, 3, 5, 6 e 7 são plano.
 
 ## 0. Deploy na VPS (82.29.59.229) sem afetar o que já roda nela
@@ -65,12 +66,65 @@ server { listen 80; server_name www.whitehousevillage.com.br;
                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                proxy_set_header X-Forwarded-Proto $scheme; } }
 server { listen 80; server_name gestor.whitehousevillage.com.br corretor.whitehousevillage.com.br;
+  # fotos (15 MB) e vídeos (300 MB) do menu Site; o padrão de 1 MB recusa tudo
+  client_max_body_size 300m;
   location / { proxy_pass http://127.0.0.1:3110; proxy_set_header Host $host;
                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
                proxy_set_header X-Forwarded-Proto $scheme;
                # o mapa usa SSE: sem buffer e com leitura longa
                proxy_buffering off; proxy_read_timeout 1h; } }
 ```
+
+#### Nginx do host já configurado? Passo novo (03/10/2026): envio de fotos e vídeos
+
+O menu **Site** do painel envia fotos (até 15 MB) e vídeos (até 300 MB) pelo
+endereço do gestor. O nginx do host aceita, por padrão, **1 MB** por pedido: sem
+este passo, todo envio para no nginx com `413 Request Entity Too Large` e o
+painel nunca recebe o arquivo. É **uma linha**, só no(s) bloco(s) do painel,
+uma vez só:
+
+```bash
+ssh gondor
+sudo cp /etc/nginx/sites-available/whv-gestao ~/whv-gestao.nginx.antes-midia   # cópia de segurança, fora do nginx
+sudo nano /etc/nginx/sites-available/whv-gestao
+```
+
+No arquivo, em **cada** bloco `server { ... }` cujo `server_name` é
+`gestor.whitehousevillage.com.br corretor.whitehousevillage.com.br` — depois do
+`certbot` costumam ser dois: o que tem `listen 443 ssl` e o
+`proxy_pass http://127.0.0.1:3110` (este é o que importa) e o de `listen 80`,
+que só redireciona (lá a linha é inócua, pode pôr ou não) — acrescente, logo
+abaixo da linha `server_name ...;`:
+
+```nginx
+    client_max_body_size 300m;
+```
+
+Não mexa no bloco do `www` (o site público só baixa arquivos, não envia) nem em
+nenhum outro arquivo do nginx. Depois:
+
+```bash
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+O `nginx -t` reprova **antes** de qualquer mudança valer se houver erro de
+digitação (aí nada muda; corrija ou volte a cópia). O `reload` não derruba
+conexões e não afeta os outros sites da VPS: `client_max_body_size` vale só
+para o bloco `server` onde foi escrito. Conferência (de qualquer máquina):
+
+```bash
+head -c 2000000 /dev/zero > /tmp/2mb.bin
+curl -s -o /dev/null -w '%{http_code}\n' -X POST --data-binary @/tmp/2mb.bin \
+  https://gestor.whitehousevillage.com.br/api/site/midia
+# 413 = a linha ainda não vale; qualquer outro código (401, 403...) = o nginx deixou passar
+```
+
+O buffer de envio do nginx fica **ligado** (o padrão), de propósito: ele recebe
+o arquivo inteiro do navegador e só então o entrega ao painel em
+`127.0.0.1`, de uma vez. Uma conexão de casa lenta leva minutos para subir um
+vídeo; sem o buffer esses minutos chegariam ao Next e à API, que têm prazos
+próprios de leitura. O custo é o arquivo ficar em disco temporário do nginx
+durante o envio (até 300 MB por envio simultâneo).
 
 ```caddy
 # Caddy (emite o certificado sozinho)
@@ -240,6 +294,54 @@ Quais testes são "de concorrência" é decidido por **nome**, no regex `TESTES_
 # restore
 gunzip -c backup-20260820.sql.gz | docker compose exec -T postgres psql -U $POSTGRES_USER -d $POSTGRES_DB
 ```
+
+### 5.1 Fotos e vídeos do site (volume `midia`)
+
+Estado em 03/10/2026: **manual**, como o dump. O que o painel envia no menu Site
+(docs/site-cms.md) fica no volume nomeado `midia`, montado **só na API** em
+`/data/midia` (`MEDIA_DIR`). No host ele se chama `whitehousevillage_midia` (dev)
+e `whv-gestao_midia` (VPS), e mora em `/var/lib/docker/volumes/<nome>/_data`.
+Ele atravessa todo redeploy (`up -d` não recria volume; o `deploy.sh` nunca roda
+`down`, e confere ao fim que a API subiu com o volume montado). Só `down -v` ou
+`docker volume rm` o apagam — e não há outra cópia além do backup.
+
+**Dev**: `make backup` grava o dump e, com o mesmo carimbo de hora,
+`infra/backups/manual-<carimbo>-midia.tar.gz`.
+
+**VPS** (o `Makefile` aponta para o compose de dev; na VPS, à mão, da pasta
+`/opt/whv-gestao`):
+
+```bash
+ts=$(date +%Y%m%d-%H%M%S); mkdir -p ~/backups
+docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.production exec -T postgres \
+  sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB"' | gzip > ~/backups/whv-$ts.sql.gz
+docker run --rm --network none -v whv-gestao_midia:/midia:ro postgres:16-alpine \
+  tar -C /midia -czf - . > ~/backups/whv-$ts-midia.tar.gz
+gunzip -c ~/backups/whv-$ts.sql.gz | tail -n 10 | grep -q 'dump complete' \
+  && tar -tzf ~/backups/whv-$ts-midia.tar.gz >/dev/null && echo "backup ok: whv-$ts"
+```
+
+O volume é lido **só leitura** (`:ro`), por um container descartável sem rede; a
+imagem é a do Postgres, que já está na VPS. Dump e mídia andam juntos: o banco
+aponta para ids de arquivo.
+
+**Restaurar a mídia**: os ids são imutáveis (trocar foto = arquivo novo), então
+extrair por cima do volume só **acrescenta** o que falta — nunca troca um
+arquivo por outro diferente. Mesmo assim, confira o conteúdo antes (1ª linha):
+
+```bash
+docker run --rm --network none -v ~/backups:/b:ro postgres:16-alpine tar -tzvf /b/whv-<ts>-midia.tar.gz | head
+docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.production stop api
+docker run --rm --network none -v whv-gestao_midia:/midia -v ~/backups:/b:ro postgres:16-alpine \
+  sh -c 'tar -C /midia -xzf /b/whv-<ts>-midia.tar.gz && chown -R 65532:65532 /midia'
+docker compose -f infra/docker-compose.prod.yml --env-file infra/.env.production start api
+```
+
+**Dono do diretório**: a API roda como `nonroot` (uid 65532). A imagem já traz
+`/data/midia` com esse dono, e um volume **novo** herda isso na primeira
+montagem. Se um volume antigo vier com outro dono (upload falha com
+`permission denied` no log da API), o conserto é o `chown` acima, sozinho:
+`docker run --rm --network none -v whv-gestao_midia:/midia postgres:16-alpine chown -R 65532:65532 /midia`.
 
 ## 6. Observabilidade
 

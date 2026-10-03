@@ -50,6 +50,8 @@ export const RECURSOS_DO_CATALOGO = [
   "settings",
   "integrations",
   "audit",
+
+  "site",
 ] as const;
 
 /** Todo código de recurso citado pelo painel tem que ser um destes. */

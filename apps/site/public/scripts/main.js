@@ -66,6 +66,8 @@
   if (textosDaPolitica.length && window.WH) {
     WH.api.politica().then(P => {
       textosDaPolitica.forEach(el => {
+        /* Texto editado pelo gestor no painel vale mais que a frase-padrão. */
+        if (el.hasAttribute('data-cms-aplicado')) return;
         el.textContent = el.dataset.politicaTexto === 'curto'
           ? `Consulte o calendário em tempo real, monte o orçamento da sua estadia e garanta a data com uma pré-reserva de ${P.hold_hours} horas.`
           : `A pré-reserva bloqueia o calendário por ${P.hold_hours} horas. A confirmação acontece com o sinal de ${P.deposit_pct}%; o saldo vence ${P.balance_due_days} dias antes do check-in.`;
@@ -96,19 +98,21 @@
       setTimeout(sweep, 300);
     };
 
-    WH.api.produtos().then(produtos => {
+    const editados = window.WH_CONTEUDO || Promise.resolve({});
+    Promise.all([WH.api.produtos(), editados]).then(([produtos, valores]) => {
       /* Um card por categoria (Duplex, Pool Suítes, as villas, a Completa):
          treze cards iguais na home cansariam. A escolha da unidade exata —
          Duplex Aurora, Pool Suíte Coral — acontece na central de reservas. */
       grid.innerHTML = WH.agrupar(produtos).map(g => {
-        const t = WH.CATEGORIAS[g.chave] || { tag: 'Hospedagem', scene: 'scene--house', specs: [], desc: '' };
+        const t = WH.categoriaEditada(g.chave, valores);
         const precos = g.produtos.map(p => p.from_price_cents).filter(v => v != null);
         const menor = precos.length ? Math.min.apply(null, precos) : null;
-        const titulo = g.produtos.length === 1 ? g.produtos[0].name : g.titulo;
+        const titulo = t.tituloEditado ? t.titulo
+          : (g.produtos.length === 1 ? g.produtos[0].name : g.titulo);
         const quantos = g.produtos.length > 1 ? `${g.produtos.length} opções` : '';
         return `
       <article class="unit-card" data-reveal>
-        <div class="unit-card__media scene ${t.scene}">
+        <div class="unit-card__media scene ${t.scene}" data-categoria="${WH.esc(g.chave)}">
           <span class="unit-card__tag">${WH.esc(t.tag)}</span>
           <span class="scene__label">${WH.esc(titulo)}</span>
         </div>
@@ -125,6 +129,13 @@
         </div>
       </article>`;
       }).join('');
+      /* Foto da categoria, quando o gestor pôs uma: substitui o fundo desenhado. */
+      if (window.WH_CMS) {
+        grid.querySelectorAll('[data-categoria]').forEach(el => {
+          const t = WH.categoriaEditada(el.dataset.categoria, valores);
+          if (t.foto) WH_CMS.aplicarImagem(el, t.foto);
+        });
+      }
       animar();
     }).catch(() => {
       grid.innerHTML = `

@@ -163,6 +163,12 @@ tags:
       `available: false`); nada aqui grava nem segura data; toda rota é limitada
       por IP (120/min, `RATE_LIMITED`). O público não negocia: não existe campo
       de desconto, e a resposta não carrega alçada, versão de política nem tabela.
+  - name: Site
+    description: |
+      Área administrativa do site de vendas (menu "Site" do painel) —
+      `docs/site-cms.md`. A gestão edita textos, fotos e vídeos de um catálogo
+      fixo de campos; salvar = publicar, restaurar = apagar a edição. As duas
+      rotas `/public/*` daqui servem o site sem token.
   - name: Tempo real
     description: |
       O barramento de eventos que faz o mapa de ocupação e o kanban se atualizarem
@@ -5715,6 +5721,177 @@ paths:
         "422": { $ref: "#/components/responses/Erro" }
         "429": { $ref: "#/components/responses/Erro" }
 
+  /site/content:
+    get:
+      tags: [Site]
+      summary: Catálogo de campos do site com o valor atual de cada um
+      description: |
+        Todas as seções do catálogo (`internal/modules/site/catalogo.go`), na
+        ordem do painel. Cada campo traz o valor atual (`value`), o original do
+        site (`default_value`) e se está no original (`is_default`). Mídia vem
+        resolvida: `{media_id, url, alt}` (vídeo: `{media_id, url}`); mídia
+        original do site tem `media_id: null` (ex. `/assets/logo.png`); bloco de
+        cena sem foto hoje tem valor `null`.
+      x-rbac: { recurso: site, acao: ver }
+      responses:
+        "200":
+          description: Catálogo agrupado por seção
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ConteudoDoSite" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+
+  /site/content/{key}:
+    parameters:
+      - name: key
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[a-z0-9]+([.-][a-z0-9]+)*$" }
+        description: Chave do catálogo, ex. `inicio.titulo`, `categoria.grand-villa.foto`.
+    put:
+      tags: [Site]
+      summary: Grava (e publica) o valor de um campo do site
+      description: |
+        Salvar = publicar. O valor é validado pelo tipo do campo no catálogo:
+        `texto`/`titulo` até 200 letras (texto sem quebra de linha),
+        `texto_longo` até 2000, `imagem` `{media_id, alt?}` (alt até 200),
+        `video` `{media_id}`, `lista` até 24 itens com exatamente os subcampos
+        de `item_fields` (subcampo imagem aceita `null`). Mídia inexistente ou
+        do tipo errado é `422`. Chave fora do catálogo é `404`. Vai para
+        `audit_log`.
+      x-rbac: { recurso: site, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [value]
+              properties:
+                value:
+                  description: string, `{media_id, alt}`, `{media_id}` ou lista de objetos, conforme o tipo do campo.
+      responses:
+        "200":
+          description: O campo, já com o valor novo
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/CampoDoSite" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Site]
+      summary: Restaura o texto original do campo
+      description: Apaga o valor editado; o site volta a mostrar o original do HTML. Restaurar o que já está original também é `204`.
+      x-rbac: { recurso: site, acao: editar }
+      responses:
+        "204": { description: Restaurado }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  /site/media:
+    post:
+      tags: [Site]
+      summary: Envia uma foto ou um vídeo para o site
+      description: |
+        `multipart/form-data`, campo `file`. O tipo é conferido pelos BYTES do
+        arquivo, não pela extensão: foto JPEG, PNG ou WebP até 15 MB; vídeo MP4
+        ou WebM até 300 MB. Fora disso, `422 VALIDATION_ERROR` com
+        `details.file` em linguagem do gestor. O arquivo é imutável: trocar a
+        foto é enviar outra e apontar o campo para o novo `id`.
+      x-rbac: { recurso: site, acao: editar }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: Arquivo guardado
+          headers:
+            Location: { schema: { type: string }, description: Endereço público do arquivo. }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MidiaDoSite" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /public/site:
+    get:
+      tags: [Site]
+      summary: Conteúdo do site editado pela gestão
+      description: |
+        Só os campos que **foram editados** — o site já tem o original no HTML e
+        troca apenas o que vier aqui. Mídia como `{url, alt}` (vídeo: `{url}`).
+        `Cache-Control: public, max-age=60`. Limitado por IP junto com a vitrine
+        (120/min, `RATE_LIMITED`).
+      security: []
+      responses:
+        "200":
+          description: Valores editados, por chave do catálogo
+          headers:
+            Cache-Control: { schema: { type: string, example: "public, max-age=60" } }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ConteudoPublicoDoSite" }
+        "429": { $ref: "#/components/responses/Erro" }
+
+  /public/media/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Site]
+      summary: Arquivo de foto ou vídeo do site
+      description: |
+        O arquivo cru, com o `Content-Type` detectado no envio. Suporta `Range`
+        (`206 Partial Content`), necessário para o vídeo tocar antes de baixar
+        inteiro. `Cache-Control: public, max-age=31536000, immutable` — o id
+        nunca muda de conteúdo. Fora do limitador de 120/min da vitrine, com
+        limitador próprio por IP (1200/min, `RATE_LIMITED`).
+      security: []
+      parameters:
+        - { name: Range, in: header, required: false, schema: { type: string, example: "bytes=0-1023" } }
+      responses:
+        "200":
+          description: O arquivo inteiro
+          headers:
+            Cache-Control: { schema: { type: string, example: "public, max-age=31536000, immutable" } }
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        "206":
+          description: Um pedaço do arquivo (pedido com `Range`)
+          content:
+            video/mp4: { schema: { type: string, format: binary } }
+            video/webm: { schema: { type: string, format: binary } }
+        "404": { $ref: "#/components/responses/Erro" }
+        "416": { description: Faixa pedida fora do arquivo. }
+        "429": { $ref: "#/components/responses/Erro" }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -8404,6 +8581,97 @@ components:
           oneOf:
             - { $ref: "#/components/schemas/Atividade" }
             - { type: "null" }
+
+    # ───────── Site (docs/site-cms.md) ─────────
+
+    TipoDeCampoDoSite:
+      type: string
+      enum: [texto, texto_longo, titulo, imagem, video, lista]
+
+    MidiaResolvidaDoSite:
+      type: object
+      description: Mídia como o painel recebe. `media_id` nulo = arquivo original do próprio site.
+      required: [media_id, url]
+      properties:
+        media_id: { type: [string, "null"], format: uuid }
+        url: { type: string, example: /api/v1/public/media/0b7c2f4e-0000-4000-8000-000000000000 }
+        alt: { type: string, description: Só em imagem. }
+
+    SubcampoDoSite:
+      type: object
+      required: [key, label, kind, max]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        kind: { type: string, enum: [texto, texto_longo, imagem] }
+        max: { type: integer, description: Letras (texto) ou letras do texto alternativo (imagem). }
+
+    CampoDoSite:
+      type: object
+      required: [key, label, kind, help, max, value, default_value, is_default, updated_at]
+      properties:
+        key: { type: string, example: inicio.titulo }
+        label: { type: string }
+        kind: { $ref: "#/components/schemas/TipoDeCampoDoSite" }
+        help: { type: string }
+        max:
+          type: integer
+          description: Letras (texto, texto_longo, titulo), itens (lista) ou letras do texto alternativo (imagem). Vídeo, 0.
+        value:
+          description: |
+            Valor atual: string; `MidiaResolvidaDoSite` (imagem/vídeo) ou `null`
+            (bloco sem foto); lista de objetos com as chaves de `item_fields`
+            (subcampo imagem resolvido como `MidiaResolvidaDoSite` ou `null`).
+        default_value:
+          description: O original do site, na mesma forma de `value`.
+        is_default: { type: boolean }
+        updated_at: { type: [string, "null"], format: date-time, description: Nulo enquanto estiver no original. }
+        item_fields:
+          type: array
+          description: Só em `lista`.
+          items: { $ref: "#/components/schemas/SubcampoDoSite" }
+
+    SecaoDoSite:
+      type: object
+      required: [key, label, fields]
+      properties:
+        key: { type: string, example: inicio }
+        label: { type: string, example: Topo (capa) }
+        fields:
+          type: array
+          items: { $ref: "#/components/schemas/CampoDoSite" }
+
+    ConteudoDoSite:
+      type: object
+      required: [sections]
+      properties:
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/SecaoDoSite" }
+
+    ConteudoPublicoDoSite:
+      type: object
+      required: [values]
+      properties:
+        values:
+          type: object
+          description: |
+            Chave do catálogo → valor editado. Texto como string; mídia como
+            `{url, alt}` (vídeo `{url}`); lista como array de objetos.
+          additionalProperties: true
+          example:
+            inicio.titulo: "O litoral do Piauí em *exclusividade*"
+            casa.foto: { url: /api/v1/public/media/0b7c2f4e-0000-4000-8000-000000000000, alt: Pôr do sol na praia }
+
+    MidiaDoSite:
+      type: object
+      required: [id, kind, mime, bytes, url]
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string, enum: [imagem, video] }
+        mime: { type: string, enum: [image/jpeg, image/png, image/webp, video/mp4, video/webm] }
+        bytes: { type: integer, format: int64 }
+        url: { type: string }
 
 security:
   - bearerAuth: []

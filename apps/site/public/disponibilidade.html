@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#16302B" />
 
-    <title>Disponibilidade e tarifas | White House · Praia do Coqueiro</title>
-    <meta name="description" content="Calendário central de reservas da White House: disponibilidade por produto, tarifas por período e orçamento imediato pela tabela vigente." />
+    <title data-cms="seo.disponibilidade.titulo">Disponibilidade e tarifas | White House · Praia do Coqueiro</title>
+    <meta name="description" data-cms-meta="seo.disponibilidade.descricao" content="Calendário central de reservas da White House: disponibilidade por produto, tarifas por período e orçamento imediato pela tabela vigente." />
 
     <!-- O número do WhatsApp não mora neste arquivo: o nginx o escreve por SSI a
          partir de uma única linha (whv_whatsapp em apps/site/nginx.conf). -->
@@ -27,7 +27,7 @@
     <header class="site-header site-header--over-hero" id="site-header">
         <div class="site-header__inner">
             <a class="site-header__logo" href="/" aria-label="White House — página inicial">
-                <img src="/assets/logo.png" alt="" width="78" height="42" />
+                <img src="/assets/logo.png" alt="" width="78" height="42" data-cms-img="marca.logo" data-cms-decorativa />
                 <span class="site-header__wordmark">
                     <b>WHITE HOUSE</b>
                     <span>Village</span>
@@ -61,9 +61,9 @@
         <!-- ═══ HERO DA PÁGINA ═══ -->
         <section class="page-hero">
             <div class="container">
-                <p class="eyebrow">Central única de reservas</p>
-                <h1 class="page-hero__title">Disponibilidade &amp; <em>tarifas</em></h1>
-                <p class="page-hero__lead">
+                <p class="eyebrow" data-cms="disp.rotulo">Central única de reservas</p>
+                <h1 class="page-hero__title" data-cms-titulo="disp.titulo">Disponibilidade &amp; <em>tarifas</em></h1>
+                <p class="page-hero__lead" data-cms-paragrafos="disp.texto">
                     Um só calendário para todos os produtos. Selecione a acomodação, escolha as datas
                     e o orçamento é calculado na hora — com tarifa de fim de semana, feriado, alta temporada,
                     Réveillon e Carnaval já aplicadas.
@@ -111,8 +111,8 @@
         <section>
             <div class="container">
                 <header class="section-head">
-                    <p class="eyebrow">Tabela comercial V1</p>
-                    <h2 class="section-head__title">Tarifas por <em>tipo de data</em></h2>
+                    <p class="eyebrow" data-cms="disp.tarifas.rotulo">Tabela comercial V1</p>
+                    <h2 class="section-head__title" data-cms-titulo="disp.tarifas.titulo">Tarifas por <em>tipo de data</em></h2>
                     <p class="section-head__lead">Valores por diária, por produto, da tabela vigente. <span data-minimos></span></p>
                 </header>
                 <div class="rates__wrap">
@@ -140,7 +140,7 @@
             <div class="container">
                 <div class="cta-banner__inner">
                     <div>
-                        <h2 class="cta-banner__title">Segure a data com uma <em>pré-reserva</em></h2>
+                        <h2 class="cta-banner__title" data-cms-titulo="disp.chamada.titulo">Segure a data com uma <em>pré-reserva</em></h2>
                         <p class="cta-banner__lead" data-politica-texto="completo">A pré-reserva bloqueia o calendário por um prazo curto. A confirmação acontece com o sinal; o saldo vence antes do check-in.</p>
                     </div>
                     <div class="cta-banner__actions">
@@ -156,8 +156,8 @@
         <div class="container">
             <div class="site-footer__grid">
                 <div class="site-footer__brand">
-                    <img class="site-footer__logo" src="/assets/logo.png" alt="White House" width="190" height="123" />
-                    <p>Condomínio de temporada e eventos na Praia do Coqueiro — Luís Correia, Piauí.</p>
+                    <img class="site-footer__logo" src="/assets/logo.png" alt="White House" data-cms-img="marca.logo" width="190" height="123" />
+                    <p data-cms-paragrafos="rodape.texto">Condomínio de temporada e eventos na Praia do Coqueiro — Luís Correia, Piauí.</p>
                 </div>
                 <div>
                     <h4>Navegue</h4>
@@ -172,26 +172,27 @@
                     <h4>Reservas</h4>
                     <ul>
                         <li><a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener">WhatsApp oficial</a></li>
-                        <li><a href="mailto:reservas@whitehouse.com.br">reservas@whitehouse.com.br</a></li>
-                        <li>Atendimento 8h — 20h</li>
+                        <li><a href="mailto:reservas@whitehouse.com.br" data-cms-email="rodape.email">reservas@whitehouse.com.br</a></li>
+                        <li data-cms="rodape.horario">Atendimento 8h — 20h</li>
                     </ul>
                 </div>
                 <div>
                     <h4>Endereço</h4>
-                    <ul>
+                    <ul data-cms-linhas="rodape.endereco">
                         <li>Praia do Coqueiro</li>
                         <li>Luís Correia — PI</li>
                     </ul>
                 </div>
             </div>
             <div class="site-footer__bottom">
-                <span>© 2026 White House — Todos os direitos reservados</span>
+                <span data-cms="rodape.copyright">© 2026 White House — Todos os direitos reservados</span>
             </div>
         </div>
     </footer>
 
     <div class="toast" data-toast role="status" aria-live="polite"></div>
 
+    <script src="/scripts/conteudo.js"></script>
     <script src="/scripts/vitrine.js"></script>
     <script src="/scripts/main.js"></script>
     <script src="/scripts/disponibilidade.js"></script>

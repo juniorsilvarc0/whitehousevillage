@@ -80,6 +80,17 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-America/Fortaleza}
+      # Fotos e vídeos do site (docs/site-cms.md §8). Caminho fixo, como a porta
+      # interna: é contrato entre a imagem (que cria o diretório com dono
+      # nonroot) e o volume abaixo, não preferência de máquina.
+      MEDIA_DIR: /data/midia
+    volumes:
+      # Volume NOMEADO, não bind mount: herda o dono nonroot que a imagem dá a
+      # /data/midia (um bind de pasta do host chegaria como root ou com o uid do
+      # desenvolvedor, e a API distroless não conseguiria gravar). Sobrevive a
+      # `make down`/rebuild; só `docker compose down -v` o apaga, junto com o banco.
+      # Só a API monta: o worker não lê nem grava mídia.
+      - midia:/data/midia
     ports:
       # Porta do HOST em variável PRÓPRIA. Até 02/10/2026 a MESMA `API_PORT` valia
       # para as duas pontas do mapeamento, e o custo medido nesta sessão foi:
@@ -201,3 +212,4 @@ services:
 
 volumes:
   pgdata:
+  midia:

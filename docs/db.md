@@ -18,7 +18,10 @@ contra um Postgres descartável com todas as migrations até `20261002180000`
 (`brokers` e as FKs de `broker_id`) e o seed aplicado. Em **03/10/2026**, §3, §4, §14,
 §15 e §16 foram conferidos contra um Postgres descartável em `20261003100000`
 (`public_name`, `unit_type_min_nights`, `rate_packages`) com os dois catálogos do seed
-aplicados e alternados. Para repetir a conferência de
+aplicados e alternados. Ainda em **03/10/2026**, §2, §13b, §14, §15 e §16 foram
+conferidos em `20261003120000` (`site_content`, `site_media` e o recurso RBAC `site`),
+com `up` → `down 1` → `up`, `down -all` → `up` e os dois catálogos semeados duas vezes
+cada. Para repetir a conferência de
 qualquer afirmação daqui:
 
 ```bash
@@ -723,6 +726,53 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 
 ---
 
+## 13b. Conteúdo do site (`site_content`, `site_media`)
+
+Entregue em `20261003120000`. É o banco do menu **Site** do painel — contrato em
+`docs/site-cms.md`. O site de vendas mantém o texto original no HTML; o banco guarda
+só o que a gestão **editou**.
+
+```
+site_content(key PK, value jsonb, updated_at, updated_by? → users)        -- 4 colunas
+site_media(id PK, kind, mime, bytes, original_name, storage_key UNIQUE,
+           created_at, created_by? → users)                               -- 8 colunas
+```
+
+- **`site_content`**: uma linha por campo editado. Campo sem linha = texto original;
+  "Restaurar original" é `DELETE` da linha. Salvar = publicar (sem rascunho); a trilha
+  de quem mudou o quê fica em `audit_log`, não em histórico na tabela — por isso não há
+  soft delete. A chave é a do **catálogo de campos em código**
+  (`internal/modules/site/catalogo.go`); o banco só confere a forma
+  (`site_content_key_formato`: `^[a-z0-9]+([.-][a-z0-9]+)*$`, ex. `inicio.titulo`,
+  `categoria.grand-villa.foto`) e que o valor não é JSON `null`
+  (`site_content_value_nao_nulo`) — restaurar é apagar, não gravar nulo. A forma do
+  valor por tipo (string, `{media_id, alt}`, `{media_id}`, lista) é validada pela API
+  contra o catálogo; `media_id` dentro do JSON **não** é FK (o Postgres não tem FK em
+  jsonb), e mídia inexistente é `422` da API.
+- **`site_media`**: arquivo enviado pelo painel, guardado no volume da API
+  (`MEDIA_DIR=/data/midia`). **Imutável**: trocar a foto é enviar arquivo novo e apontar o
+  campo para o novo id — é o que permite `Cache-Control: immutable` na URL pública.
+  `kind` em `CHECK (imagem|video)`; `bytes > 0`; `mime` e `storage_key` não vazios;
+  `storage_key` único (`site_media_storage_key_unica`) e nunca derivado do nome enviado.
+  Os limites de tamanho (15 MB / 300 MB) e o tipo pelos bytes são regra da API, não
+  `CHECK`: mudar limite não deve exigir migration.
+- **Sem `property_id`**, exceção consciente à regra 7: o site é um só (não é
+  multi-tenant) e as duas tabelas são configuração da vitrine, como `app_settings`, não
+  registro de negócio.
+- `updated_by`/`created_by` são `NULL`áveis (gravação por script ou seed) e têm índice
+  próprio (`site_content_updated_by_idx`, `site_media_created_by_idx`).
+- O `down` derruba as duas tabelas; os arquivos do volume não são tocados — o banco não
+  é dono deles.
+
+**Permissão**: recurso RBAC `site` ("Site (textos, fotos e vídeos)", grupo "Site"),
+ações **`ver`** e **`editar`** só — não se cria nem se apaga campo, o catálogo é fixo —,
+`supports_own = false` (não há dono: o site é um só). Registrado como os demais recursos,
+pelo `catalogoSeed` de `cmd/seed/acesso.go` (§16). Concedido em `all` ao `admin` (catálogo
+inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta de serviço
+`vitrine`.
+
+---
+
 ## 14. Índices e constraints que não podem faltar
 
 | Tabela | Constraint / índice |
@@ -773,9 +823,11 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 | `crm_activities` · `crm_notes` | `CHECK (num_nonnulls(lead_id, opportunity_id, contact_id) >= 1)` — atividade solta não aparece em tela nenhuma |
 | `crm_lost_reasons` | `UNIQUE(property_id, label)` — chave natural do seed |
 | `crm_opportunities` | **não tem `quote_id`** desde `20260827150000`; o orçamento vigente é `quotes.opportunity_id` (§7) |
+| `site_content` | `PRIMARY KEY (key)` · `site_content_key_formato` `CHECK (key ~ '^[a-z0-9]+([.-][a-z0-9]+)*$')` · `site_content_value_nao_nulo` `CHECK (jsonb_typeof(value) <> 'null')` · `(updated_by)` (§13b) |
+| `site_media` | `site_media_storage_key_unica` `UNIQUE (storage_key)` · `CHECK (kind IN ('imagem','video'))` · `CHECK (bytes > 0)` · `mime` e `storage_key` não vazios · `(created_by)` (§13b) |
 | quase todas | índice em toda FK — **não é "todas"**, e a diferença é medível |
 
-A linha anterior dizia `todas`. A consulta abaixo devolve hoje **16** chaves
+A linha anterior dizia `todas`. A consulta abaixo devolve hoje **17** chaves
 estrangeiras sem índice que comece por elas:
 
 ```sql
@@ -830,7 +882,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261003100000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261003120000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -849,10 +901,11 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20260831100000_validade_do_orcamento_versionada` | `commercial_policies.quote_validity_days` (`NOT NULL DEFAULT 7`, `CHECK (> 0)`) — a validade do orçamento vira dado versionado no schema (dívida **D7**, metade de schema; a leitura pela aplicação é F2-05, §4a) |
 | `20261002180000_brokers_e_fk_do_corretor` | `brokers` (9 colunas, §10) e as FKs `reservations_broker_id_fkey` e `users_broker_id_fkey` — esta **composta**, `(broker_id, id) → brokers(id, user_id)` (§2). Anula, com linha em `audit_log` e `RAISE WARNING`, todo `broker_id` órfão que encontrar; o `down` não os devolve (§5). `commission_rule_id` fica para o F2-10, junto com `commission_rules` |
 | `20261003100000_catalogo_real_vitrine_minimo_e_pacotes` | o que o catálogo real precisa (§3, §4): `unit_types.public_name` (nome de vitrine, `NULL` = `name`, nunca em branco), `unit_type_min_nights` (estadia mínima por produto, sobrepõe `min_nights_rules`) e `rate_packages` (preço por duração, com o vocabulário de `date_types` em `CHECK`). O `down` derruba as duas tabelas e a coluna |
+| `20261003120000_conteudo_e_midia_do_site` | o banco do menu **Site** (§13b, `docs/site-cms.md`): `site_content` (campo editado do site, chave em `CHECK` de formato, valor jsonb não nulo) e `site_media` (foto/vídeo imutável, `storage_key` única). O recurso RBAC `site` não é migration: entra pelo seed, como todo o catálogo de `resources` |
 
 ## 16. Seeds
 
-`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 23 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`) e, desde 03/10/2026, a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo).
+`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 24 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`) e, desde 03/10/2026, a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo).
 
 **O corretor de desenvolvimento** (etapa `corretores_de_desenvolvimento`, `cmd/seed/corretores.go`). Sem ele, `corretor@wh.local` entra no painel com `broker_id` nulo, e a partir do F2-13 isso tem efeito: em escopo `own` o corretor só atribui venda ao próprio `users.broker_id`, e a API não tem como criar o vínculo (o CRUD de `/brokers` é do F2-17/Fase 3). São três escritas por conta de perfil `corretor` em `usuariosSeed`, na ordem que as FKs exigem: a ficha em `contacts` (chave natural: telefone; `+5585900000010`, base `contrato`, sem opt-in), o cadastro em `brokers` (chave natural: `UNIQUE (user_id)`) e o vínculo em `users.broker_id`. O `DO UPDATE` do cadastro corrige só `contact_id`; `goal_cents` e `active` são decisão da gestão e o seed não os reescreve — a mesma regra das contas, que não têm a senha reescrita. A etapa segue a trava das **contas** de desenvolvimento (`SEED_DEV_USERS`), não a dos contatos de demonstração: o cadastro é da conta. E termina com uma pós-condição conferida no banco — conta de corretor sem cadastro que aponte de volta para ela é erro, e o seed inteiro volta atrás —, porque os `JOIN`s da etapa descartariam em silêncio um e-mail digitado errado e a contagem diria "inalterada".
 
@@ -872,7 +925,7 @@ O de teste é **congelado**: é byte a byte o que o seed semeava até 03/10/2026
 
 **Um banco nunca fica com os dois catálogos vendendo.** Semear um catálogo **desativa** (`active = false`; nunca apaga — unidade tem histórico em `stay_blocks`) as unidades, os produtos, os feriados e os períodos **do outro catálogo** que não existem no escolhido; o que a gestão cadastrou pela tela não é de catálogo nenhum e não é tocado. E reativa os próprios, que o outro tinha desativado. Para os produtos do catálogo escolhido, a composição, as tarifas, os mínimos por produto e os pacotes ficam **exatamente** iguais à lista: o que falta entra e o que sobra é **removido** — sem isso a Completa real herdaria a `COB-01` e as diárias da Completa de teste. Antes de mexer, o seed confere venda viva (`hold`, `confirmed`, `checked_in`): se a troca mudasse a composição ou o `consumes` de um produto com reserva de pé, ele aborta com a mensagem nomeando produto, unidades e reservas (`o catálogo não pode ser trocado com venda viva: a composição mudaria — completa perderia AP-04, … (reservas: WH-2026-0001)`), e a transação inteira volta. Os gatilhos adiados do §5 reprovariam o mesmo no `COMMIT`, mas falando de invariante, não de seed.
 
-Contagens medidas em 03/10/2026 num banco recém-migrado. Catálogo `teste`: primeira execução `previstas 305, criadas 304, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 305`. Catálogo `real`: primeira `previstas 431, criadas 430, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 431`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
+Contagens medidas em 03/10/2026 num banco recém-migrado. Catálogo `teste`: primeira execução `previstas 310, criadas 309, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 310`. Catálogo `real`: primeira `previstas 436, criadas 435, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 436`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; e 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
 
 **A conta de serviço da vitrine** (etapas `perfil_da_vitrine` e `conta_da_vitrine`, `cmd/seed/vitrine.go`). `POST /public/holds` (B1 de `docs/unificacao-site-crm.md`) roda o **mesmo** serviço de reserva e de contato do painel, e esses serviços exigem um usuário autenticado no contexto — dele saem escopo, `owner_id`/`created_by` e auditoria. Em vez de abrir um atalho "sem usuário" no domínio, o handler público carrega esta conta com `CarregarSessao` e chama o serviço como qualquer ator; o que o site grava aparece como "Site (vitrine)" na trilha.
 
