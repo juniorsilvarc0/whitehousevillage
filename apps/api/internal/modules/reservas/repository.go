@@ -842,8 +842,13 @@ func (r *Repository) Listar(ctx context.Context, propriedade uuid.UUID, f Filtro
 	if err != nil {
 		return nil, 0, err
 	}
+	telefones, err := r.TelefonesDosClientes(ctx, ids)
+	if err != nil {
+		return nil, 0, err
+	}
 	for i := range out {
 		out[i].Unidades = unidades[out[i].ID]
+		out[i].ContactTelefone = telefones[out[i].ID]
 	}
 	return out, total, nil
 }
@@ -1038,3 +1043,33 @@ func dataOuNil(v string) any {
 // centavos converte money.Cents para o int64 que o schema usa. Existe para o
 // service não espalhar conversões e para a intenção ficar legível.
 func centavos(c money.Cents) int64 { return int64(c) }
+
+// TelefonesDosClientes devolve o telefone do cliente de cada reserva da
+// página, numa consulta só. Só a lista usa — ver Reserva.ContactTelefone.
+func (r *Repository) TelefonesDosClientes(ctx context.Context, reservas []uuid.UUID) (map[uuid.UUID]*string, error) {
+	out := map[uuid.UUID]*string{}
+	if len(reservas) == 0 {
+		return out, nil
+	}
+	linhas, err := r.exec(ctx).Query(ctx, `
+		SELECT r.id, c.phone_e164
+		  FROM reservations r
+		  JOIN contacts c ON c.id = r.contact_id
+		 WHERE r.id = ANY($1::uuid[])
+		   AND c.phone_e164 IS NOT NULL`, reservas)
+	if err != nil {
+		return nil, db.MapError(err)
+	}
+	defer linhas.Close()
+	for linhas.Next() {
+		var (
+			id  uuid.UUID
+			tel string
+		)
+		if err := linhas.Scan(&id, &tel); err != nil {
+			return nil, db.MapError(err)
+		}
+		out[id] = &tel
+	}
+	return out, db.MapError(linhas.Err())
+}

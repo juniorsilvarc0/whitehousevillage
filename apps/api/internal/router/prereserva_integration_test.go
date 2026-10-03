@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 )
 
 // preReservar faz o POST como um visitante: sem token, com o IP de origem no
@@ -346,4 +348,39 @@ func (a *ambiente) janelaLivreDaUnidade(t *testing.T, unidade string, aPartirDe,
 		t.Fatalf("nenhuma janela livre de %d noites em %s: %v", noites, unidade, err)
 	}
 	return entrada.Format("2006-01-02"), entrada.AddDate(0, 0, noites).Format("2006-01-02")
+}
+
+// A gestão chama quem fez a pré-reserva a partir da LISTA: GET /reservations
+// traz o telefone cheio do cliente, e cada contato exibido deixa rastro em
+// pii_access_log com o motivo da lista.
+func TestListaDeReservasTrazOTelefoneDeQuemPreReservou(t *testing.T) {
+	a := subirAPI(t)
+	exigirSeed(t, a)
+	produto := a.produtoPublico(t, "suite-piscina")
+	entrada, saida := janelaAPartirDeHoje(372, noitesDaVitrine)
+	telefone := telefoneDoSite()
+
+	feita := envelopeDe[preReservaQA](t, a.preReservar(t, "203.0.113.70", "site-"+uuid.NewString(),
+		pedidoDePreReserva(produto.ID, entrada, saida, telefone)), http.StatusCreated, "pré-reserva para a lista")
+
+	// A gestão vê todas as reservas (escopo `all`): as do site têm como dona a
+	// conta de serviço, e quem só vê as próprias não as enxerga.
+	painel := a.criarUsuario(t, "lista-tel", a.criarPerfil(t, "lista-tel", []auth.Permissao{
+		{Resource: "reservations", Action: auth.AcaoVer, Scope: auth.EscopoAll},
+	}))
+	lista := envelopeDe[[]struct {
+		Codigo   string  `json:"code"`
+		Contato  string  `json:"contact_id"`
+		Telefone *string `json:"contact_phone_e164"`
+	}](t, a.chamar(t, http.MethodGet, "/reservations?q="+feita.Codigo, painel.Token, nil), http.StatusOK, "GET /reservations")
+	if len(lista) != 1 || lista[0].Telefone == nil || *lista[0].Telefone != telefone {
+		t.Fatalf("a lista deveria trazer o telefone %s do cliente: %+v", telefone, lista)
+	}
+
+	var rastros int
+	if err := a.pool.QueryRow(a.ctx, `
+		SELECT count(*) FROM pii_access_log
+		 WHERE contact_id = $1 AND reason = 'reservation_list'`, lista[0].Contato).Scan(&rastros); err != nil || rastros == 0 {
+		t.Fatalf("exibir o telefone na lista não deixou rastro (%d, %v)", rastros, err)
+	}
 }

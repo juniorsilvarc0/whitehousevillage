@@ -144,15 +144,21 @@ type UnidadeAlocada struct {
 // recalculado na leitura. É o que impede a tela de mostrar o preço de hoje para
 // uma venda de ontem (CLAUDE.md, regra 7).
 type Reserva struct {
-	ID           uuid.UUID  `json:"id"`
-	Codigo       string     `json:"code"`
-	Status       string     `json:"status"`
-	UnitTypeID   uuid.UUID  `json:"unit_type_id"`
-	UnitTypeNome string     `json:"unit_type_name"`
-	ContactID    uuid.UUID  `json:"contact_id"`
-	ContactNome  string     `json:"contact_name"`
-	BrokerID     *uuid.UUID `json:"broker_id"`
-	Origem       string     `json:"source"`
+	ID           uuid.UUID `json:"id"`
+	Codigo       string    `json:"code"`
+	Status       string    `json:"status"`
+	UnitTypeID   uuid.UUID `json:"unit_type_id"`
+	UnitTypeNome string    `json:"unit_type_name"`
+	ContactID    uuid.UUID `json:"contact_id"`
+	ContactNome  string    `json:"contact_name"`
+	// ContactTelefone é o telefone cheio do cliente. Só a LISTA o preenche
+	// (GET /reservations), e cada contato exibido grava uma linha em
+	// pii_access_log — é dali que a gestão chama quem fez a pré-reserva. Nas
+	// demais respostas vem nulo: a ficha da reserva já traz o telefone na lista
+	// de hóspedes do /full.
+	ContactTelefone *string    `json:"contact_phone_e164"`
+	BrokerID        *uuid.UUID `json:"broker_id"`
+	Origem          string     `json:"source"`
 
 	CheckIn  string `json:"check_in"`
 	CheckOut string `json:"check_out"`

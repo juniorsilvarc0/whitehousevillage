@@ -3,6 +3,7 @@ import {
   ArrowRight, CalendarClock, DoorClosed, DoorOpen, Hammer, Info, ShieldCheck, TriangleAlert,
 } from "lucide-react";
 
+import { BotaoWhatsApp, TelefoneClicavel } from "@/components/contatos/botao-whatsapp";
 import { EstadoVazio } from "@/components/layout/estados";
 import { Badge } from "@/components/ui/badge";
 import { CardDescription, CardTitle } from "@/components/ui/card";
@@ -238,6 +239,12 @@ function LinhaDeReserva({ reserva, detalhe }: { reserva: Reserva; detalhe?: Reac
     <li className="flex items-center gap-3 rounded-lg bg-card/70 px-3 py-2">
       <span className="shrink-0 font-mono text-xs text-primary">{reserva.code}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-foreground">{reserva.contact_name}</span>
+      {reserva.contact_phone_e164 ? (
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+          <TelefoneClicavel telefone={reserva.contact_phone_e164} />
+          <BotaoWhatsApp telefone={reserva.contact_phone_e164} nome={reserva.contact_name} codigo={reserva.code} />
+        </span>
+      ) : null}
       <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{reserva.unit_type_name}</span>
       <span className="shrink-0 text-xs text-muted-foreground">
         {reserva.units.map((u) => u.unit_code).join(", ") || "—"}

@@ -52,6 +52,8 @@ export type Reserva = {
   unit_type_name: string;
   contact_id: string;
   contact_name: string;
+  /** Telefone do cliente. Só a lista (`GET /reservations`) preenche; nas demais respostas vem `null`. */
+  contact_phone_e164: string | null;
   broker_id: string | null;
   source: string;
   check_in: string;

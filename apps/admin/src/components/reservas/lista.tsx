@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, PartyPopper } from "lucide-react";
 
+import { BotaoWhatsApp, TelefoneClicavel } from "@/components/contatos/botao-whatsapp";
 import { EstadoVazio } from "@/components/layout/estados";
 import { AcoesDaReserva } from "@/components/reservas/acoes-da-reserva";
 import { EtiquetaDeEstado } from "@/components/reservas/etiqueta-de-estado";
@@ -114,6 +115,12 @@ function Linha({ reserva, permissoes }: { reserva: Reserva; permissoes: { editar
         <p className="mt-0.5 text-xs text-muted-foreground">
           {reserva.contact_name} · {reserva.guests_count} hóspede{reserva.guests_count === 1 ? "" : "s"}
         </p>
+        {reserva.contact_phone_e164 ? (
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <TelefoneClicavel telefone={reserva.contact_phone_e164} />
+            <BotaoWhatsApp telefone={reserva.contact_phone_e164} nome={reserva.contact_name} codigo={reserva.code} />
+          </div>
+        ) : null}
       </td>
 
       <td className="px-3 py-3 whitespace-nowrap">

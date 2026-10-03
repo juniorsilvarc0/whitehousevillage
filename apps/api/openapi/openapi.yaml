@@ -111,6 +111,7 @@ info:
     | `export` | `GET /contacts/{id}/export` |
     | `rooming_list` | `GET /reservations/{id}/full` — uma linha por hóspede listado |
     | `opportunity` | `GET /crm/opportunities/{id}/full` — o contato da oportunidade |
+    | `reservation_list` | `GET /reservations` — o cliente de cada reserva da página que tem telefone |
 
     **Versionamento.** `docs/api.md` §8 trata como quebra mudar o que um campo
     devolve, e mascarar `doc_number` em `/api/v1` é isso. A exceção é deliberada
@@ -7054,6 +7055,14 @@ components:
         unit_type_name: { type: string, example: White House Completa }
         contact_id:     { type: string, format: uuid }
         contact_name:   { type: string }
+        contact_phone_e164:
+          type: [string, "null"]
+          example: "+5586994259816"
+          description: |
+            Telefone cheio do cliente. Só `GET /reservations` preenche (para a
+            gestão chamar quem reservou), e cada contato exibido grava uma linha
+            em `pii_access_log` com `reason: "reservation_list"`. Nas demais
+            respostas vem `null`; a ficha completa traz o telefone em `guests`.
         broker_id:      { type: [string, "null"], format: uuid, description: "O corretor da venda — `brokers(id)`, não `users(id)`. `null` é venda direta. Quem pode gravar: \"Corretor da venda\" em `POST /reservations`." }
         source:         { type: string, default: direto, example: direto }
         check_in:  { type: string, format: date }

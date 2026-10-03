@@ -90,7 +90,24 @@ func (s *Servico) Listar(ctx context.Context, f Filtro) ([]Reserva, int64, error
 		return nil, 0, err
 	}
 	f.SomenteMinhas, f.Usuario = somenteMinhas(ctx, auth.AcaoVer), u.ID
-	return s.repo.Listar(ctx, u.PropertyID, f)
+	lista, total, err := s.repo.Listar(ctx, u.PropertyID, f)
+	if err != nil {
+		return nil, 0, err
+	}
+	// A lista mostra o telefone do cliente de cada reserva: cada contato
+	// exibido deixa rastro, e sem o rastro a leitura não sai.
+	exibidos := make([]uuid.UUID, 0, len(lista))
+	vistos := map[uuid.UUID]bool{}
+	for _, v := range lista {
+		if v.ContactTelefone != nil && !vistos[v.ContactID] {
+			vistos[v.ContactID] = true
+			exibidos = append(exibidos, v.ContactID)
+		}
+	}
+	if err := pii.RegistrarVarios(ctx, s.repo.pool, "contacts", exibidos, pii.MotivoListaDeReservas); err != nil {
+		return nil, 0, err
+	}
+	return lista, total, nil
 }
 
 // Buscar devolve uma reserva.

@@ -33,6 +33,7 @@ function reserva(status: EstadoDaReserva, extras: Partial<Reserva> = {}): Reserv
     unit_type_name: "White House Cobertura",
     contact_id: "c-1",
     contact_name: "Hóspede de Demonstração",
+    contact_phone_e164: null,
     broker_id: null,
     source: "direto",
     check_in: "2026-11-20",
