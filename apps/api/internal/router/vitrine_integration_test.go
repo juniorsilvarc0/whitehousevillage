@@ -227,7 +227,9 @@ func TestVitrineDiaOcupadoNaoContaNada(t *testing.T) {
 		t.Fatalf("esperava 6 noites, vieram %d", len(envelope.Data))
 	}
 
-	permitidas := map[string]bool{"date": true, "available": true, "date_type": true, "price_cents": true, "min_nights": true}
+	// on_request é regra comercial da casa (dia sem tarifa publicada), não
+	// dado de terceiro: o mesmo para todo visitante, ocupado ou não.
+	permitidas := map[string]bool{"date": true, "available": true, "date_type": true, "price_cents": true, "min_nights": true, "on_request": true}
 	ocupados := 0
 	for _, dia := range envelope.Data {
 		for chave := range dia {
@@ -384,6 +386,13 @@ func TestVitrineNomePacoteEMinimoDoProdutoVemDoBanco(t *testing.T) {
 	}
 	if publico.Subtotal != 200 {
 		t.Fatalf("4 noites = 2 pacotes de 100 centavos; subtotal veio %d", publico.Subtotal)
+	}
+
+	// A mensagem do motor usa o nome de vitrine na rota pública — o nome
+	// interno do produto é vocabulário da equipe.
+	lotado := map[string]any{"unit_type_id": produto.ID, "check_in": entrada, "check_out": saida, "guests_count": produto.Lotacao + 1}
+	if r := a.chamar(t, http.MethodPost, "/public/quotes", "", lotado); !strings.Contains(string(r.Corpo), "Cobertura Vista Mar") {
+		t.Fatalf("a recusa pública deveria citar o nome de vitrine: %d %s", r.Status, r.Corpo)
 	}
 
 	// Estadia mínima do produto: 5 noites em todo tipo de data. A geral do

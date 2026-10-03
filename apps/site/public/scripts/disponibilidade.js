@@ -449,7 +449,7 @@
     el.rates.innerHTML = state.produtos.map(p => {
       const por = {};
       for (const r of p.rates) por[r.date_type] = r.price_cents;
-      const pacotes = (p.packages || []).map(k =>
+      const pacotes = (p.packages || []).slice().sort((x, y) => x.date_types.join() === y.date_types.join() ? x.nights - y.nights : x.date_types.join() > y.date_types.join() ? -1 : 1).map(k =>
         `${k.nights} diárias (${k.date_types.map(t => WH.rotulo(t).toLowerCase()).join(' / ')}): ${WH.brl(k.total_cents)}`);
       return `
       <tr>
@@ -459,12 +459,12 @@
       </tr>`;
     }).join('');
 
-    /* As estadias mínimas também saem da tabela vigente, não do HTML. */
+    /* A estadia mínima agora varia por acomodação (Pool Suítes e villas pedem
+       2 diárias, duplex aceita 1 em dia comum): uma frase só com "o maior
+       mínimo" mentiria para metade da tabela. A do produto escolhido sai da
+       API e aparece no calendário (título de cada dia) e na recusa do orçamento. */
     if (el.minimos && state.produtos.length) {
-      const min = {};
-      for (const p of state.produtos) for (const r of p.rates) min[r.date_type] = Math.max(min[r.date_type] || 1, r.min_nights);
-      const partes = WH.TIPOS.filter(t => (min[t] || 1) > 1).map(t => `${min[t]} em ${WH.rotulo(t).toLowerCase()}`);
-      el.minimos.textContent = partes.length ? 'Estadias mínimas: ' + partes.join(', ') + '.' : '';
+      el.minimos.textContent = 'A estadia mínima varia por acomodação e tipo de data — passe o mouse sobre o dia no calendário para ver a de cada data.';
     }
   }
 

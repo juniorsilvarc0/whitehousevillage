@@ -96,6 +96,15 @@ func ComCasaPublica(ctx context.Context, casa uuid.UUID) context.Context {
 	return context.WithValue(ctx, chaveCasaPublica{}, casa)
 }
 
+// ehPublico diz se a requisição veio da vitrine (sem sessão).
+func ehPublico(ctx context.Context) bool {
+	if _, ok := auth.UserFrom(ctx); ok {
+		return false
+	}
+	casa, ok := ctx.Value(chaveCasaPublica{}).(uuid.UUID)
+	return ok && casa != uuid.Nil
+}
+
 // ─────────────────────────── Catálogo ───────────────────────────────────────
 
 // ProdutoDoCatalogo é um produto vendável com o tarifário vigente: a tarifa e
@@ -491,10 +500,18 @@ func (s *Servico) Orcar(ctx context.Context, e Entrada) (Orcamento, error) {
 	politica := comercial.Politica
 	politica.MinNights = minimos
 
+	// O nome entra nas mensagens do motor ("Sem tarifa para réveillon em …").
+	// Na vitrine vai o nome de vitrine: o nome interno ("(casa principal)") é
+	// vocabulário da equipe e não sai em resposta pública.
+	nome := p.Nome
+	if ehPublico(ctx) {
+		nome = p.NomePublico
+	}
+
 	quote, err := booking.Build(booking.Request{
 		Product: booking.Product{
 			ID:          p.ID.String(),
-			Name:        p.Nome,
+			Name:        nome,
 			Capacity:    p.Capacidade,
 			Rates:       tarifas[p.ID],
 			CleaningFee: p.LimpezaCent,
