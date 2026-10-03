@@ -115,6 +115,12 @@ services:
       APP_ENV: production
       API_PORT: "8080"
       TZ: America/Fortaleza
+    # `borda` além de `interna`: o nginx do site encaminha /api/v1/public/* para
+    # `api:8080` (passo A2 da unificação), e o site só vive na borda. Estar na
+    # borda NÃO publica a API: sem label do Traefik e sem `ports`, ela continua
+    # sem nome no DNS e sem porta no host — e o nginx do site só deixa passar o
+    # prefixo público.
+    networks: [interna, borda]
     healthcheck:
       test: ["CMD", "/app/api", "-healthcheck"]
       interval: 10s
@@ -123,12 +129,17 @@ services:
       start_period: 10s
     depends_on:
       postgres: { condition: service_healthy }
+    # Sem isto a API não volta sozinha depois de um reboot da VPS ou de um crash:
+    # a âncora `x-imagem-api` não declara restart, e migrate/seed (que a usam
+    # também) não podem ter — são passos de uma vez só.
+    restart: unless-stopped
 
   worker:
     <<: *imagem-api
     entrypoint: ["/app/worker"]
     depends_on:
       postgres: { condition: service_healthy }
+    restart: unless-stopped
 
   admin:
     build:
@@ -191,7 +202,8 @@ services:
 networks:
   # `interna` não tem saída para o Traefik: Postgres, API e worker vivem aqui.
   interna:
-  # `borda` é onde o Traefik enxerga quem ele publica: só painel e site.
+  # `borda` é onde o Traefik enxerga quem ele publica (painel e site) e onde o
+  # site alcança a API para a vitrine. A API está nela sem ser publicada.
   borda:
 
 volumes:

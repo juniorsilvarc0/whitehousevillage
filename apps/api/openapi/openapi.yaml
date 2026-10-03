@@ -153,6 +153,15 @@ tags:
       peneira em memória — e **estado só muda por ação nomeada**, porque cada
       transição carrega efeito colateral obrigatório (histórico de etapa, tarefa
       automática, motivo de perda, reserva).
+  - name: Vitrine
+    description: |
+      Superfície **pública** do site de vendas (`apps/site`), sem token — passo A1
+      de `docs/unificacao-site-crm.md`. O site pergunta, não calcula: tudo aqui
+      sai do mesmo motor e das mesmas consultas do painel. Três invariantes:
+      nenhuma resposta carrega dado de terceiro nem de operação (dia ocupado é só
+      `available: false`); nada aqui grava nem segura data; toda rota é limitada
+      por IP (120/min, `RATE_LIMITED`). O público não negocia: não existe campo
+      de desconto, e a resposta não carrega alçada, versão de política nem tabela.
   - name: Tempo real
     description: |
       O barramento de eventos que faz o mapa de ocupação e o kanban se atualizarem
@@ -5546,6 +5555,104 @@ paths:
         "409": { description: "`INVALID_STATE_TRANSITION` — atividade cancelada.", $ref: "#/components/responses/Erro" }
         "422": { $ref: "#/components/responses/Erro" }
 
+  /public/products:
+    get:
+      tags: [Vitrine]
+      summary: Catálogo público — acomodações vendáveis com a tarifa vigente
+      security: []
+      responses:
+        "200":
+          description: Produtos ativos, na ordem da vitrine
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ProdutoPublico" }
+        "429": { $ref: "#/components/responses/Erro" }
+
+  /public/policy:
+    get:
+      tags: [Vitrine]
+      summary: Política exibida ao hóspede (sinal, saldo, pré-reserva) e a data de hoje da casa
+      security: []
+      responses:
+        "200":
+          description: Política comercial vigente, recortada para o público
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PoliticaPublica" }
+        "429": { $ref: "#/components/responses/Erro" }
+
+  /public/availability:
+    get:
+      tags: [Vitrine]
+      summary: Calendário público de um produto — livre ou ocupado, por dia
+      description: |
+        Janela half-open `[from, to)` de no máximo **93 dias**, entre 31 dias antes
+        de hoje e 548 dias depois. Dia ocupado é só `available: false`: sem motivo,
+        sem contagem de unidades e sem preço.
+      security: []
+      parameters:
+        - { name: unit_type_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        "200":
+          description: Um item por noite da janela
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/DiaPublico" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+        "429": { $ref: "#/components/responses/Erro" }
+
+  /public/quotes:
+    post:
+      tags: [Vitrine]
+      summary: Orçamento do visitante — mesmo motor do painel, sem desconto, sem gravar
+      description: |
+        Não grava e não segura data (200, nunca 201). Campo desconhecido é 422 —
+        inclusive `discount_pct`: o público não negocia preço. Os 422 de regra são
+        `VALIDATION_ERROR`, `MIN_STAY_NOT_MET`, `CAPACITY_EXCEEDED`,
+        `RATE_NOT_FOUND` e `COMPOSITION_INCOMPLETE`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [unit_type_id, check_in, check_out, guests_count]
+              properties:
+                unit_type_id: { type: string, format: uuid }
+                check_in: { type: string, format: date }
+                check_out: { type: string, format: date }
+                guests_count: { type: integer, minimum: 1 }
+      responses:
+        "200":
+          description: Orçamento calculado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrcamentoPublico" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+        "429": { $ref: "#/components/responses/Erro" }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -6543,6 +6650,56 @@ components:
           type: integer
           description: Idem, para a política comercial.
 
+    ProdutoPublico:
+      type: object
+      properties:
+        unit_type_id: { type: string, format: uuid }
+        code: { type: string, example: cobertura }
+        name: { type: string, example: White House Cobertura }
+        capacity: { type: integer, example: 10 }
+        cleaning_cents: { type: integer, format: int64 }
+        from_price_cents: { type: integer, format: int64, nullable: true, description: "Menor diária da tabela vigente" }
+        exclusive: { type: boolean, description: "Ocupa a casa inteira (White House Completa)" }
+        rates:
+          type: array
+          items:
+            type: object
+            properties:
+              date_type: { $ref: "#/components/schemas/TipoDeData" }
+              price_cents: { type: integer, format: int64 }
+              min_nights: { type: integer }
+    PoliticaPublica:
+      type: object
+      properties:
+        today: { type: string, format: date, description: "Hoje no fuso da casa, segundo o banco" }
+        deposit_pct: { type: number, example: 50 }
+        balance_due_days: { type: integer, example: 7 }
+        hold_hours: { type: integer, example: 48 }
+    DiaPublico:
+      type: object
+      properties:
+        date: { type: string, format: date }
+        available: { type: boolean }
+        date_type: { $ref: "#/components/schemas/TipoDeData" }
+        price_cents: { type: integer, format: int64, nullable: true, description: "Só em dia livre" }
+        min_nights: { type: integer }
+    OrcamentoPublico:
+      type: object
+      properties:
+        night_count: { type: integer }
+        subtotal_cents: { type: integer, format: int64 }
+        cleaning_cents: { type: integer, format: int64 }
+        total_cents: { type: integer, format: int64 }
+        deposit_cents: { type: integer, format: int64 }
+        balance_cents: { type: integer, format: int64 }
+        avg_nightly_cents: { type: integer, format: int64 }
+        min_nights: { type: integer }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/LinhaDoOrcamento" }
+        nights:
+          type: array
+          items: { $ref: "#/components/schemas/NoiteDoOrcamento" }
     LinhaDoOrcamento:
       type: object
       description: As noites agrupadas por tipo de tarifa, na ordem em que o hóspede vive a estadia.

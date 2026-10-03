@@ -58,40 +58,76 @@
   window.addEventListener('load', () => setTimeout(sweep, 240));
   setTimeout(sweep, 600);
 
-  /* ─── Cards de acomodação (home) ─── */
+  /* ─── Textos com a política vigente ───
+     Prazo da pré-reserva, sinal e saldo vêm de /api/v1/public/policy. O HTML
+     traz uma frase sem número, que fica no lugar se a API não responder: frase
+     vaga é melhor que número que o banco já não confirma. */
+  const textosDaPolitica = document.querySelectorAll('[data-politica-texto]');
+  if (textosDaPolitica.length && window.WH) {
+    WH.api.politica().then(P => {
+      textosDaPolitica.forEach(el => {
+        el.textContent = el.dataset.politicaTexto === 'curto'
+          ? `Consulte o calendário em tempo real, monte o orçamento da sua estadia e garanta a data com uma pré-reserva de ${P.hold_hours} horas.`
+          : `A pré-reserva bloqueia o calendário por ${P.hold_hours} horas. A confirmação acontece com o sinal de ${P.deposit_pct}%; o saldo vence ${P.balance_due_days} dias antes do check-in.`;
+      });
+    }).catch(() => { /* fica a frase sem número */ });
+  }
+
+  /* ─── Cards de acomodação (home) ───
+     Nome, lotação e "a partir de" vêm do catálogo público da API; o texto de
+     vitrine (selo, diferenciais, descrição) é do site. Sem a API, os cards não
+     são desenhados com preço inventado: a seção mostra o convite para a
+     central de reservas. */
   const grid = document.querySelector('[data-units]');
   if (grid && window.WH) {
-    grid.innerHTML = WH.units.map(u => `
+    const animar = () => {
+      if ('IntersectionObserver' in window) {
+        const io2 = new IntersectionObserver((entries) => {
+          entries.forEach((e, i) => {
+            if (!e.isIntersecting) return;
+            setTimeout(() => e.target.classList.add('is-visible'), i * 90);
+            io2.unobserve(e.target);
+          });
+        }, { threshold: 0.1 });
+        grid.querySelectorAll('[data-reveal]').forEach(t => io2.observe(t));
+      } else {
+        grid.querySelectorAll('[data-reveal]').forEach(t => t.classList.add('is-visible'));
+      }
+      setTimeout(sweep, 300);
+    };
+
+    WH.api.produtos().then(produtos => {
+      grid.innerHTML = produtos.map(p => {
+        const t = WH.textoDe(p.code);
+        const specs = ['até ' + p.capacity + ' hóspedes'].concat(t.specs);
+        return `
       <article class="unit-card" data-reveal>
-        <div class="unit-card__media scene ${u.scene}">
-          <span class="unit-card__tag">${u.tag}</span>
-          <span class="scene__label">${u.nome}</span>
+        <div class="unit-card__media scene ${t.scene}">
+          <span class="unit-card__tag">${WH.esc(t.tag)}</span>
+          <span class="scene__label">${WH.esc(p.name)}</span>
         </div>
         <div class="unit-card__body">
-          <h3 class="unit-card__title">${u.nome}</h3>
-          <ul class="unit-card__specs">${u.specs.map(s => `<li>${s}</li>`).join('')}</ul>
-          <p class="unit-card__desc">${u.desc}</p>
-          <div class="unit-card__price">
-            <span class="v">${WH.brl(u.rates.normal)}</span>
+          <h3 class="unit-card__title">${WH.esc(p.name)}</h3>
+          <ul class="unit-card__specs">${specs.map(s => `<li>${WH.esc(s)}</li>`).join('')}</ul>
+          ${t.desc ? `<p class="unit-card__desc">${WH.esc(t.desc)}</p>` : ''}
+          ${p.from_price_cents != null ? `<div class="unit-card__price">
+            <span class="v">${WH.brl(p.from_price_cents)}</span>
             <span class="l">/ diária · a partir de</span>
-          </div>
-          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html?produto=${u.id}">Ver disponibilidade</a>
+          </div>` : ''}
+          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html?produto=${encodeURIComponent(p.code)}">Ver disponibilidade</a>
         </div>
-      </article>
-    `).join('');
-
-    if ('IntersectionObserver' in window) {
-      const io2 = new IntersectionObserver((entries) => {
-        entries.forEach((e, i) => {
-          if (!e.isIntersecting) return;
-          setTimeout(() => e.target.classList.add('is-visible'), i * 90);
-          io2.unobserve(e.target);
-        });
-      }, { threshold: 0.1 });
-      grid.querySelectorAll('[data-reveal]').forEach(t => io2.observe(t));
-    } else {
-      grid.querySelectorAll('[data-reveal]').forEach(t => t.classList.add('is-visible'));
-    }
-    setTimeout(sweep, 300);
+      </article>`;
+      }).join('');
+      animar();
+    }).catch(() => {
+      grid.innerHTML = `
+      <article class="unit-card is-visible">
+        <div class="unit-card__body">
+          <h3 class="unit-card__title">Acomodações</h3>
+          <p class="unit-card__desc">Não conseguimos carregar as acomodações agora. Consulte datas e valores na central de reservas.</p>
+          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html">Ver disponibilidade</a>
+        </div>
+      </article>`;
+    });
   }
 })();

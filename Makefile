@@ -119,7 +119,9 @@ smoke-painel: ## Fumaça só do painel (navegador, login, telas) contra o que es
 
 smoke-site: ## Fumaça do site público: 200, 404 real, /admin 404, recursos, hosts externos, WhatsApp
 	# Node 22 puro, sem `pnpm install`: o script só usa fetch, fs e path.
-	node apps/site/e2e/fumaca-site.mjs $(SITE_URL)
+	# SITE_EXIGE_API=1: aqui o stack está de pé, então a vitrine (/api/v1/public)
+	# TEM de responder pelo site. A fumaça da imagem isolada não liga a variável.
+	SITE_EXIGE_API=1 node apps/site/e2e/fumaca-site.mjs $(SITE_URL)
 
 smoke-site-imagem: ## Constrói a imagem do site, sobe um container dela (sem volume) e roda a fumaça
 	# Por que existe além do `smoke-site` que o `smoke-stack` já roda: no compose

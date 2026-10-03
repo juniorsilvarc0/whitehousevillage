@@ -29,10 +29,10 @@ make up · make migrate · make seed · make check · make psql
 
 ## O site de vendas vive aqui desde 02/10/2026
 
-`apps/site` é o front de cliente — era um MVP separado, em `/Users/junior/DEV/spincode/whitehouse`, e foi importado para cá. **Ele ainda calcula preço em JavaScript a partir de dados mocados**, o que contraria as regras 1, 4 e 7 acima. Isso é dívida conhecida, com plano escrito: `docs/unificacao-site-crm.md` tem a ordem, o dono e o critério de pronto de cada passo. Duas coisas valem desde já:
+`apps/site` é o front de cliente — era um MVP separado, em `/Users/junior/DEV/spincode/whitehouse`, e foi importado para cá. Desde 03/10/2026 (passo **A2** de `docs/unificacao-site-crm.md`) ele **não calcula mais nada**: catálogo, calendário e orçamento vêm de `/api/v1/public/*`, o mesmo motor do painel. Duas coisas valem sempre:
 
 - **O site pergunta, não calcula.** Nenhuma regra de tarifa, disponibilidade ou política nasce em `apps/site`. Ele chama a API.
-- Enquanto o passo **A2** daquele plano não entrar, nenhum número que o site exibe vale como preço.
+- **Rota pública é a decisão mais cara da tabela.** `AcessoPublico` exige `Motivo` escrito, toda `/public/*` passa pelo limitador por IP, e nenhuma resposta pública carrega dado de terceiro, desconto ou vocabulário interno de negociação.
 
 ## O que este repositório não é
 

@@ -73,6 +73,9 @@ checar "$SITE_PORT"  www.whitehousevillage.com.br      /        200
 checar "$SITE_PORT"  www.whitehousevillage.com.br      /admin/  404
 checar "$ADMIN_PORT" gestor.whitehousevillage.com.br   /login   200
 checar "$ADMIN_PORT" corretor.whitehousevillage.com.br /login   200
+# A vitrine pelo site: o preço do site sai daqui. E SÓ ela passa pelo site.
+checar "$SITE_PORT"  www.whitehousevillage.com.br      /api/v1/public/products 200
+checar "$SITE_PORT"  www.whitehousevillage.com.br      /api/v1/auth/me         404
 if [[ $falhou == 1 ]]; then
   echo "fumaça REPROVOU — docker compose -p $PROJETO logs --tail=100" >&2; exit 1
 fi

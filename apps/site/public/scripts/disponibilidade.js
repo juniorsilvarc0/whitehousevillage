@@ -1,26 +1,19 @@
-/* Central de reservas — calendário, orçamento e indicadores (dados mocados).
+/* Central de reservas — calendário, orçamento e indicadores, servidos pela API.
  *
- * Esta página é pública. Duas regras valem até a última linha:
- *  - o visitante não negocia preço: nenhum controle mexe no valor, e nenhuma
- *    regra comercial interna aparece aqui (passo D2 de docs/unificacao-site-crm.md);
+ * Esta página é pública, e três regras valem até a última linha:
+ *  - o site pergunta, não calcula: catálogo, calendário, orçamento, sinal e
+ *    prazos vêm de /api/v1/public/* — o MESMO motor do painel. Se a API não
+ *    responde, a página diz isso e oferece o WhatsApp; ela NUNCA inventa preço;
+ *  - o visitante não negocia preço: não há controle de desconto, nem regra
+ *    comercial interna (passo D2 de docs/unificacao-site-crm.md);
  *  - um dia indisponível é só "indisponível": nunca quem ocupa, por quanto, nem
- *    se é reserva, pré-reserva ou bloqueio (invariante 1 do mesmo plano). */
+ *    por quê (invariante 1 do mesmo plano — a API já nem manda isso).
+ */
 (function () {
   'use strict';
   if (!window.WH) return;
 
-  const P = WH.politica;
   const params = new URLSearchParams(location.search);
-
-  const state = {
-    produto: params.get('produto') || 'cobertura',
-    hospedes: 6,
-    ano: WH.parse(WH.HOJE).getFullYear(),
-    mes: WH.parse(WH.HOJE).getMonth(),
-    checkin: null,
-    checkout: null
-  };
-
   const $ = s => document.querySelector(s);
   const el = {
     produto: $('[data-produto]'),
@@ -29,10 +22,22 @@
     quote: $('[data-quote]'),
     kpis: $('[data-kpis]'),
     rates: $('[data-rates] tbody'),
+    minimos: $('[data-minimos]'),
     toast: $('[data-toast]')
   };
 
-  const unit = () => WH.units.find(u => u.id === state.produto);
+  const state = {
+    produtos: [],
+    politica: null,
+    hoje: null,
+    produto: null,          // código, ex.: 'cobertura'
+    hospedes: 2,
+    ano: 0, mes: 0,
+    checkin: null, checkout: null,
+    dias: {},               // `${produtoId}|${data}` → dia da API
+    orcamento: null,        // { chave, dados } | { chave, erro }
+    carregando: false
+  };
 
   /* Número do WhatsApp: o nginx escreve no <meta name="whv:whatsapp"> por SSI, a
      partir da única linha que o define (apps/site/nginx.conf). Servida por outro
@@ -41,18 +46,12 @@
   const metaWa = document.querySelector('meta[name="whv:whatsapp"]');
   const WHATSAPP = metaWa && /^\d{10,15}$/.test(metaWa.content) ? metaWa.content : null;
 
-  /* Deep link opcional: ?produto=cobertura&checkin=2026-12-28&checkout=2027-01-02 */
-  function aplicarDeepLink() {
-    const ci = params.get('checkin'), co = params.get('checkout');
-    if (!ci || !co || ci >= co || ci < WH.HOJE) return;
-    for (let c = ci; c < co; c = WH.addDays(c, 1)) {
-      if (WH.status(state.produto, c).st !== 'livre') return;
-    }
-    state.checkin = ci; state.checkout = co;
-    const d = WH.parse(ci);
-    state.ano = d.getFullYear(); state.mes = d.getMonth();
-  }
-  const curto = n => n >= 1000 ? (n / 1000).toFixed(n % 1000 === 0 ? 0 : 1).replace('.', ',') + 'k' : String(n);
+  const unit = () => state.produtos.find(p => p.code === state.produto);
+  const diaDe = (s) => state.dias[unit().unit_type_id + '|' + s];
+  const curto = c => {
+    const reais = Math.floor(c / 100);
+    return reais >= 1000 ? (reais / 1000).toFixed(reais % 1000 === 0 ? 0 : 1).replace('.', ',') + 'k' : String(reais);
+  };
 
   let toastTimer;
   function toast(msg) {
@@ -63,51 +62,100 @@
     toastTimer = setTimeout(() => el.toast.classList.remove('is-visible'), 4200);
   }
 
+  function falhaGeral() {
+    const wa = WHATSAPP ? ` <a class="btn btn--secondary" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}">Falar no WhatsApp</a>` : '';
+    el.cals.innerHTML = `<p class="quote__empty">A central de reservas está indisponível agora. Tente em instantes${WHATSAPP ? ' ou fale com a gente pelo WhatsApp' : ''}.</p>${wa}`;
+    el.quote.innerHTML = '';
+    el.kpis.innerHTML = '';
+  }
+
+  /* ─────────── Carga ─────────── */
+
+  /* Garante no cache os dias de [de, ate) do produto atual. A API aceita até
+     93 dias por pedido; o calendário pede dois meses por vez. */
+  async function carregarDias(de, ate) {
+    const u = unit();
+    let falta = false;
+    for (let c = de; c < ate; c = WH.addDays(c, 1)) {
+      if (!state.dias[u.unit_type_id + '|' + c]) { falta = true; break; }
+    }
+    if (!falta) return;
+    const dias = await WH.api.disponibilidade(u.unit_type_id, de, ate);
+    for (const d of dias) state.dias[u.unit_type_id + '|' + d.date] = d;
+  }
+
+  /* Os dois meses visíveis. O primeiro nunca é anterior ao mês corrente, e a
+     API aceita até 31 dias para trás: o mês corrente cabe inteiro. */
+  function janelaVisivel() {
+    return { de: WH.key(state.ano, state.mes, 1), ate: WH.toKey(new Date(state.ano, state.mes + 2, 1)) };
+  }
+
+  async function carregarVisivel() {
+    const j = janelaVisivel();
+    await carregarDias(j.de, j.ate);
+  }
+
   /* ─────────── Controles ─────────── */
   function initControls() {
-    el.produto.innerHTML = WH.units
-      .map(u => `<option value="${u.id}">${u.nome} · até ${u.capacidade} hóspedes</option>`).join('');
+    el.produto.innerHTML = state.produtos
+      .map(p => `<option value="${WH.esc(p.code)}">${WH.esc(p.name)} · até ${p.capacity} hóspedes</option>`).join('');
     el.produto.value = state.produto;
-    if (!unit()) { state.produto = 'cobertura'; el.produto.value = state.produto; }
-    state.hospedes = Math.min(6, unit().capacidade);
-
     renderHospedes();
 
-    el.produto.addEventListener('change', () => {
+    el.produto.addEventListener('change', async () => {
       state.produto = el.produto.value;
       state.checkin = state.checkout = null;
-      state.hospedes = Math.min(state.hospedes, unit().capacidade);
+      state.orcamento = null;
+      state.hospedes = Math.min(state.hospedes, unit().capacity);
       renderHospedes();
-      render();
+      await recarregar();
     });
     el.hospedes.addEventListener('change', () => {
       state.hospedes = Number(el.hospedes.value);
-      renderQuote();
+      orcar();
     });
     $('[data-prev]').addEventListener('click', () => shiftMonth(-1));
     $('[data-next]').addEventListener('click', () => shiftMonth(1));
   }
 
   function renderHospedes() {
-    const max = unit().capacidade;
+    const max = unit().capacity;
     let out = '';
     for (let i = 1; i <= max; i++) out += `<option value="${i}">${i} ${i === 1 ? 'hóspede' : 'hóspedes'}</option>`;
     el.hospedes.innerHTML = out;
     el.hospedes.value = String(state.hospedes);
   }
 
-  function shiftMonth(n) {
+  async function shiftMonth(n) {
     const d = new Date(state.ano, state.mes + n, 1);
-    const min = new Date(WH.parse(WH.HOJE).getFullYear(), WH.parse(WH.HOJE).getMonth(), 1);
-    const max = new Date(2027, 11, 1);
+    const hoje = WH.parse(state.hoje);
+    const min = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    /* O calendário público vai até 548 dias (~18 meses); o último par de
+       meses visível precisa caber nele, com folga. */
+    const max = new Date(hoje.getFullYear(), hoje.getMonth() + 15, 1);
     if (d < min || d > max) return;
     state.ano = d.getFullYear();
     state.mes = d.getMonth();
+    await recarregar();
+  }
+
+  async function recarregar() {
+    state.carregando = true;
+    render();
+    try {
+      await carregarVisivel();
+    } catch (e) {
+      state.carregando = false;
+      toast(e.message || 'Não foi possível carregar o calendário.');
+      render();
+      return;
+    }
+    state.carregando = false;
     render();
   }
 
   /* ─────────── Calendário ─────────── */
-  const CLASSE = { 'livre': 'free', 'ocupado': 'busy' };
+  const ESPECIAIS = ['feriado', 'reveillon', 'carnaval', 'alta'];
 
   function renderCalendars() {
     let html = '';
@@ -117,108 +165,142 @@
     }
     el.cals.innerHTML = html;
     el.cals.querySelectorAll('.day[data-d]').forEach(b => {
-      b.addEventListener('click', () => onPick(b.dataset.d, b.dataset.st));
+      b.addEventListener('click', () => onPick(b.dataset.d));
     });
   }
 
   function mes(ano, m) {
     const first = new Date(ano, m, 1);
-    const dias = new Date(ano, m + 1, 0).getDate();
-    const offset = first.getDay();
+    const total = new Date(ano, m + 1, 0).getDate();
     const u = unit();
 
     let livres = 0;
     let cells = '';
-    for (let i = 0; i < offset; i++) cells += '<span class="day day--empty"></span>';
+    for (let i = 0; i < first.getDay(); i++) cells += '<span class="day day--empty"></span>';
 
-    for (let d = 1; d <= dias; d++) {
+    for (let d = 1; d <= total; d++) {
       const s = WH.key(ano, m, d);
-      const st = WH.status(u.id, s).st;
-      const t = WH.tarifa(s);
-      const past = s < WH.HOJE;
-      const especial = ['feriado', 'reveillon', 'carnaval', 'alta'].indexOf(t.tipo) !== -1;
-      if (st === 'livre' && !past) livres++;
+      const dia = diaDe(s);
+      const past = s < state.hoje;
+      const livre = !!(dia && dia.available) && !past;
+      if (livre) livres++;
 
-      const cls = ['day', 'day--' + CLASSE[st]];
+      const cls = ['day', dia ? (dia.available ? 'day--free' : 'day--busy') : 'day--loading'];
       if (past) cls.push('day--past');
-      if (especial) cls.push('day--special');
-      if (s === WH.HOJE) cls.push('day--today');
+      if (dia && ESPECIAIS.indexOf(dia.date_type) !== -1) cls.push('day--special');
+      if (s === state.hoje) cls.push('day--today');
       if (s === state.checkin || s === state.checkout) cls.push('day--sel');
       else if (state.checkin && state.checkout && s > state.checkin && s < state.checkout) cls.push('day--in-range');
 
-      const titulo = st === 'livre'
-        ? `${t.label} · ${WH.brl(WH.preco(u.id, s))}`
+      const titulo = !dia ? 'Carregando…'
+        : dia.available ? `${WH.rotulo(dia.date_type)} · ${WH.brl(dia.price_cents)}${dia.min_nights > 1 ? ' · mínimo ' + dia.min_nights + ' noites' : ''}`
         : 'Indisponível';
 
-      cells += `<button type="button" class="${cls.join(' ')}" data-d="${s}" data-st="${st}" title="${titulo}">
+      cells += `<button type="button" class="${cls.join(' ')}" data-d="${s}" title="${WH.esc(titulo)}">
           <span class="day__n">${d}</span>
-          <span class="day__p">${st === 'livre' && !past ? curto(WH.preco(u.id, s)) : '—'}</span>
+          <span class="day__p">${livre && dia.price_cents != null ? curto(dia.price_cents) : '—'}</span>
         </button>`;
     }
 
     return `<div class="calendar">
         <h3 class="calendar__title">${WH.MESES[m]} ${ano}</h3>
-        <p class="calendar__sub">${livres} ${livres === 1 ? 'noite livre' : 'noites livres'} para ${u.nome}</p>
+        <p class="calendar__sub">${state.carregando ? 'consultando a central…' : `${livres} ${livres === 1 ? 'noite livre' : 'noites livres'} para ${WH.esc(u.name)}`}</p>
         <div class="calendar__weekdays"><span>dom</span><span>seg</span><span>ter</span><span>qua</span><span>qui</span><span>sex</span><span>sáb</span></div>
         <div class="calendar__grid">${cells}</div>
       </div>`;
   }
 
-  function onPick(s, st) {
-    if (s < WH.HOJE) { toast('Data já passou.'); return; }
-    if (st !== 'livre') {
-      toast(`${s.split('-').reverse().join('/')} indisponível.`);
+  async function onPick(s) {
+    if (s < state.hoje) { toast('Data já passou.'); return; }
+    const dia = diaDe(s);
+    if (!dia) return;
+
+    /* O dia de check-out não é noite da estadia: pode estar ocupado por quem
+       chega nesse dia (a estadia é half-open, [check-in, check-out)). */
+    const escolhendoSaida = state.checkin && !state.checkout && s > state.checkin;
+    if (!escolhendoSaida && !dia.available) {
+      toast(`${WH.dataBR(s)} indisponível.`);
       return;
     }
-    if (!state.checkin || state.checkout || s <= state.checkin) {
-      state.checkin = s; state.checkout = null;
-    } else {
-      /* valida se todas as noites entre check-in e check-out estão livres */
-      for (let cur = state.checkin; cur < s; cur = WH.addDays(cur, 1)) {
-        if (WH.status(state.produto, cur).st !== 'livre') {
-          toast('Há datas ocupadas no intervalo. Selecionamos um novo check-in.');
-          state.checkin = s; state.checkout = null;
-          render(); return;
-        }
+    if (!escolhendoSaida) {
+      state.checkin = s; state.checkout = null; state.orcamento = null;
+      render();
+      return;
+    }
+
+    /* Todas as noites entre check-in e check-out precisam estar livres. As que
+       estiverem fora dos meses visíveis são pedidas agora. */
+    if (WH.parse(s) - WH.parse(state.checkin) > 92 * 864e5) {
+      toast('Para estadias acima de 90 noites, fale com a gente pelo WhatsApp.');
+      return;
+    }
+    try {
+      await carregarDias(state.checkin, s);
+    } catch (e) {
+      toast(e.message);
+      return;
+    }
+    for (let cur = state.checkin; cur < s; cur = WH.addDays(cur, 1)) {
+      const noite = diaDe(cur);
+      if (!noite || !noite.available) {
+        toast('Há datas ocupadas no intervalo. Escolha um novo check-in.');
+        state.checkin = null; state.checkout = null; state.orcamento = null;
+        render();
+        return;
       }
-      state.checkout = s;
     }
+    state.checkout = s;
     render();
+    orcar();
   }
 
-  /* ─────────── Orçamento ─────────── */
-  function calcular() {
+  /* ─────────── Orçamento (POST /public/quotes) ─────────── */
+  let pedidoAtual = 0;
+
+  async function orcar() {
+    if (!state.checkin || !state.checkout) { renderQuote(); return; }
     const u = unit();
-    const linhas = {};
-    let subtotal = 0, noites = 0, minExigido = 1;
-
-    for (let cur = state.checkin; cur < state.checkout; cur = WH.addDays(cur, 1)) {
-      const t = WH.tarifa(cur);
-      const v = u.rates[t.tipo];
-      linhas[t.tipo] = linhas[t.tipo] || { tipo: t.tipo, label: rotulo(t.tipo), qtd: 0, unit: v };
-      linhas[t.tipo].qtd++;
-      subtotal += v; noites++;
-      minExigido = Math.max(minExigido, P.minNoites[t.tipo] || 1);
+    const chave = [u.unit_type_id, state.checkin, state.checkout, state.hospedes].join('|');
+    const meu = ++pedidoAtual;
+    state.orcamento = { chave, carregando: true };
+    renderQuote();
+    try {
+      const dados = await WH.api.orcar({
+        unit_type_id: u.unit_type_id, check_in: state.checkin,
+        check_out: state.checkout, guests_count: state.hospedes
+      });
+      if (meu !== pedidoAtual) return;
+      state.orcamento = { chave, dados };
+    } catch (erro) {
+      if (meu !== pedidoAtual) return;
+      state.orcamento = { chave, erro };
     }
-    const limpeza = P.taxaLimpeza[u.id] || 0;
-    const total = subtotal + limpeza;
-    return { linhas: Object.values(linhas), subtotal, limpeza, total, noites, minExigido,
-             sinal: Math.round(total * P.sinalPercentual / 100) };
+    renderQuote();
   }
 
-  function rotulo(tipo) {
-    return { normal: 'Diária normal', fds: 'Fim de semana', feriado: 'Feriado',
-             alta: 'Alta temporada', reveillon: 'Réveillon', carnaval: 'Carnaval' }[tipo] || tipo;
+  function cabecalho(u) {
+    return `
+      <div class="quote__head">
+        <span class="quote__title">Seu orçamento</span>
+        <span class="pill">Tabela vigente</span>
+      </div>
+      <div class="quote__unit"><b>${WH.esc(u.name)}</b>até ${u.capacity} hóspedes · check-in 14h · check-out 11h</div>`;
+  }
+
+  function blocoPolitica() {
+    const P = state.politica;
+    return `
+      <div class="quote__signal">
+        <div class="row"><span>Sinal para confirmar</span><b>${P.deposit_pct}%</b></div>
+        <div class="row"><span>Saldo</span><b>até ${P.balance_due_days} dias antes</b></div>
+        <div class="row"><span>Pré-reserva</span><b>segura ${P.hold_hours}h</b></div>
+      </div>`;
   }
 
   function renderQuote() {
     const u = unit();
-    const head = `
-      <div class="quote__head">
-        <span class="quote__title">Seu orçamento</span>
-        <span class="pill">Simulação</span>
-      </div>
-      <div class="quote__unit"><b>${u.nome}</b>até ${u.capacidade} hóspedes · check-in 14h · check-out 11h</div>`;
+    const P = state.politica;
+    const head = cabecalho(u);
 
     if (!state.checkin || !state.checkout) {
       el.quote.innerHTML = head + `
@@ -230,108 +312,121 @@
         <p class="quote__empty">${state.checkin
           ? 'Agora selecione a data de check-out no calendário.'
           : 'Selecione a data de check-in no calendário para ver o valor da estadia.'}</p>
-        <div class="quote__signal">
-          <div class="row"><span>Sinal para confirmar</span><b>${P.sinalPercentual}%</b></div>
-          <div class="row"><span>Saldo</span><b>até ${P.prazoSaldoDias} dias antes</b></div>
-          <div class="row"><span>Pré-reserva</span><b>segura ${P.preReservaHoras}h</b></div>
-        </div>`;
+        ${blocoPolitica()}`;
       return;
     }
 
-    const c = calcular();
-    const capOK = state.hospedes <= u.capacidade;
-    const minOK = c.noites >= c.minExigido;
-
-    el.quote.innerHTML = head + `
+    const datas = `
       <div class="quote__dates">
         <div class="quote__date"><div class="l">Check-in</div><div class="v">${WH.dataCurta(state.checkin)}</div></div>
         <div class="quote__arrow">→</div>
         <div class="quote__date"><div class="l">Check-out</div><div class="v">${WH.dataCurta(state.checkout)}</div></div>
-      </div>
+      </div>`;
 
+    const o = state.orcamento;
+    if (!o || o.carregando) {
+      el.quote.innerHTML = head + datas + `<p class="quote__empty">Calculando com a tabela vigente…</p>`;
+      return;
+    }
+    if (o.erro) {
+      /* A mensagem é a da API (mínimo de noites, lotação etc.): é ela quem sabe a regra. */
+      const tipo = o.erro.code === 'MIN_STAY_NOT_MET' ? 'warn' : 'block';
+      el.quote.innerHTML = head + datas + `
+        <div class="quote__hint quote__hint--${tipo}">${WH.esc(o.erro.message)}</div>
+        ${blocoPolitica()}
+        ${WHATSAPP ? `<div class="quote__actions"><a class="btn btn--secondary" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}">Falar no WhatsApp</a></div>` : ''}`;
+      return;
+    }
+
+    const c = o.dados;
+    el.quote.innerHTML = head + datas + `
       <div class="quote__lines">
-        ${c.linhas.map(l => `
+        ${c.lines.map(l => `
           <div class="quote__line quote__line--tag">
-            <span><span class="tarifa-tag">${l.label}</span> ${l.qtd}×</span>
-            <b>${WH.brl(l.unit * l.qtd)}</b>
+            <span><span class="tarifa-tag">${WH.esc(l.label || WH.rotulo(l.date_type))}</span> ${l.nights}×</span>
+            <b>${WH.brl(l.subtotal_cents)}</b>
           </div>`).join('')}
-        <div class="quote__line"><span>Taxa de limpeza</span><b>${WH.brl(c.limpeza)}</b></div>
+        <div class="quote__line"><span>Taxa de limpeza</span><b>${WH.brl(c.cleaning_cents)}</b></div>
       </div>
 
       <div class="quote__sep"></div>
 
       <div class="quote__total">
-        <span class="l">Total · ${c.noites} ${c.noites === 1 ? 'noite' : 'noites'}</span>
-        <span class="v">${WH.brl(c.total)}</span>
+        <span class="l">Total · ${c.night_count} ${c.night_count === 1 ? 'noite' : 'noites'}</span>
+        <span class="v">${WH.brl(c.total_cents)}</span>
       </div>
 
       <div class="quote__signal">
-        <div class="row"><span>Sinal (${P.sinalPercentual}%) para confirmar</span><b>${WH.brl(c.sinal)}</b></div>
-        <div class="row"><span>Saldo até ${P.prazoSaldoDias} dias antes</span><b>${WH.brl(c.total - c.sinal)}</b></div>
-        <div class="row"><span>Diária média</span><b>${WH.brl(Math.round(c.total / c.noites))}</b></div>
+        <div class="row"><span>Sinal (${P.deposit_pct}%) para confirmar</span><b>${WH.brl(c.deposit_cents)}</b></div>
+        <div class="row"><span>Saldo até ${P.balance_due_days} dias antes</span><b>${WH.brl(c.balance_cents)}</b></div>
+        <div class="row"><span>Diária média</span><b>${WH.brl(c.avg_nightly_cents)}</b></div>
       </div>
-
-      ${!minOK ? `<div class="quote__hint quote__hint--warn">Estadia mínima para este período: ${c.minExigido} noites.</div>` : ''}
-      ${!capOK ? `<div class="quote__hint quote__hint--block">${state.hospedes} hóspedes excede a capacidade de ${u.capacidade}.</div>` : ''}
 
       <div class="quote__actions">
-        <button class="btn btn--dark" data-pre ${(!minOK || !capOK) ? 'disabled style="opacity:.5;cursor:not-allowed"' : ''}>Gerar pré-reserva (${P.preReservaHoras}h)</button>
-        ${WHATSAPP ? `<a class="btn btn--secondary" data-wa target="_blank" rel="noopener" href="#">Enviar orçamento no WhatsApp</a>` : ''}
+        ${WHATSAPP ? `<a class="btn btn--dark" data-wa target="_blank" rel="noopener" href="#">Pedir pré-reserva no WhatsApp</a>` : ''}
       </div>
-      <p class="quote__note">Pré-reserva bloqueia a data por ${P.preReservaHoras}h. Sem o sinal, a data é liberada automaticamente.</p>`;
-
-    const pre = el.quote.querySelector('[data-pre]');
-    if (pre && !pre.disabled) {
-      pre.addEventListener('click', () => {
-        WH.ocupacoes.push({ unit: state.produto, de: state.checkin, ate: state.checkout });
-        toast(`Pré-reserva registrada: ${WH.dataCurta(state.checkin)} → ${WH.dataCurta(state.checkout)} · ${WH.brl(c.total)}. A data ficou bloqueada por ${P.preReservaHoras}h.`);
-        state.checkin = state.checkout = null;
-        render();
-      });
-    }
+      <p class="quote__note">Valores da tabela vigente. A pré-reserva segura a data por ${P.hold_hours}h; sem o sinal, a data é liberada automaticamente.</p>`;
 
     const wa = el.quote.querySelector('[data-wa]');
     if (wa) {
-      const txt = `Olá! Orçamento White House%0A%0A*${u.nome}*%0ACheck-in: ${state.checkin.split('-').reverse().join('/')}%0ACheck-out: ${state.checkout.split('-').reverse().join('/')}%0AHóspedes: ${state.hospedes}%0ANoites: ${c.noites}%0A%0ATotal: ${WH.brl(c.total)}%0ASinal (${P.sinalPercentual}%25): ${WH.brl(c.sinal)}`;
-      wa.href = `https://wa.me/${WHATSAPP}?text=` + txt;
+      const linhas = [
+        'Olá! Quero pré-reservar na White House:', '',
+        `*${u.name}*`,
+        `Check-in: ${WH.dataBR(state.checkin)}`,
+        `Check-out: ${WH.dataBR(state.checkout)}`,
+        `Hóspedes: ${state.hospedes}`,
+        `Noites: ${c.night_count}`, '',
+        `Total: ${WH.brl(c.total_cents)}`,
+        `Sinal (${P.deposit_pct}%): ${WH.brl(c.deposit_cents)}`
+      ];
+      wa.href = `https://wa.me/${WHATSAPP}?text=` + encodeURIComponent(linhas.join('\n'));
     }
   }
 
   /* ─────────── Indicadores públicos do mês ─────────── */
   function renderKPIs() {
-    const dias = new Date(state.ano, state.mes + 1, 0).getDate();
-    let livres = 0, menor = Infinity;
-    for (let d = 1; d <= dias; d++) {
+    const P = state.politica;
+    const total = new Date(state.ano, state.mes + 1, 0).getDate();
+    let livres = 0, menor = null;
+    for (let d = 1; d <= total; d++) {
       const s = WH.key(state.ano, state.mes, d);
-      if (s < WH.HOJE) continue;
-      if (WH.status(state.produto, s).st === 'livre') {
+      if (s < state.hoje) continue;
+      const dia = diaDe(s);
+      if (dia && dia.available) {
         livres++;
-        menor = Math.min(menor, WH.preco(state.produto, s));
+        if (dia.price_cents != null && (menor === null || dia.price_cents < menor)) menor = dia.price_cents;
       }
     }
     const cards = [
-      { v: livres, l: 'Noites livres em ' + WH.MESES[state.mes], d: unit().nome },
-      { v: menor === Infinity ? '—' : WH.brl(menor), l: 'Diária a partir de', d: 'no mês selecionado' },
-      { v: P.sinalPercentual + '%', l: 'Sinal para confirmar', d: 'saldo até ' + P.prazoSaldoDias + ' dias antes' },
-      { v: P.preReservaHoras + 'h', l: 'Pré-reserva sem pagamento', d: 'a data fica segura' }
+      { v: livres, l: 'Noites livres em ' + WH.MESES[state.mes], d: unit().name },
+      { v: menor === null ? '—' : WH.brl(menor), l: 'Diária a partir de', d: 'no mês selecionado' },
+      { v: P.deposit_pct + '%', l: 'Sinal para confirmar', d: 'saldo até ' + P.balance_due_days + ' dias antes' },
+      { v: P.hold_hours + 'h', l: 'Pré-reserva sem pagamento', d: 'a data fica segura' }
     ];
     el.kpis.innerHTML = cards.map(c => `
-      <div class="kpi"><div class="kpi__v">${c.v}</div><div class="kpi__l">${c.l}</div><div class="kpi__d">${c.d}</div></div>`).join('');
+      <div class="kpi"><div class="kpi__v">${c.v}</div><div class="kpi__l">${c.l}</div><div class="kpi__d">${WH.esc(c.d)}</div></div>`).join('');
   }
 
-  /* ─────────── Tabelas e listas estáticas ─────────── */
+  /* ─────────── Tabela de tarifas (da tabela vigente) ─────────── */
   function renderRates() {
-    el.rates.innerHTML = WH.units.map(u => `
+    el.rates.innerHTML = state.produtos.map(p => {
+      const por = {};
+      for (const r of p.rates) por[r.date_type] = r.price_cents;
+      return `
       <tr>
-        <td>${u.nome}</td>
-        <td>${u.capacidade} hóspedes</td>
-        <td>${WH.brl(u.rates.normal)}</td>
-        <td>${WH.brl(u.rates.fds)}</td>
-        <td>${WH.brl(u.rates.feriado)}</td>
-        <td>${WH.brl(u.rates.alta)}</td>
-        <td class="hi">${WH.brl(u.rates.reveillon)}</td>
-        <td class="hi">${WH.brl(u.rates.carnaval)}</td>
-      </tr>`).join('');
+        <td>${WH.esc(p.name)}</td>
+        <td>${p.capacity} hóspedes</td>
+        ${WH.TIPOS.map(t => `<td${t === 'reveillon' || t === 'carnaval' ? ' class="hi"' : ''}>${por[t] != null ? WH.brl(por[t]) : '—'}</td>`).join('')}
+      </tr>`;
+    }).join('');
+
+    /* As estadias mínimas também saem da tabela vigente, não do HTML. */
+    if (el.minimos && state.produtos.length) {
+      const min = {};
+      for (const p of state.produtos) for (const r of p.rates) min[r.date_type] = Math.max(min[r.date_type] || 1, r.min_nights);
+      const partes = WH.TIPOS.filter(t => (min[t] || 1) > 1).map(t => `${min[t]} em ${WH.rotulo(t).toLowerCase()}`);
+      el.minimos.textContent = partes.length ? 'Estadias mínimas: ' + partes.join(', ') + '.' : '';
+    }
   }
 
   function render() {
@@ -340,8 +435,46 @@
     renderKPIs();
   }
 
-  initControls();
-  aplicarDeepLink();
-  renderRates();
-  render();
+  /* ─────────── Início ─────────── */
+  async function iniciar() {
+    try {
+      const [produtos, politica] = await Promise.all([WH.api.produtos(), WH.api.politica()]);
+      state.produtos = produtos;
+      state.politica = politica;
+      state.hoje = politica.today;
+    } catch (e) {
+      falhaGeral();
+      return;
+    }
+    if (!state.produtos.length) { falhaGeral(); return; }
+
+    const pedido = params.get('produto');
+    state.produto = state.produtos.some(p => p.code === pedido) ? pedido
+      : (state.produtos.some(p => p.code === 'cobertura') ? 'cobertura' : state.produtos[0].code);
+    state.hospedes = Math.min(2, unit().capacity);
+    const hoje = WH.parse(state.hoje);
+    state.ano = hoje.getFullYear(); state.mes = hoje.getMonth();
+
+    /* Deep link opcional: ?produto=cobertura&checkin=2026-12-28&checkout=2027-01-02 */
+    const ci = params.get('checkin'), co = params.get('checkout');
+    const valido = /^\d{4}-\d{2}-\d{2}$/;
+    if (ci && co && valido.test(ci) && valido.test(co) && ci < co && ci >= state.hoje) {
+      const d = WH.parse(ci);
+      state.ano = d.getFullYear(); state.mes = d.getMonth();
+    }
+
+    initControls();
+    renderRates();
+    await recarregar();
+
+    if (ci && co && valido.test(ci) && valido.test(co) && ci < co && ci >= state.hoje) {
+      const dia = diaDe(ci);
+      if (dia && dia.available) {
+        state.checkin = ci;
+        await onPick(co);
+      }
+    }
+  }
+
+  iniciar();
 })();

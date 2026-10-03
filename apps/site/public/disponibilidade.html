@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#16302B" />
 
     <title>Disponibilidade e tarifas | White House · Praia do Coqueiro</title>
-    <meta name="description" content="Calendário central de reservas da White House: disponibilidade por produto, tarifas por período e orçamento imediato com pré-reserva de 48 horas." />
+    <meta name="description" content="Calendário central de reservas da White House: disponibilidade por produto, tarifas por período e orçamento imediato pela tabela vigente." />
 
     <!-- O número do WhatsApp não mora neste arquivo: o nginx o escreve por SSI a
          partir de uma única linha (whv_whatsapp em apps/site/nginx.conf). -->
@@ -112,7 +112,7 @@
                 <header class="section-head">
                     <p class="eyebrow">Tabela comercial V1</p>
                     <h2 class="section-head__title">Tarifas por <em>tipo de data</em></h2>
-                    <p class="section-head__lead">Valores por diária, por produto. Estadias mínimas: 2 noites em fins de semana, 3 em feriados e alta temporada, 4 no Réveillon e no Carnaval.</p>
+                    <p class="section-head__lead">Valores por diária, por produto, da tabela vigente. <span data-minimos></span></p>
                 </header>
                 <div class="rates__wrap">
                     <table class="rates" data-rates>
@@ -140,7 +140,7 @@
                 <div class="cta-banner__inner">
                     <div>
                         <h2 class="cta-banner__title">Segure a data com uma <em>pré-reserva</em></h2>
-                        <p class="cta-banner__lead">A pré-reserva bloqueia o calendário por 48 horas. A confirmação acontece com o sinal de 50%; o saldo vence 7 dias antes do check-in.</p>
+                        <p class="cta-banner__lead" data-politica-texto="completo">A pré-reserva bloqueia o calendário por um prazo curto. A confirmação acontece com o sinal; o saldo vence antes do check-in.</p>
                     </div>
                     <div class="cta-banner__actions">
                         <a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener" class="btn btn--primary">Falar com reservas</a>
@@ -191,7 +191,7 @@
 
     <div class="toast" data-toast role="status" aria-live="polite"></div>
 
-    <script src="/scripts/data.js"></script>
+    <script src="/scripts/vitrine.js"></script>
     <script src="/scripts/main.js"></script>
     <script src="/scripts/disponibilidade.js"></script>
 </body>

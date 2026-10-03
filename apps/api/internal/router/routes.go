@@ -14,6 +14,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/stream"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/vitrine"
 )
 
 // Acesso classifica como a rota é protegida. É o eixo que o teste de contrato
@@ -23,8 +24,10 @@ import (
 type Acesso string
 
 const (
-	// AcessoPublico — sem token. Só sonda e os endpoints que existem
-	// justamente para quem ainda não tem sessão.
+	// AcessoPublico — sem token. Só sonda, os endpoints que existem
+	// justamente para quem ainda não tem sessão e a vitrine do site de vendas.
+	// Exige Motivo, como AcessoAutenticado: abrir uma rota para a internet é a
+	// decisão mais cara da tabela, e quem a toma escreve por quê.
 	AcessoPublico Acesso = "publico"
 
 	// AcessoAutenticado — exige token, mas não consulta a matriz: são os
@@ -45,8 +48,9 @@ type Rota struct {
 	Recurso string
 	Acao    string
 
-	// Motivo é obrigatório em AcessoAutenticado: quem tirar a checagem de
-	// permissão de uma rota tem de escrever por quê, e o revisor lê.
+	// Motivo é obrigatório em AcessoAutenticado e em AcessoPublico: quem tirar
+	// a checagem de permissão (ou o token) de uma rota tem de escrever por quê,
+	// e o revisor lê.
 	Motivo string
 
 	// NaRaiz tira a rota do prefixo `/api/v1` e a monta em `/`.
@@ -87,6 +91,9 @@ type Deps struct {
 	CRM             *crm.Handler
 	Stream          *stream.Handler
 	Contatos        *contatos.Handler
+
+	// Vitrine é a superfície pública do site de vendas (rotas_vitrine.go).
+	Vitrine *vitrine.Handler
 }
 
 // Rotas devolve a tabela completa da API v1, concatenando os grupos.
@@ -109,6 +116,7 @@ func Rotas(d Deps) []Rota {
 		// rotas_contatos.go). Manter a assinatura como está custa esta linha e
 		// evita reescrever um arquivo de outro agente.
 		func(d Deps) []Rota { return rotasContatos(d.Contatos) },
+		rotasVitrine,
 	} {
 		todas = append(todas, grupo(d)...)
 	}
@@ -120,14 +128,14 @@ func Rotas(d Deps) []Rota {
 func rotasNucleo(d Deps) []Rota {
 	return []Rota{
 		// ───────── Saúde ─────────
-		{Metodo: http.MethodGet, Path: "/healthz", Acesso: AcessoPublico, NaRaiz: true, Handler: d.Saude.Vivo},
-		{Metodo: http.MethodGet, Path: "/readyz", Acesso: AcessoPublico, NaRaiz: true, Handler: d.Saude.Pronto},
+		{Metodo: http.MethodGet, Path: "/healthz", Acesso: AcessoPublico, NaRaiz: true, Motivo: "sonda de vida do orquestrador", Handler: d.Saude.Vivo},
+		{Metodo: http.MethodGet, Path: "/readyz", Acesso: AcessoPublico, NaRaiz: true, Motivo: "sonda de prontidão do orquestrador", Handler: d.Saude.Pronto},
 
 		// ───────── Autenticação ─────────
-		{Metodo: http.MethodPost, Path: "/auth/login", Acesso: AcessoPublico, Handler: d.Auth.Login},
-		{Metodo: http.MethodPost, Path: "/auth/refresh", Acesso: AcessoPublico, Handler: d.Auth.Refresh},
-		{Metodo: http.MethodPost, Path: "/auth/password/forgot", Acesso: AcessoPublico, Handler: d.Auth.EsqueciSenha},
-		{Metodo: http.MethodPost, Path: "/auth/password/reset", Acesso: AcessoPublico, Handler: d.Auth.TrocarSenha},
+		{Metodo: http.MethodPost, Path: "/auth/login", Acesso: AcessoPublico, Motivo: "é como se obtém a sessão", Handler: d.Auth.Login},
+		{Metodo: http.MethodPost, Path: "/auth/refresh", Acesso: AcessoPublico, Motivo: "renova a sessão com o refresh, quando o access já venceu", Handler: d.Auth.Refresh},
+		{Metodo: http.MethodPost, Path: "/auth/password/forgot", Acesso: AcessoPublico, Motivo: "quem esqueceu a senha não tem sessão", Handler: d.Auth.EsqueciSenha},
+		{Metodo: http.MethodPost, Path: "/auth/password/reset", Acesso: AcessoPublico, Motivo: "conclui a recuperação com o token do e-mail, sem sessão", Handler: d.Auth.TrocarSenha},
 		{
 			Metodo: http.MethodPost, Path: "/auth/logout", Acesso: AcessoAutenticado,
 			Motivo:  "encerra a própria sessão; exigir permissão deixaria um usuário sem acesso preso dentro da sessão",
@@ -200,6 +208,9 @@ func ValidarTabela(rotas []Rota) error {
 		case AcessoPublico:
 			if r.Recurso != "" || r.Acao != "" {
 				return fmt.Errorf("%s: rota pública não deve declarar recurso/ação", chave)
+			}
+			if r.Motivo == "" {
+				return fmt.Errorf("%s: rota pública precisa de Motivo", chave)
 			}
 		case AcessoAutenticado:
 			if r.Motivo == "" {
