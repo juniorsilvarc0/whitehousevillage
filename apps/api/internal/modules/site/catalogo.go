@@ -131,8 +131,13 @@ func imagem(chave, rotulo, ajuda, url, alt string) Campo {
 	return Campo{Chave: chave, Rotulo: rotulo, Tipo: TipoImagem, Ajuda: ajuda, Max: maxAlt, Original: original}
 }
 
+// video com url vazia = sem vídeo próprio hoje (original null), como imagem.
 func video(chave, rotulo, ajuda, url string) Campo {
-	return Campo{Chave: chave, Rotulo: rotulo, Tipo: TipoVideo, Ajuda: ajuda, Original: jsonDe(midiaOriginal{URL: url})}
+	original := json.RawMessage("null")
+	if url != "" {
+		original = jsonDe(midiaOriginal{URL: url})
+	}
+	return Campo{Chave: chave, Rotulo: rotulo, Tipo: TipoVideo, Ajuda: ajuda, Original: original}
 }
 
 func sub(chave, rotulo string, tipo Tipo) Subcampo {
@@ -254,6 +259,12 @@ var catalogoRodada1 = []Secao{
 		video("inicio.video", "Vídeo de fundo da capa",
 			"Toca sem som, em repetição, atrás do título. MP4 ou WebM, até 300 MB — vídeos curtos (15 a 40 segundos) carregam mais rápido.",
 			"/videos/hero.mp4"),
+		// Pedido do dono em 03/10/2026: um vídeo deitado (16:9) para o
+		// computador e outro em pé (9:16) para o celular. Opcional — vazio, o
+		// celular continua com o vídeo de cima, recortado no meio.
+		video("inicio.video-celular", "Vídeo de fundo da capa — celular",
+			"Opcional. Versão EM PÉ (9:16, como Stories e Reels — 1080 × 1920) para quem abre o site com o celular na vertical. Sem este vídeo, o celular mostra o de cima, cortado nas laterais.",
+			""),
 		numeros("inicio.numeros", "Números da capa",
 			[]string{"24", "Hóspedes na casa completa"},
 			[]string{"12", "Acomodações"},

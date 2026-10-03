@@ -236,6 +236,27 @@
     });
   }
 
+  /* Vídeo da capa no celular (inicio.video-celular): opcional. Com a tela EM
+     PÉ, o <video> da capa troca para a versão vertical (9:16); deitada, volta
+     para a de computador. Sem vídeo de celular, nada muda: o celular segue
+     com o vídeo de cima, recortado no meio. */
+  function videoDoCelular(valores) {
+    var celular = valores['inicio.video-celular'];
+    var el = document.querySelector('[data-cms-video="inicio.video"]');
+    if (!el || !celular || typeof celular !== 'object' || !enderecoSeguro(celular.url) || !window.matchMedia) return;
+    var emPe = window.matchMedia('(orientation: portrait)');
+    var original = null;
+    function escolher() {
+      if (original === null) {
+        var f = el.querySelector('source');
+        original = valores['inicio.video'] || { url: (f && f.getAttribute('src')) || el.getAttribute('src') };
+      }
+      aplicarVideo(el, emPe.matches ? celular : original);
+    }
+    escolher();
+    if (emPe.addEventListener) emPe.addEventListener('change', escolher);
+  }
+
   function buscar() {
     if (!window.fetch) return Promise.resolve({});
     var controle = window.AbortController ? new AbortController() : null;
@@ -292,6 +313,7 @@
   window.WH_CONTEUDO = buscar().then(function (valores) {
     carregados = valores;
     aplicar(valores);
+    try { videoDoCelular(valores); } catch (e) { /* fica o vídeo de computador */ }
     return valores;
   }, function () { return {}; });
 
