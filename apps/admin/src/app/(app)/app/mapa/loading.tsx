@@ -8,7 +8,7 @@
  */
 export default function CarregandoMapa() {
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-4 sm:p-6 lg:px-8" aria-busy="true">
+    <div className="altura-da-tela-cheia flex min-h-0 flex-col gap-3 p-4 sm:p-6 lg:px-8" aria-busy="true">
       <div className="h-8 w-64 animate-pulse rounded-lg bg-muted" />
       <div className="h-4 w-full max-w-prose animate-pulse rounded bg-muted/70" />
 

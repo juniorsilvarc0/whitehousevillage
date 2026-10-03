@@ -177,12 +177,36 @@
 body {
   background-color: var(--background);
   color: var(--foreground);
+}
+
+/* O fundo em degradê fica numa camada FIXA à parte. Com
+   `background-attachment: fixed` no próprio body, o navegador repinta a tela
+   inteira a cada rolada (e o vidro desfocado da barra multiplica o custo) — a
+   rolagem do painel ficava travada. Uma camada `position: fixed` é composta
+   uma vez e só desliza. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   background-image:
     radial-gradient(60rem 44rem at -6% -10%, oklch(0.62 0.07 120 / 22%), transparent 60%),
     radial-gradient(52rem 40rem at 104% 4%,  oklch(0.72 0.06 100 / 20%), transparent 58%),
     radial-gradient(56rem 46rem at 88% 96%,  oklch(0.66 0.06 140 / 18%), transparent 60%),
     radial-gradient(44rem 38rem at 18% 104%, oklch(0.80 0.04 95 / 16%),  transparent 58%);
-  background-attachment: fixed;
+}
+
+/* Telas de altura cheia com rolagem própria (o mapa): a janela menos a barra
+   de cima, a margem e — no celular — a barra de baixo. A página não rola
+   nelas; a grade rola por dentro. Os 2px são a borda do painel branco. */
+.altura-da-tela-cheia {
+  height: calc(100dvh - var(--app-chrome-top) - 1.5rem - 2px - var(--mobile-nav-height) - env(safe-area-inset-bottom));
+}
+@media (min-width: 48rem) {
+  .altura-da-tela-cheia {
+    height: calc(100dvh - var(--app-chrome-top) - 1.5rem - 2px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
