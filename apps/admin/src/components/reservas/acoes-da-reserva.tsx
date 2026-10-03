@@ -113,7 +113,7 @@ export function AcoesDaReserva({
     }
     if (podeRealocarUnidade(reserva) && composicao.length > 0) {
       secundarias.push({
-        rotulo: "Trocar unidade",
+        rotulo: "Trocar apartamento",
         icone: ArrowLeftRight,
         abrir: () => realocacao.abrir({ ...reserva, unidades: reserva.units }),
       });
@@ -225,9 +225,9 @@ export function AcoesDaReserva({
         rotuloConfirmar="Descartar"
         descricao={
           <>
-            <strong>{reserva.code}</strong> está em rascunho: não segura data nenhuma, não tem sinal e não
-            entrou no razão. Descartar apaga o registro para valer. A partir de pré-reserva isto deixa de ser
-            possível — aí o caminho é cancelar, que aplica a política e preserva o histórico.
+            <strong>{reserva.code}</strong> está em rascunho: não guarda nenhuma data, não tem sinal e não
+            entrou nas contas. Descartar apaga o rascunho de vez. Depois que vira pré-reserva isso não é mais
+            possível — aí o caminho é cancelar, que segue a política e mantém o histórico.
           </>
         }
         aoConfirmar={async () => {

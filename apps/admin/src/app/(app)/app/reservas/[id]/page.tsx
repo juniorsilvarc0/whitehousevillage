@@ -48,7 +48,7 @@ export default async function ReservaPage({ params }: { params: Promise<{ id: st
           titulo="Não foi possível abrir a reserva"
           detalhe={
             completo.code === "NOT_FOUND"
-              ? "Ou ela não existe, ou é de outro corretor — a API responde 404 nos dois casos, de propósito: 403 confirmaria que ela existe."
+              ? "Ela pode não existir mais, ou pode ser de outro corretor e não estar liberada para você."
               : undefined
           }
         />
@@ -89,9 +89,9 @@ export default async function ReservaPage({ params }: { params: Promise<{ id: st
 
       {composicao && !composicao.ok ? (
         <Nota variante="atencao">
-          A composição deste produto não carregou ({composicao.code}), então trocar a unidade não é oferecido
-          aqui. Essa rota pede <code className="font-mono text-xs">inventory:ver</code> — se o seu perfil só
-          tem reservas, peça o acesso à gestão em Configurações → Perfis.
+          Não foi possível carregar os apartamentos deste produto, então a troca de apartamento não
+          aparece aqui. Se o seu perfil não tem acesso ao Inventário, peça à gestão em Configurações →
+          Perfis.
         </Nota>
       ) : null}
 

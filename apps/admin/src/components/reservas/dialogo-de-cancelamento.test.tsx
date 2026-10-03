@@ -186,8 +186,8 @@ describe("DialogoDeCancelamento", () => {
     abrir();
     escolherMotivo("desistencia");
 
-    expect(await screen.findByText("RESERVATION_NOT_CANCELLABLE")).toBeDefined();
-    expect(screen.getByText(/A reserva está em "checked_out"/)).toBeDefined();
+    expect(await screen.findByText(/A reserva está como "Estadia cumprida"/)).toBeDefined();
+    expect(screen.queryByText("RESERVATION_NOT_CANCELLABLE")).toBeNull();
     // A tela reage ao código, não ao texto da API: a frase exibida é a da casa.
     expect(screen.getByText(/já foi encerrada e não pode ser cancelada/)).toBeDefined();
 

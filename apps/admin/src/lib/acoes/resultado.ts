@@ -34,47 +34,47 @@ export function mensagemDoErro(code: CodigoDeErro, padrao = "Não foi possível 
     case "VALIDATION_ERROR":
       return "Confira os dados informados.";
     case "FORBIDDEN":
-      return "Seu perfil não alcança esta operação.";
+      return "Seu perfil não tem permissão para fazer isso. Se precisar, peça à gestão.";
     case "UNAUTHORIZED":
       return "Sua sessão expirou. Entre de novo.";
     case "NOT_FOUND":
-      return "Este registro não existe mais — alguém pode tê-lo removido.";
+      return "Não encontramos este item. Ele pode ter sido removido.";
     case "NETWORK_ERROR":
-      return "Não foi possível falar com o servidor. Tente novamente em instantes.";
+      return "Sem conexão com o sistema agora. Verifique a internet e tente de novo em instantes.";
     case "RATE_LIMITED":
-      return "Requisições demais. Espere alguns instantes.";
+      return "Muitas tentativas seguidas. Espere alguns instantes e tente de novo.";
     case "CODE_IN_USE":
-      return "Já existe um registro com esse código nesta propriedade.";
+      return "Já existe um cadastro com esse código.";
     case "RESOURCE_IN_USE":
-      return "Ainda há registros usando isto. Encerre-os antes de desativar.";
+      return "Ainda há reservas ou cadastros usando isto. Resolva-os antes de desativar.";
     case "POLICY_IMMUTABLE":
-      return "Versão de política já publicada não se reescreve nem se antedata. Publique uma versão nova.";
+      return "Uma política já publicada não pode ser alterada nem valer para trás. Publique uma versão nova.";
     case "RATE_NOT_FOUND":
-      return "A tabela vigente não tem tarifa para algum tipo de data desta estadia.";
+      return "Falta o preço de alguma noite desta estadia na tabela de preços. Preencha em Configurações → Tarifário.";
     case "MIN_STAY_NOT_MET":
-      return "A estadia é menor que o mínimo de noites do período.";
+      return "A estadia tem menos noites que o mínimo exigido para esse período.";
     case "CAPACITY_EXCEEDED":
-      return "Hóspedes acima da capacidade do produto.";
+      return "Há mais hóspedes do que o produto comporta.";
     case "DISCOUNT_ABOVE_LIMIT":
-      return "Desconto acima da alçada. Acima de 10% nem com aprovação.";
+      return "Desconto acima do permitido, mesmo com aprovação do proprietário.";
     case "DATE_CONFLICT":
-      return "A data já está ocupada. O calendário mudou enquanto esta tela estava aberta.";
+      return "Essas datas acabaram de ser ocupadas por outra reserva. Escolha outras datas.";
     case "UNIT_NOT_AVAILABLE":
-      return "A unidade escolhida está ocupada nesse período.";
+      return "O apartamento escolhido está ocupado nesse período.";
     case "COMPOSITION_INCOMPLETE":
-      return "Este produto não pode ser entregue inteiro: falta unidade ativa na composição. Reative a unidade no inventário.";
+      return "Este produto não pode ser vendido inteiro porque um dos apartamentos dele está desativado. Reative o apartamento em Configurações → Inventário.";
     case "INVALID_STATE_TRANSITION":
-      return "A reserva não está em um estado que aceite esta ação.";
+      return "A situação atual da reserva não permite esta ação. Recarregue a página para ver como ela está.";
     case "RESERVATION_NOT_CANCELLABLE":
       return "Esta reserva já foi encerrada e não pode ser cancelada.";
     case "HOLD_EXPIRED":
-      return "A pré-reserva expirou e a data foi liberada.";
+      return "A pré-reserva venceu e as datas foram liberadas.";
     case "HOLD_LIMIT_REACHED":
-      return "Limite de extensões da pré-reserva atingido.";
+      return "Esta pré-reserva já foi estendida o máximo de vezes permitido.";
     case "IDEMPOTENCY_MISMATCH":
-      return "Esta operação já foi enviada com outro conteúdo. Recarregue a tela.";
+      return "Esta ação já foi enviada antes com outros dados. Recarregue a página e confira.";
     case "INTERNAL":
-      return "Erro no servidor. Tente novamente em instantes.";
+      return "Algo deu errado do nosso lado. Tente novamente em instantes.";
     default:
       return padrao;
   }

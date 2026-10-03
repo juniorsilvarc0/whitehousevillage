@@ -101,7 +101,7 @@ export function BarraDeContatos() {
       <CheckboxCampo
         id="contato-anonimizados"
         label="Mostrar anonimizados"
-        hint="Ficha esvaziada a pedido do titular. Fica fora por padrão para não ser oferecida num negócio novo."
+        hint="Fichas com os dados pessoais apagados a pedido da pessoa. Ficam escondidas para não serem usadas num negócio novo."
         checked={incluirAnonimizados}
         onChange={(evento) => aplicar("include_anonymized", evento.target.checked ? "true" : "")}
         className="pb-1"

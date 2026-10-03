@@ -125,7 +125,7 @@ describe("PainelDeInventario — modais reabertos", () => {
     montar();
 
     const cartao = screen.getByText("Apartamento 2 Suítes").closest("li")!;
-    fireEvent.click(within(cartao).getByRole("button", { name: /composição/i }));
+    fireEvent.click(within(cartao).getByRole("button", { name: /^apartamentos$/i }));
     await screen.findByRole("dialog");
 
     expect((screen.getByRole("checkbox", { name: /AP-01/ }) as HTMLInputElement).checked).toBe(true);

@@ -16,7 +16,8 @@ import { formatarTelefone } from "@/lib/contatos/telefone";
 import { linkDoWhatsApp, mensagemDaReserva } from "@/lib/contatos/whatsapp";
 import { formatarData, formatarDataCurta, formatarInstante } from "@/lib/datas";
 import { formatarBRL, formatarPct } from "@/lib/dinheiro";
-import { ESTADOS } from "@/lib/reservas/estados";
+import { rotuloDaOrigem } from "@/lib/origem";
+import { ESTADOS, rotuloDoMotivo } from "@/lib/reservas/estados";
 import type { ReservaCompleta } from "@/lib/reservas/tipos";
 import { cn } from "@/lib/utils";
 
@@ -63,7 +64,7 @@ export function DetalheDaReserva({
             {formatarData(r.check_in)} → {formatarData(r.check_out)} ·{" "}
             <span className="tabular-nums">{r.night_count}</span> noite{r.night_count === 1 ? "" : "s"} ·{" "}
             <span className="tabular-nums">{r.guests_count}</span> hóspede{r.guests_count === 1 ? "" : "s"}
-            {r.source ? ` · origem ${r.source}` : ""}
+            {r.source ? ` · veio por ${rotuloDaOrigem(r.source)}` : ""}
           </p>
         </div>
 
@@ -91,8 +92,8 @@ export function DetalheDaReserva({
           <Link href={`/app/reservas/${r.rebooked_from_id}`} className="text-primary underline-offset-4 hover:underline">
             Abrir a reserva anterior
           </Link>{" "}
-          — ela continua existindo, cancelada com motivo “remarcação”, para o histórico e o relatório não
-          perderem a venda original.
+          — ela continua guardada, cancelada com o motivo “remarcação”, para a venda original não sumir
+          do histórico.
         </Nota>
       ) : null}
 
@@ -102,10 +103,10 @@ export function DetalheDaReserva({
           {r.cancel_reason ? (
             <>
               {" "}
-              com o motivo <strong>{r.cancel_reason}</strong>
+              com o motivo <strong>{rotuloDoMotivo(r.cancel_reason)}</strong>
             </>
           ) : null}
-          . A data foi liberada; o registro fica.
+          . As datas foram liberadas; a reserva continua no histórico.
         </Nota>
       ) : null}
 
@@ -157,7 +158,7 @@ function PreviaDeCancelamento({ completo }: { completo: ReservaCompleta }) {
           {previa.days_before >= 0
             ? `${previa.days_before} dias de antecedência`
             : `${Math.abs(previa.days_before)} dias depois do check-in`}{" "}
-          · política de cancelamento v{previa.policy_version}
+          · regras de cancelamento versão {previa.policy_version}
         </span>
       </div>
       <dl className="mt-2 flex flex-wrap gap-x-8 gap-y-2 text-sm">
@@ -187,8 +188,8 @@ function PreviaDeCancelamento({ completo }: { completo: ReservaCompleta }) {
         {previa.deposit_paid_cents === 0
           ? "Nada foi recebido ainda: não há o que devolver nem o que reter. "
           : ""}
-        Simulação: nada foi executado. O motivo escolhido no cancelamento pode mudar estes números —{" "}
-        <strong>não comparecimento</strong> aplica a faixa de menor antecedência.
+        É só uma simulação: nada foi feito. O motivo escolhido no cancelamento pode mudar estes números —
+        em caso de <strong>não comparecimento</strong>, vale a regra de menor antecedência.
       </p>
     </section>
   );
@@ -200,7 +201,7 @@ function Financeiro({ completo }: { completo: ReservaCompleta }) {
     <section aria-label="Financeiro" className="rounded-xl border border-border/60 bg-muted/20 p-4">
       <h2 className="font-display text-base">Financeiro</h2>
       <p className="mt-1 text-xs text-muted-foreground">
-        Congelado na venda. Mudar o tarifário amanhã não reescreve nada disto.
+        Valores combinados na venda. Mudar os preços amanhã não altera nada disto.
       </p>
       <dl className="mt-3 text-sm">
         <Valor rotulo="Subtotal das diárias" centavos={r.subtotal_cents} />
@@ -218,11 +219,11 @@ function Financeiro({ completo }: { completo: ReservaCompleta }) {
         ) : null}
         <Valor rotulo="Total" centavos={r.total_cents} destaque />
         <Valor rotulo="Sinal para confirmar" centavos={r.deposit_cents} />
-        <Valor rotulo="Saldo" centavos={r.balance_cents} nota="Vence antes do check-in, pela política." />
+        <Valor rotulo="Saldo" centavos={r.balance_cents} nota="Vence antes do check-in, conforme a política comercial." />
       </dl>
       <p className="mt-3 text-xs text-muted-foreground">
-        Recebíveis, comissões e o acerto final são do módulo financeiro — a Fase 1 registra o pagamento na
-        linha do tempo.
+        Contas a receber, comissões e o acerto final ficarão na tela Financeiro, que ainda está sendo feita.
+        Por enquanto, os pagamentos aparecem no histórico da reserva.
       </p>
     </section>
   );
@@ -260,8 +261,8 @@ function Noites({ completo }: { completo: ReservaCompleta }) {
     <section aria-label="Noites e tarifas" className="rounded-xl border border-border/60 bg-muted/20 p-4">
       <h2 className="font-display text-base">Noites e tarifas aplicadas</h2>
       <p className="mt-1 text-xs text-muted-foreground">
-        O preço que <strong>foi</strong> aplicado a cada noite, não o que a tabela diz hoje. É deste snapshot
-        que saem auditoria, financeiro e BI.
+        O preço que <strong>foi cobrado</strong> em cada noite, combinado na venda — não o que a tabela de
+        preços diz hoje.
       </p>
 
       {completo.lines.length > 0 ? (
@@ -301,7 +302,7 @@ function Noites({ completo }: { completo: ReservaCompleta }) {
           </summary>
           <div className="max-h-72 overflow-y-auto border-t border-border/60">
             <table className="w-full border-collapse text-sm">
-              <caption className="sr-only">Cada noite com o tipo de data e o preço congelado</caption>
+              <caption className="sr-only">Cada noite com o tipo de data e o preço cobrado</caption>
               <tbody>
                 {completo.nights.map((noite) => (
                   <tr key={noite.night} className="border-b border-border/30 last:border-b-0">
@@ -322,8 +323,8 @@ function Noites({ completo }: { completo: ReservaCompleta }) {
         </details>
       ) : (
         <p className="mt-3 text-sm text-muted-foreground">
-          Esta reserva não tem noites detalhadas — o que só acontece em rascunho, antes de o motor congelar o
-          preço.
+          Esta reserva ainda não tem noites detalhadas — isso só acontece em rascunho, antes de o preço ser
+          fechado.
         </p>
       )}
     </section>
@@ -332,11 +333,11 @@ function Noites({ completo }: { completo: ReservaCompleta }) {
 
 function Unidades({ completo }: { completo: ReservaCompleta }) {
   return (
-    <section aria-label="Unidades alocadas" className="rounded-xl border border-border/60 bg-muted/20 p-4">
-      <h2 className="font-display text-base">Unidades alocadas</h2>
+    <section aria-label="Apartamentos" className="rounded-xl border border-border/60 bg-muted/20 p-4">
+      <h2 className="font-display text-base">Apartamentos</h2>
       {completo.units.length === 0 ? (
         <p className="mt-2 text-sm text-muted-foreground">
-          Nenhuma unidade alocada — a reserva não está segurando calendário.
+          Nenhum apartamento reservado — esta reserva não está ocupando datas no calendário.
         </p>
       ) : (
         <>
@@ -354,7 +355,7 @@ function Unidades({ completo }: { completo: ReservaCompleta }) {
                   <p className="mt-0.5 text-xs text-muted-foreground">{unidade.unit_name}</p>
                 </div>
                 {unidade.locked ? (
-                  <Badge variant="outline" title="Fora da realocação automática — a gestão travou a escolha.">
+                  <Badge variant="outline" title="A gestão fixou este apartamento: o sistema não vai trocá-lo sozinho.">
                     <Lock aria-hidden="true" />
                     Travada
                   </Badge>
@@ -364,8 +365,8 @@ function Unidades({ completo }: { completo: ReservaCompleta }) {
           </ul>
           {completo.units.length > 1 ? (
             <p className="mt-2 text-xs text-muted-foreground">
-              A casa inteira: este produto ocupa todas as unidades da composição, e por isso não realoca — não
-              há para onde mover.
+              Casa inteira: este produto ocupa todos os apartamentos, por isso não dá para trocar de
+              apartamento.
             </p>
           ) : null}
         </>
@@ -387,8 +388,8 @@ function Hospedes({ completo }: { completo: ReservaCompleta }) {
         </span>
       </div>
       <p className="mt-1 text-xs text-muted-foreground">
-        A lista de nomes e a quantidade vendida podem divergir de propósito: a venda é de{" "}
-        {completo.reservation.guests_count}, e nem todo mundo se identificou ainda.
+        É normal ter menos nomes que hóspedes: a venda é para{" "}
+        {completo.reservation.guests_count}, e nem todo mundo enviou os dados ainda.
       </p>
 
       {completo.guests.length === 0 ? (
@@ -396,7 +397,7 @@ function Hospedes({ completo }: { completo: ReservaCompleta }) {
           className="mt-3"
           icone={Users}
           titulo="Nenhum nome informado"
-          descricao="A rooming list é o que a portaria usa no dia da chegada. Sem ela, quem chega não é conferido contra nada."
+          descricao="A lista de hóspedes é o que a portaria usa no dia da chegada para conferir quem entra."
         />
       ) : (
         <ul className="mt-3 flex flex-col gap-2">
@@ -545,8 +546,8 @@ function LinkDoWhatsApp({ telefone, texto, compacto }: { telefone: string; texto
 function Snapshots({ completo }: { completo: ReservaCompleta }) {
   const r = completo.reservation;
   return (
-    <section aria-label="Snapshots" className="rounded-xl border border-border/60 bg-muted/20 p-4">
-      <h2 className="font-display text-base">O que esta reserva congelou</h2>
+    <section aria-label="Regras desta reserva" className="rounded-xl border border-border/60 bg-muted/20 p-4">
+      <h2 className="font-display text-base">Regras que valem para esta reserva</h2>
       <dl className="mt-3 flex flex-col gap-2 text-sm">
         <div>
           <dt className="text-xs text-muted-foreground">Política comercial</dt>
@@ -554,11 +555,13 @@ function Snapshots({ completo }: { completo: ReservaCompleta }) {
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Política de cancelamento</dt>
-          <dd className="truncate font-mono text-xs">{r.cancellation_policy_id ?? "—"}</dd>
+          <dd title={r.cancellation_policy_id ?? undefined}>
+            {r.cancellation_policy_id ? "a que valia no dia da reserva" : "—"}
+          </dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">Tabela de tarifas</dt>
-          <dd className="truncate font-mono text-xs">{r.rate_table_id ?? "—"}</dd>
+          <dt className="text-xs text-muted-foreground">Tabela de preços</dt>
+          <dd title={r.rate_table_id ?? undefined}>{r.rate_table_id ? "a que valia no dia da reserva" : "—"}</dd>
         </div>
         <div>
           <dt className="text-xs text-muted-foreground">Criada em</dt>
@@ -572,7 +575,8 @@ function Snapshots({ completo }: { completo: ReservaCompleta }) {
         ) : null}
       </dl>
       <p className="mt-3 text-xs text-muted-foreground">
-        Publicar uma política nova amanhã não altera nada aqui — é esta versão que o cancelamento aplica.
+        Mudar as regras amanhã não altera esta reserva — num cancelamento, valem as regras do dia em que ela
+        foi feita.
       </p>
     </section>
   );

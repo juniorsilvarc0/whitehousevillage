@@ -55,17 +55,17 @@ export default async function ReservasPage({ searchParams }: { searchParams: Pro
         titulo="Reservas"
         descricao={
           <>
-            Da pré-reserva ao check-out. O código é imutável e é por ele que a reserva é falada ao telefone;
-            os valores são os que a venda <strong>congelou</strong> — mudar o tarifário amanhã não reescreve
-            nada aqui.
+            Da pré-reserva ao check-out. O código da reserva nunca muda — use-o para falar dela ao
+            telefone. Os valores são os <strong>combinados na venda</strong>: mudar os preços amanhã não
+            altera nada aqui.
           </>
         }
       />
 
       {escopo === "own" ? (
         <Nota>
-          Seu perfil enxerga <strong>as suas</strong> reservas. Quem aplica esse recorte é o servidor, na
-          consulta — não é um filtro desta tela, e por isso a contagem das páginas também já vem recortada.
+          Seu perfil vê apenas <strong>as suas</strong> reservas. As contagens desta tela também consideram
+          só as suas.
         </Nota>
       ) : null}
 
@@ -85,8 +85,8 @@ export default async function ReservasPage({ searchParams }: { searchParams: Pro
 
       {!produtos.ok ? (
         <Nota variante="atencao">
-          O catálogo de produtos não carregou ({produtos.code}), então o filtro por produto está vazio. A
-          lista abaixo continua correta.
+          A lista de produtos não carregou, então o filtro por produto está vazio. A lista de reservas
+          abaixo continua correta.
         </Nota>
       ) : null}
 
@@ -105,7 +105,7 @@ export default async function ReservasPage({ searchParams }: { searchParams: Pro
           titulo="Não foi possível carregar as reservas"
           detalhe={
             lista.code === "NETWORK_ERROR"
-              ? "A API não respondeu. O recorte continua na URL — recarregar a página repete exatamente esta consulta."
+              ? "O sistema não respondeu. Recarregue a página — os filtros escolhidos serão mantidos."
               : undefined
           }
         />

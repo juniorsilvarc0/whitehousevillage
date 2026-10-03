@@ -66,7 +66,7 @@ export function HistoricoDoContato({ reservas }: { reservas: readonly Reserva[] 
       <EstadoVazio
         icone={CalendarRange}
         titulo="Ainda não se hospedou"
-        descricao="Nenhuma reserva aponta para este contato — nem pré-reserva, nem cancelada."
+        descricao="Nenhuma reserva ligada a este contato — nem pré-reserva, nem cancelada."
       />
     );
   }

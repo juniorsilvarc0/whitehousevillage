@@ -2,6 +2,7 @@ import * as React from "react";
 
 import { formatarInstante } from "@/lib/datas";
 import { formatarBRL } from "@/lib/dinheiro";
+import { ehEstadoDeReserva, ESTADOS, rotuloDoMotivo } from "@/lib/reservas/estados";
 import type { EventoDaReserva } from "@/lib/reservas/tipos";
 
 /**
@@ -20,7 +21,7 @@ const ROTULOS: Record<string, string> = {
   created: "Pré-reserva criada",
   confirmed: "Sinal registrado e reserva confirmada",
   hold_extended: "Prazo da pré-reserva estendido",
-  unit_reassigned: "Unidade trocada",
+  unit_reassigned: "Apartamento trocado",
   rescheduled: "Estadia remarcada",
   credit_issued: "Crédito gerado a favor do hóspede",
   checked_in: "Check-in registrado",
@@ -35,13 +36,13 @@ export function LinhaDoTempo({ eventos }: { eventos: EventoDaReserva[] }) {
     <section aria-label="Linha do tempo" className="rounded-xl border border-border/60 bg-muted/20 p-4">
       <h2 className="font-display text-base">Linha do tempo</h2>
       <p className="mt-1 text-xs text-muted-foreground">
-        Registro append-only: criação, confirmação, extensão, realocação, remarcação, check-in, check-out e
-        cancelamento entram como linhas. Ninguém edita, ninguém apaga.
+        Tudo o que aconteceu com a reserva: criação, confirmação, extensão de prazo, troca de apartamento,
+        remarcação, check-in, check-out e cancelamento. O histórico não pode ser editado nem apagado.
       </p>
 
       {eventos.length === 0 ? (
         <p className="mt-3 text-sm text-muted-foreground">
-          Nada registrado ainda — o que só acontece antes de a reserva existir de verdade.
+          Nada registrado ainda.
         </p>
       ) : (
         <ol className="mt-3 flex flex-col gap-2">
@@ -109,6 +110,12 @@ function DetalhesDoEvento({ payload }: { payload: Record<string, unknown> | null
     if (!rotulo) continue;
     if (EM_DINHEIRO.has(chave) && typeof valor === "number") {
       partes.push(`${rotulo} ${formatarBRL(valor)}`);
+    } else if (chave === "status" && typeof valor === "string") {
+      partes.push(`${rotulo} ${ehEstadoDeReserva(valor) ? ESTADOS[valor].rotulo.toLowerCase() : valor}`);
+    } else if (chave === "reason" && typeof valor === "string") {
+      partes.push(`${rotulo} ${rotuloDoMotivo(valor)}`);
+    } else if (chave === "policy_version" && typeof valor === "number") {
+      partes.push(`${rotulo} versão ${valor}`);
     } else if (typeof valor === "string" || typeof valor === "number") {
       partes.push(`${rotulo} ${valor}`);
     }

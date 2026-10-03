@@ -3,6 +3,7 @@ import { CalendarX2, Info, TriangleAlert } from "lucide-react";
 
 import { mensagemDoErro, type Falha } from "@/lib/acoes/resultado";
 import { lerComposicaoIncompleta, lerConflito } from "@/lib/reservas/conflito";
+import { ehEstadoDeReserva, ESTADOS } from "@/lib/reservas/estados";
 import { cn } from "@/lib/utils";
 
 /**
@@ -45,6 +46,8 @@ export function Recusa({
   return (
     <div
       role="alert"
+      data-codigo={falha.code}
+      title={`Código para o suporte: ${falha.code}`}
       className={cn(
         "flex items-start gap-2.5 rounded-lg border px-3 py-2.5 text-sm",
         informativo
@@ -65,9 +68,6 @@ export function Recusa({
         {acima ? <p className="mt-1 text-muted-foreground">{acima}</p> : null}
         {limite ? <p className="mt-1 text-muted-foreground">{limite}</p> : null}
         {informativo && garantia ? <p className="mt-1 text-muted-foreground">{garantia}</p> : null}
-        <code className="mt-1.5 inline-block rounded bg-card px-1.5 py-0.5 font-mono text-[0.7rem] text-muted-foreground">
-          {falha.code}
-        </code>
       </div>
     </div>
   );
@@ -77,7 +77,8 @@ export function Recusa({
 function estadoAtual(details: Record<string, unknown>): string | null {
   const status = typeof details.status === "string" ? details.status : null;
   if (!status) return null;
-  return `A reserva está em "${status}" — um estado do qual ela não volta.`;
+  const rotulo = ehEstadoDeReserva(status) ? ESTADOS[status].rotulo : status;
+  return `A reserva está como "${rotulo}" e não pode voltar atrás.`;
 }
 
 /** `details.total_cents` e `details.max_cents` do `POST /confirm`. */
@@ -95,5 +96,5 @@ function extensoes(details: Record<string, unknown>): string | null {
   const usadas = typeof details.extensions_count === "number" ? details.extensions_count : null;
   const teto = typeof details.max_extensions === "number" ? details.max_extensions : null;
   if (usadas === null || teto === null) return null;
-  return `Já foram ${usadas} de ${teto} extensões. Agora a decisão é humana: confirmar com sinal, ou soltar a data.`;
+  return `Já foram ${usadas} de ${teto} extensões. Agora é preciso decidir: confirmar com o sinal ou liberar as datas.`;
 }

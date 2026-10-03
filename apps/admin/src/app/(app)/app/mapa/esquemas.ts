@@ -11,7 +11,7 @@ import { DIAS_MAXIMO } from "@/lib/mapa/janela";
  * campo que a pessoa encurta.
  */
 
-const DATA = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use uma data no formato AAAA-MM-DD.");
+const DATA = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Data inválida.");
 
 /** `maintenance` e `owner_hold`, e só. `ota` é do importador de canais e
  *  `reservation` nasce com a reserva — nenhum dos dois se cria por esta rota. */

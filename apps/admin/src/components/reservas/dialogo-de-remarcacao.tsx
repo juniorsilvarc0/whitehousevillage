@@ -187,7 +187,7 @@ export function DialogoDeRemarcacao({
                 label="Nova saída"
                 obrigatorio
                 erro={datasInvalidas && entrada && saida ? "A saída tem que ser depois da entrada." : undefined}
-                hint="Exclusiva: a noite da saída não é cobrada."
+                hint="O dia da saída não conta como diária."
               >
                 {(props) => (
                   <Input
@@ -212,7 +212,7 @@ export function DialogoDeRemarcacao({
               <Campo
                 id="remarcar-produto"
                 label="Produto"
-                hint="Remarcar pode trocar de produto — é o caminho do upgrade sem cancelar a venda."
+                hint="Dá para trocar de produto ao remarcar — é o jeito de fazer um upgrade sem cancelar a venda."
               >
                 {(props) => (
                   <Select {...props} value={produto} onChange={(evento) => setProduto(evento.target.value)}>
@@ -243,7 +243,7 @@ export function DialogoDeRemarcacao({
               </Campo>
             </div>
 
-            <Campo id="remarcar-motivo" label="Motivo" hint="Vai para a linha do tempo das duas reservas.">
+            <Campo id="remarcar-motivo" label="Motivo" hint="Fica registrado no histórico das duas reservas.">
               {(props) => (
                 <Input
                   {...props}
@@ -263,8 +263,8 @@ export function DialogoDeRemarcacao({
 
             <Nota variante="atencao">
               A reserva <strong>{alvo?.code}</strong> será <strong>cancelada com motivo “remarcação”</strong> e
-              uma reserva nova nasce no lugar, com código novo. O preço é recalculado com a tabela e a
-              política <strong>vigentes hoje</strong>, e o sinal já pago acompanha a nova.
+              uma reserva nova é criada no lugar, com código novo. O preço é calculado de novo com os preços e
+              as regras <strong>de hoje</strong>, e o sinal já pago passa para a nova.
             </Nota>
           </>
         )}
@@ -272,7 +272,7 @@ export function DialogoDeRemarcacao({
         {recusa ? (
           <Recusa
             falha={recusa}
-            garantia={`Nada foi alterado: ${alvo?.code ?? "a reserva"} continua de pé, com as datas de sempre. As duas mudanças acontecem na mesma transação — ou valem as duas, ou nenhuma.`}
+            garantia={`Nada foi alterado: ${alvo?.code ?? "a reserva"} continua valendo, com as mesmas datas.`}
           />
         ) : null}
       </div>
@@ -315,12 +315,13 @@ function ResultadoDaRemarcacao({ sucesso }: { sucesso: Sucesso }) {
           {meta.credit_cents > 0 ? (
             <div className="mt-2 rounded-lg bg-alcada-atencao/12 px-3 py-2 text-xs leading-relaxed">
               <strong className="font-mono tabular-nums">{formatarBRL(meta.credit_cents)}</strong> de sinal já
-              pago <strong>não coube</strong> na estadia nova e virou crédito do hóspede, registrado na linha
-              do tempo. Ele acompanha a cadeia de remarcações — não some numa reserva cancelada.
+              pago <strong>não coube</strong> na estadia nova e virou crédito do hóspede, registrado no
+              histórico. O crédito acompanha as próximas remarcações e não se perde.
             </div>
           ) : null}
           <p className="mt-2 text-xs text-muted-foreground">
-            A Fase 1 apenas informa esse valor: gerar o recebível ou o pagável é do módulo financeiro.
+            Por enquanto o sistema só informa esse valor: a cobrança ou a devolução ficará na tela Financeiro,
+            que ainda está sendo feita.
           </p>
         </dl>
       ) : null}

@@ -61,7 +61,7 @@ export function lerComposicaoIncompleta(details: Record<string, unknown>): strin
     }.`;
   }
   if (esperadas !== null && ativas !== null) {
-    return `O produto tem ${esperadas} ${esperadas === 1 ? "unidade" : "unidades"} na composição e só ${ativas} ${
+    return `O produto é formado por ${esperadas} ${esperadas === 1 ? "unidade" : "unidades"} e só ${ativas} ${
       ativas === 1 ? "está ativa" : "estão ativas"
     }. Reative no inventário antes de vender.`;
   }

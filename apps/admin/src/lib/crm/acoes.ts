@@ -67,7 +67,7 @@ export async function buscarQuadro(filtros: FiltrosDoFunil): Promise<ResultadoCr
   // querystring na chamada à API.
   const analise = FiltrosDoFunil.safeParse(filtros);
   if (!analise.success) {
-    return falhaCrm("VALIDATION_ERROR", "Recorte do funil inválido.", detalhesDoZod(analise.error));
+    return falhaCrm("VALIDATION_ERROR", "Filtros do funil inválidos.", detalhesDoZod(analise.error));
   }
 
   return carregarQuadro(analise.data);
@@ -117,7 +117,7 @@ export async function ganharOportunidade(
 
   if (chaveDeIdempotencia.trim().length < 8) {
     // O contrato pede 8..255. Chave curta é bug da tela, não recusa comercial.
-    return falhaCrm("VALIDATION_ERROR", "Chave de idempotência ausente. Recarregue a tela.");
+    return falhaCrm("VALIDATION_ERROR", "Não foi possível enviar. Recarregue a página e tente de novo.");
   }
 
   const analise = GanhoFormulario.safeParse(valores);

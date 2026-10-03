@@ -69,10 +69,9 @@ export default async function ContatosPage({ searchParams }: { searchParams: Pro
         titulo="Contatos"
         descricao={
           <>
-            <strong>Uma pessoa, um registro.</strong> É esta ficha que a reserva exige, que o lead
-            aponta e que o WhatsApp usa para reconhecer quem já escreveu — a deduplicação é pelo
-            telefone em E.164, garantida por índice único no banco, nunca por uma busca antes de
-            gravar.
+            <strong>Uma pessoa, um cadastro.</strong> É esta ficha que a reserva, o lead e o WhatsApp
+            usam para reconhecer quem já falou com a casa. O sistema não deixa cadastrar o mesmo
+            telefone duas vezes.
           </>
         }
       />
@@ -92,14 +91,13 @@ export default async function ContatosPage({ searchParams }: { searchParams: Pro
           {contatos.data.meta.total_pages > 1 ? (
             <p className="text-xs text-muted-foreground">
               Página {contatos.data.meta.page} de {contatos.data.meta.total_pages} ·{" "}
-              <span className="tabular-nums">{contatos.data.meta.total}</span> no recorte.
+              <span className="tabular-nums">{contatos.data.meta.total}</span> no total.
             </p>
           ) : null}
 
           <Nota>
-            A ficha completa (documento, nascimento) e a exportação registram quem olhou em
-            <code className="mx-1 font-mono text-xs">pii_access_log</code> — é a lista que serve à
-            operação do dia, e a ficha que é leitura de dado pessoal identificável.
+            Abrir a ficha completa (documento, nascimento) ou exportar os dados fica registrado: o
+            sistema guarda quem olhou e quando, como pede a LGPD. A lista desta tela não registra nada.
           </Nota>
         </>
       ) : (
@@ -108,11 +106,7 @@ export default async function ContatosPage({ searchParams }: { searchParams: Pro
           titulo="Não foi possível carregar os contatos"
           detalhe={
             contatos.code === "NOT_FOUND" ? (
-              <>
-                A rota <code className="font-mono text-xs">/contacts</code> ainda não está registrada
-                na API — o módulo está sendo escrito nesta mesma rodada. A tela já fala o contrato
-                inteiro e passa a funcionar assim que ele subir.
-              </>
+              <>Esta parte do sistema ainda não está disponível. Tente de novo mais tarde.</>
             ) : null
           }
         />

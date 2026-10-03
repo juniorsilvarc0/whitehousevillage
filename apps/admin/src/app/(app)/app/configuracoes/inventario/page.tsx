@@ -59,25 +59,25 @@ export default async function InventarioPage() {
         titulo="Inventário"
         descricao={
           <>
-            <strong>Produto</strong> é o que se vende; <strong>unidade</strong> é o que se ocupa e se
-            limpa. A ponte entre os dois é a composição, muitos-para-muitos de propósito: a mesma AP-01
-            pertence ao Apartamento 2 Suítes <em>e</em> à White House Completa.
+            <strong>Produto</strong> é o que você vende ao cliente; <strong>unidade</strong> é o
+            apartamento de verdade, que se ocupa e se limpa. Cada produto é formado por um ou mais
+            apartamentos — e um apartamento pode estar em mais de um produto: a AP-01 faz parte do
+            Apartamento 2 Suítes <em>e</em> da White House Completa.
           </>
         }
       />
 
       <Nota>
-        A exclusividade da casa não é uma regra escrita em código: ela cai da composição. Um produto que
-        consome <strong>todas</strong> as unidades insere um bloqueio por unidade ao ser vendido, e a
-        constraint do banco recusa qualquer sobreposição. Por isso vender um apartamento fecha a White
-        House Completa naquelas datas, e vice-versa.
+        Um produto que ocupa <strong>todas</strong> as unidades reserva todos os apartamentos de uma vez.
+        Por isso vender um apartamento fecha a White House Completa naquelas datas, e vice-versa — o
+        sistema nunca deixa o mesmo apartamento ser vendido duas vezes.
       </Nota>
 
       {!produtos.ok ? (
         <EstadoDeErro
           code={produtos.code}
           titulo="Não foi possível carregar os produtos"
-          detalhe="Sem eles não há composição para mostrar."
+          detalhe="Sem os produtos não dá para mostrar quais apartamentos formam cada um."
         />
       ) : null}
 
@@ -95,7 +95,7 @@ export default async function InventarioPage() {
       ) : (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <Package className="size-4" aria-hidden="true" />
-          O cadastro aparece assim que as duas coleções carregarem.
+          O cadastro aparece assim que produtos e unidades carregarem.
         </p>
       )}
     </Tela>

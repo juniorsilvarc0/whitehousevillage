@@ -98,22 +98,19 @@ function CaminhoDaDuplicata({
                 <span className="font-mono text-foreground">
                   {formatarTelefone(duplicata.contato.phone_e164)}
                 </span>{" "}
-                é dessa ficha. Uma pessoa, um registro — abra a que já existe em vez de criar a
-                segunda.
+                é dessa ficha. Uma pessoa, um cadastro — abra o que já existe em vez de criar outro.
               </>
             ) : (
               <>
-                Uma pessoa, um registro: o cadastro guarda um contato por ser humano, e é isso que
-                deixa o WhatsApp reconhecer quem já escreveu.
+                Uma pessoa, um cadastro: é isso que deixa o WhatsApp reconhecer quem já escreveu.
               </>
             )}
           </p>
 
           {anonimizado ? (
             <p className="mt-2 text-sm text-muted-foreground">
-              A ficha existente está <strong>anonimizada</strong> — ela sustenta reservas antigas e
-              não recebe dado pessoal de volta. Este cadastro precisa de outro telefone, ou a
-              anonimização precisa liberar o número.
+              A ficha existente está <strong>anonimizada</strong> (dados apagados a pedido da pessoa)
+              e não pode receber dados de volta. Use outro telefone neste cadastro.
             </p>
           ) : null}
 
@@ -215,7 +212,7 @@ export function ModalDeContato({
       open={aberto}
       onOpenChange={setAberto}
       title={contato ? `Editar ${contato.name}` : "Novo contato"}
-      description="Uma pessoa, um registro: lead, hóspede e proprietário apontam todos para esta ficha."
+      description="Uma pessoa, um cadastro: lead, hóspede e proprietário usam esta mesma ficha."
       footer={
         <>
           <Button variant="ghost" onClick={() => setAberto(false)} disabled={isSubmitting}>
@@ -246,7 +243,7 @@ export function ModalDeContato({
             id="contato-phone"
             label="Telefone"
             erro={errors.phone_e164?.message}
-            hint="Com DDI e sem adivinhação: +5585999990000. O painel não completa o país por você — chutar o DDI cria dois cadastros da mesma pessoa."
+            hint="Com o código do país (DDI): +5585999990000. Sem ele, a mesma pessoa pode acabar com dois cadastros."
           >
             {(p) => (
               <Input
@@ -284,8 +281,8 @@ export function ModalDeContato({
             erro={errors.doc_number?.message}
             hint={
               tipoDeDocumento === "passaporte"
-                ? "Passaporte não tem dígito verificador — cada país tem o seu formato, e recusar o que não se sabe validar barraria hóspede estrangeiro."
-                : "CPF e CNPJ são conferidos pelo dígito verificador e gravados só com dígitos."
+                ? "Passaporte é aceito como digitado, porque cada país tem o seu formato."
+                : "CPF e CNPJ são conferidos automaticamente e guardados só com os números."
             }
           >
             {(p) => <Input {...p} {...form.register("doc_number")} inputMode="numeric" className="font-mono" />}
@@ -340,7 +337,7 @@ export function ModalDeContato({
             <CheckboxCampo
               id="contato-optin"
               label="Aceita receber ofertas e novidades"
-              hint="Eixo separado da base legal. Guardar o cadastro de quem se hospedou é legítimo; mandar promoção para ele exige este aceite."
+              hint="É diferente da base legal: guardar o cadastro de quem se hospedou é permitido; mandar promoção exige este aceite."
               {...form.register("marketing_opt_in")}
             />
 
@@ -350,15 +347,14 @@ export function ModalDeContato({
                 label="Data do aceite"
                 obrigatorio
                 erro={errors.consent_at?.message}
-                hint="Consentimento sem data não é consentimento, é afirmação — a API recusa o opt-in sem ela."
+                hint="Informe quando a pessoa aceitou. Sem a data, o aceite não é registrado."
               >
                 {(p) => <Input {...p} {...form.register("consent_at")} type="date" />}
               </Campo>
             ) : (
               <Nota>
-                Desligar o aceite <strong>limpa a data</strong> na mesma gravação: revogação não pede
-                segunda chamada, e uma data de aceite sobrevivente faria o relatório dizer que a
-                pessoa aceitou.
+                Desmarcar o aceite <strong>apaga a data</strong> junto, para nenhum relatório dizer que a
+                pessoa ainda aceita receber ofertas.
               </Nota>
             )}
           </div>

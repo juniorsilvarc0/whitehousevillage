@@ -60,7 +60,7 @@ describe("SemaforoDeAlcada", () => {
     render(<SemaforoDeAlcada pct={10.5} limites={POLITICA} />);
     expect(faixaAtiva()).toBe("negado");
     expect(screen.getByRole("status").textContent).toContain("Não autorizado");
-    expect(document.body.textContent).toContain("DISCOUNT_ABOVE_LIMIT");
+    expect(document.body.textContent).toContain("nem com aprovação");
   });
 
   it("acompanha limites diferentes sem depender dos números da spec", () => {

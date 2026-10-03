@@ -27,7 +27,7 @@ describe("lerFiltros", () => {
   it("descarta data fora do formato em vez de mandá-la para a API", () => {
     const { filtros, avisos } = lerFiltros({ from: "20/12/2026" });
     expect(filtros.from).toBe("");
-    expect(avisos.join(" ")).toContain("AAAA-MM-DD");
+    expect(avisos.join(" ")).toContain("não é uma data válida");
   });
 
   /**
@@ -45,7 +45,7 @@ describe("lerFiltros", () => {
   it("recusa identificador de produto que não é UUID", () => {
     const { filtros, avisos } = lerFiltros({ unit_type_id: "cobertura" });
     expect(filtros.unit_type_id).toBe("");
-    expect(avisos.join(" ")).toContain("UUID");
+    expect(avisos.join(" ")).toContain("não foi reconhecido");
   });
 
   it("aceita UUID de produto sem reclamar", () => {

@@ -53,11 +53,7 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
           titulo="Não foi possível abrir a ficha"
           detalhe={
             contato.code === "NOT_FOUND" ? (
-              <>
-                Ou o contato não existe, ou a rota{" "}
-                <code className="font-mono text-xs">/contacts/{"{id}"}</code> ainda não está
-                registrada na API — o módulo está sendo escrito nesta mesma rodada.
-              </>
+              <>Este contato pode ter sido removido, ou esta parte do sistema ainda não está disponível.</>
             ) : null
           }
         />
@@ -75,9 +71,9 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
         descricao={
           anonimizado ? (
             <>
-              Esta ficha foi <strong>esvaziada a pedido do titular</strong>. Ela continua existindo
-              porque as reservas abaixo apontam para ela — eliminar o dado pessoal e destruir
-              registro fiscal são coisas diferentes.
+              Os dados pessoais desta ficha foram <strong>apagados a pedido da pessoa</strong>. A
+              ficha continua existindo porque as reservas abaixo dependem dela — apagar os dados
+              pessoais não apaga o histórico de vendas.
             </>
           ) : undefined
         }
@@ -103,9 +99,8 @@ export default async function ContatoPage({ params }: { params: Promise<{ id: st
       </Secao>
 
       <Nota>
-        Abrir esta ficha registra a leitura em{" "}
-        <code className="mx-0.5 font-mono text-xs">pii_access_log</code> — quem olhou e quando. É o
-        que separa a lista, que serve à operação do dia, do dado pessoal identificável.
+        Abrir esta ficha fica registrado: o sistema guarda quem olhou os dados pessoais e quando, como
+        pede a LGPD.
       </Nota>
     </Tela>
   );

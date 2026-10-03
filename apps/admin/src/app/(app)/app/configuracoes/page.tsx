@@ -31,7 +31,7 @@ type Area = {
 const AREAS: Area[] = [
   {
     titulo: "Inventário",
-    descricao: "Produtos, unidades físicas e a composição que liga os dois — inclusive a que fecha a casa inteira.",
+    descricao: "O que você vende (produtos), os apartamentos de verdade (unidades) e quais apartamentos formam cada produto.",
     href: "/app/configuracoes/inventario",
     recurso: "inventory",
     acao: "ver",
@@ -39,7 +39,7 @@ const AREAS: Area[] = [
   },
   {
     titulo: "Tarifário",
-    descricao: "A grade produto × tipo de data, a precedência que a explica e o mínimo de noites por período.",
+    descricao: "O preço da diária de cada produto em cada tipo de data, e o mínimo de noites por período.",
     href: "/app/configuracoes/tarifario",
     recurso: "settings",
     acao: "ver",
@@ -47,7 +47,7 @@ const AREAS: Area[] = [
   },
   {
     titulo: "Calendário comercial",
-    descricao: "Feriados e períodos especiais — o que decide o tipo de cada noite antes de a tarifa ser buscada.",
+    descricao: "Feriados e temporadas — o que define se uma noite é normal, fim de semana, feriado ou alta.",
     href: "/app/configuracoes/calendario",
     recurso: "settings",
     acao: "ver",
@@ -55,7 +55,7 @@ const AREAS: Area[] = [
   },
   {
     titulo: "Política comercial",
-    descricao: "Sinal, prazos, pré-reserva, alçadas de desconto e faixas de cancelamento. Versionada: salvar publica.",
+    descricao: "Sinal, prazos, pré-reserva, limites de desconto e regras de cancelamento. Ao salvar, as novas regras passam a valer.",
     href: "/app/configuracoes/politica",
     recurso: "settings",
     acao: "ver",
@@ -83,9 +83,9 @@ export default async function ConfiguracoesPage() {
       />
 
       <Nota>
-        Tudo nestas telas é <strong>dado versionado</strong>, não constante em código — e nada reescreve o
-        passado. Mudar tarifa, feriado, período ou política vale do próximo cálculo em diante; cada reserva
-        guarda o preço, a tabela e a versão da política que usou quando foi criada.
+        Mudanças aqui <strong>nunca alteram o passado</strong>. Mudar preço, feriado, período ou política
+        vale para os próximos orçamentos; cada reserva já feita continua com o preço e as regras que
+        valiam quando foi criada.
       </Nota>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -115,8 +115,8 @@ export default async function ConfiguracoesPage() {
               <div className="min-w-0">
                 <CardTitle className="text-white">Simular um orçamento</CardTitle>
                 <CardDescription className="mt-1 text-white/80">
-                  A prova de que a configuração está certa: o mesmo motor que vende, com o cálculo aberto
-                  noite a noite.
+                  Confira se a configuração está certa: o mesmo cálculo usado na venda, mostrado noite a
+                  noite.
                 </CardDescription>
               </div>
             </div>

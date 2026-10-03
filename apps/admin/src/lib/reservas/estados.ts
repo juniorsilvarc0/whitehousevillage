@@ -29,7 +29,7 @@ export const ESTADOS: Record<EstadoDaReserva, DescricaoDeEstado> = {
   quote: {
     rotulo: "Rascunho",
     explicacao:
-      "Reserva rascunho: existe no sistema e não segura data nenhuma. Não é o orçamento emitido — esse tem tabela própria desde 27/08/2026.",
+      "Reserva em rascunho: está anotada, mas não guarda as datas. Ainda não é uma pré-reserva.",
     bloqueiaCalendario: false,
     terminal: false,
     tom: "aberto",
@@ -37,21 +37,21 @@ export const ESTADOS: Record<EstadoDaReserva, DescricaoDeEstado> = {
   hold: {
     rotulo: "Pré-reserva",
     explicacao:
-      "A data está bloqueada com prazo. Vencido o prazo, o job libera as unidades e a reserva expira sozinha.",
+      "As datas estão guardadas por um prazo. Se o sinal não for pago até lá, a pré-reserva vence e as datas voltam a ficar livres.",
     bloqueiaCalendario: true,
     terminal: false,
     tom: "aberto",
   },
   confirmed: {
     rotulo: "Confirmada",
-    explicacao: "Sinal registrado. A data continua bloqueada e deixou de ter prazo de validade.",
+    explicacao: "Sinal recebido. As datas ficam garantidas, sem prazo para vencer.",
     bloqueiaCalendario: true,
     terminal: false,
     tom: "vivo",
   },
   checked_in: {
     rotulo: "Hospedado",
-    explicacao: "O hóspede está dentro. A data segue bloqueada até o check-out.",
+    explicacao: "O hóspede está na casa. As datas continuam ocupadas até o check-out.",
     bloqueiaCalendario: true,
     terminal: false,
     tom: "vivo",
@@ -59,28 +59,28 @@ export const ESTADOS: Record<EstadoDaReserva, DescricaoDeEstado> = {
   checked_out: {
     rotulo: "Estadia cumprida",
     explicacao:
-      "O hóspede saiu e as unidades voltaram ao estoque vendável. A estadia continua visível no mapa — ela aconteceu.",
+      "O hóspede saiu e os apartamentos já estão livres para venda. A estadia continua visível no mapa como histórico.",
     bloqueiaCalendario: false,
     terminal: true,
     tom: "encerrado",
   },
   closed: {
     rotulo: "Encerrada",
-    explicacao: "Acerto financeiro final e caução devolvida. É passo do módulo financeiro.",
+    explicacao: "Contas acertadas e caução devolvida. Este passo é feito no financeiro.",
     bloqueiaCalendario: false,
     terminal: true,
     tom: "encerrado",
   },
   cancelled: {
     rotulo: "Cancelada",
-    explicacao: "A data foi liberada e o histórico ficou. A política congelada na reserva já foi aplicada.",
+    explicacao: "As datas foram liberadas e o histórico ficou guardado. As regras de cancelamento da época da reserva já foram aplicadas.",
     bloqueiaCalendario: false,
     terminal: true,
     tom: "perdido",
   },
   expired: {
     rotulo: "Expirada",
-    explicacao: "A pré-reserva venceu sem sinal e o job liberou as unidades. Vender de novo é criar outra reserva.",
+    explicacao: "A pré-reserva venceu sem o pagamento do sinal e as datas foram liberadas. Para vender de novo, crie outra reserva.",
     bloqueiaCalendario: false,
     terminal: true,
     tom: "perdido",
@@ -88,7 +88,7 @@ export const ESTADOS: Record<EstadoDaReserva, DescricaoDeEstado> = {
   no_show: {
     rotulo: "Não compareceu",
     explicacao:
-      "O hóspede não apareceu. É estado próprio, e não cancelada, porque a diferença importa no relatório: quem avisa e quem some não são a mesma linha.",
+      "O hóspede não apareceu. Fica separado de “cancelada” porque, nos relatórios, quem avisa e quem some sem avisar são casos diferentes.",
     bloqueiaCalendario: false,
     terminal: true,
     tom: "perdido",
@@ -186,3 +186,22 @@ export function holdVencido(r: Reserva, agora: Date = new Date()): boolean {
 // A contagem regressiva em si NÃO mora aqui: é `expiracaoDeHold`
 // (`lib/mapa/expiracao.ts`), a mesma que o mapa usa. Duplicá-la daria duas
 // frases para o mesmo prazo, e a operação deixaria de confiar nas duas.
+
+/**
+ * O motivo de cancelamento como a tela fala. O contrato grava o código do
+ * catálogo (`desistencia`, `no_show`…) ou, em "outro", o texto livre — que
+ * passa como veio.
+ */
+const MOTIVO_DE_CANCELAMENTO: Record<string, string> = {
+  desistencia: "desistência do hóspede",
+  no_show: "não compareceu",
+  alteracao_de_planos: "alteração de planos",
+  problema_de_pagamento: "problema de pagamento",
+  erro_de_lancamento: "erro de lançamento",
+  remarcacao: "remarcação",
+  outro: "outro",
+};
+
+export function rotuloDoMotivo(motivo: string): string {
+  return MOTIVO_DE_CANCELAMENTO[motivo] ?? motivo;
+}

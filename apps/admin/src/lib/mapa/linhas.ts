@@ -140,7 +140,7 @@ export function montarGrupos({
   if (orfas.length > 0) {
     grupos.push({
       unitTypeId: "sem-produto",
-      nome: "Fora de composição",
+      nome: "Fora de qualquer produto",
       consumes: "one_member",
       linhas: orfas.map((linha) => ({
         chave: linha.unit_id,

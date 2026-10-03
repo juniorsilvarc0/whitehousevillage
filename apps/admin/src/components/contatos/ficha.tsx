@@ -92,7 +92,7 @@ export function FichaDoContato({
       ancora.download = `contato-${contato.id}.json`;
       ancora.click();
       URL.revokeObjectURL(url);
-      notificarSucesso("Exportação pronta", "A leitura ficou registrada na trilha de LGPD.");
+      notificarSucesso("Exportação pronta", "A exportação ficou registrada, como pede a LGPD.");
     } finally {
       setExportando(false);
     }
@@ -181,9 +181,9 @@ export function FichaDoContato({
       <section aria-label="Base legal e consentimento" className="rounded-xl border border-border/60 bg-muted/20 p-4 sm:p-5">
         <h2 className="font-display text-base leading-tight">Base legal e consentimento</h2>
         <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-          Dois eixos, nunca o mesmo: a base legal sustenta <strong>guardar</strong> a ficha; o
-          aceite autoriza <strong>mandar oferta</strong>. Executar a reserva de quem nunca aceitou
-          propaganda é legítimo; mandar promoção para essa pessoa não é.
+          São duas coisas diferentes: a base legal permite <strong>guardar</strong> a ficha; o aceite
+          permite <strong>mandar ofertas</strong>. Atender a reserva de quem nunca aceitou propaganda é
+          normal; mandar promoção para essa pessoa não é permitido.
         </p>
         <dl className="mt-3 divide-y divide-border/50">
           <Linha rotulo="Base legal">
@@ -210,17 +210,17 @@ export function FichaDoContato({
         >
           <h2 className="font-display text-base leading-tight">Eliminação de dado pessoal</h2>
           <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-            <strong>Anonimizar</strong> é o direito de eliminação da LGPD: a pessoa some e a venda
-            fica — reservas, valores e razão continuam apontando para o mesmo id.{" "}
-            <strong>Apagar</strong> só funciona em contato que nunca foi usado; com histórico, a API
-            recusa, porque a reserva exige o cadastro.
+            <strong>Anonimizar</strong> atende o pedido de exclusão da LGPD: os dados pessoais somem e
+            as vendas ficam — reservas e valores continuam no histórico.{" "}
+            <strong>Apagar</strong> só funciona em contato que nunca foi usado; se ele já tem reservas,
+            não é possível apagar.
           </p>
 
           {impedimentos.length > 0 ? (
             <Nota variante="atencao" className="mt-3">
               Não dá para apagar: existem <strong>{impedimentos.join(", ")}</strong> apontando para
-              esta ficha. O caminho é a anonimização — ela elimina o dado pessoal sem derrubar o que
-              já foi vendido.
+              esta ficha. O caminho é anonimizar — isso apaga os dados pessoais sem mexer no que já
+              foi vendido.
             </Nota>
           ) : null}
 

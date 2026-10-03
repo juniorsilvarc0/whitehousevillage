@@ -64,7 +64,7 @@ export function PainelDeInventario({
     <>
       <Secao
         titulo="Produtos — o que se vende"
-        descricao="Cada produto declara a capacidade, a taxa de limpeza e quantas unidades uma venda ocupa."
+        descricao="Cada produto tem capacidade, taxa de limpeza e quantos apartamentos uma venda ocupa."
         acoes={
           permissoes.criar ? (
             <Button size="sm" onClick={() => cadastroDeProduto.abrir(null)}>
@@ -77,7 +77,7 @@ export function PainelDeInventario({
         {produtos.length === 0 ? (
           <EstadoVazio
             titulo="Nenhum produto cadastrado"
-            descricao="Sem produto não há o que vender: o orçamento precisa de um para achar tarifa, capacidade e limpeza."
+            descricao="Sem produto não há o que vender. Cadastre ao menos um para poder fazer orçamentos."
             acao={
               permissoes.criar ? (
                 <Button size="sm" onClick={() => cadastroDeProduto.abrir(null)}>
@@ -106,8 +106,8 @@ export function PainelDeInventario({
       </Secao>
 
       <Secao
-        titulo="Unidades físicas — o que se ocupa"
-        descricao="A unidade é o que a constraint do banco protege: duas estadias sobrepostas na mesma unidade são impossíveis, não improváveis."
+        titulo="Unidades — os apartamentos de verdade"
+        descricao="Cada unidade é um apartamento. O sistema nunca deixa duas reservas ocuparem o mesmo apartamento na mesma noite."
         acoes={
           permissoes.criar ? (
             <Button size="sm" variant="outline" onClick={() => cadastroDeUnidade.abrir(null)}>
@@ -120,7 +120,7 @@ export function PainelDeInventario({
         {unidades.length === 0 ? (
           <EstadoVazio
             titulo="Nenhuma unidade cadastrada"
-            descricao="Sem unidade nominal não existe constraint capaz de impedir overbooking — e a operação não saberia qual apartamento preparar."
+            descricao="Cadastre os apartamentos para o sistema evitar venda dobrada e a equipe saber qual apartamento preparar."
             icone={DoorClosed}
             acao={
               permissoes.criar ? (
@@ -159,9 +159,9 @@ export function PainelDeInventario({
         rotuloConfirmar="Desativar produto"
         descricao={
           <>
-            Desativar não apaga: o produto some da disponibilidade e deixa de aceitar venda nova, e as
-            reservas antigas continuam legíveis com o preço que congelaram. Se ainda houver reserva viva
-            neste produto, o servidor recusa.
+            Desativar não apaga: o produto deixa de ser vendido, e as reservas antigas continuam com o
+            preço combinado. Se ainda houver reserva em andamento neste produto, não será possível
+            desativar.
           </>
         }
         aoConfirmar={() => desativarProduto(produtoADesativar!.id)}
@@ -175,9 +175,9 @@ export function PainelDeInventario({
         rotuloConfirmar="Desativar unidade"
         descricao={
           <>
-            A unidade sai da alocação automática e do mapa de ocupação, mas continua no histórico — quem
-            dormiu onde não se apaga. Ocupação futura em aberto ou vínculo com algum produto fazem o
-            servidor recusar.
+            O apartamento deixa de receber reservas novas e sai do mapa de ocupação, mas continua no
+            histórico. Não será possível desativar se ele tiver reservas futuras ou ainda fizer parte de
+            algum produto.
           </>
         }
         aoConfirmar={() => desativarUnidade(unidadeADesativar!.id)}
@@ -244,14 +244,12 @@ function CartaoDeProduto({
 
       <div className="mt-3">
         <p className="text-xs text-muted-foreground">
-          Composição{" "}
-          <span className="tabular-nums">
-            ({composicao.length} unidade{composicao.length === 1 ? "" : "s"})
-          </span>
+          Apartamentos do produto{" "}
+          <span className="tabular-nums">({composicao.length})</span>
         </p>
         {composicao.length === 0 ? (
           <p className="mt-1 text-xs font-medium text-destructive">
-            Sem composição — nenhuma venda é possível até definir as unidades.
+            Nenhum apartamento escolhido — o produto não pode ser vendido até você definir quais.
           </p>
         ) : (
           <div className="mt-1.5 flex flex-wrap gap-1">
@@ -264,7 +262,7 @@ function CartaoDeProduto({
                     ? "border-border/70 text-foreground"
                     : "border-dashed border-border/70 text-muted-foreground line-through",
                 )}
-                title={membro.active ? membro.unit_name : `${membro.unit_name} — unidade inativa, não é alocada`}
+                title={membro.active ? membro.unit_name : `${membro.unit_name} — desativada, não recebe reservas`}
               >
                 {membro.unit_code}
               </span>
@@ -276,8 +274,8 @@ function CartaoDeProduto({
       {fechaACasa ? (
         <Nota variante="atencao" className="mt-3">
           Vender este produto ocupa as {composicao.length} unidades de uma vez: enquanto ele estiver
-          reservado, nenhum outro produto pode ser vendido nessas datas — e basta uma unidade ocupada
-          para que a venda dele seja recusada pelo banco.
+          reservado, nenhum outro produto pode ser vendido nessas datas — e basta um apartamento ocupado
+          para que ele não possa ser vendido.
         </Nota>
       ) : null}
 
@@ -290,7 +288,7 @@ function CartaoDeProduto({
             </Button>
             <Button size="sm" variant="secondary" onClick={aoCompor}>
               <Blocks aria-hidden="true" />
-              Composição
+              Apartamentos
             </Button>
           </>
         ) : null}

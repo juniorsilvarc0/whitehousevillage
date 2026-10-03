@@ -159,12 +159,12 @@ export function DetalheDaOcupacao({
         {ehBloqueioOperacional && !podeLiberar ? (
           <>
             {" "}
-            Liberar exige <code className="font-mono">calendar:excluir</code> na matriz do seu perfil — a
-            permissão é o par simétrico de criar o bloqueio.
+            Para liberar, seu perfil precisa da permissão de excluir no Mapa de ocupação. Peça à gestão
+            se precisar.
           </>
         ) : null}
         {faixa.reservationId && faixa.stayBlockId ? (
-          <> Esta data é de uma reserva: quem a solta é o cancelamento, o check-out ou a expiração.</>
+          <> Esta data é de uma reserva: ela só fica livre com o cancelamento, o check-out ou o vencimento da pré-reserva.</>
         ) : null}
       </p>
 

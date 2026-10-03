@@ -58,8 +58,8 @@ export function RailDaOportunidade({
           <ProximaAcao atividade={proxima} oportunidadeId={oportunidadeId} podeConcluir={podeConcluir} />
         ) : (
           <p className="mt-2 text-xs text-muted-foreground">
-            Nenhuma tarefa pendente. Quando o card entra numa etapa com tarefa configurada, ela nasce
-            sozinha — com o prazo do SLA e no nome do dono do negócio.
+            Nenhuma tarefa pendente. Quando o negócio entra numa etapa com tarefa configurada, ela é
+            criada sozinha — com o prazo da etapa e no nome do dono do negócio.
           </p>
         )}
       </section>

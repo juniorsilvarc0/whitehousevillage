@@ -14,6 +14,15 @@ import type { TipoDeData, TipoDePeriodo } from "@/lib/api/comercial";
  * se o banco divergir, quem vale é o banco, e a divergência aparece na hora de
  * conferir uma tarifa.
  */
+/**
+ * Posição do tipo na ordem de quem vale (1 = vale acima de todos). Empates
+ * dividem a mesma posição — réveillon e carnaval são ambos 1. É o número que a
+ * tela mostra no lugar do peso cru da precedência.
+ */
+export function prioridadeDoTipo(tipo: { precedencia: number }): number {
+  return 1 + new Set(TIPOS_DE_DATA.filter((t) => t.precedencia > tipo.precedencia).map((t) => t.precedencia)).size;
+}
+
 export type DescricaoDoTipo = {
   code: TipoDeData;
   label: string;
@@ -64,10 +73,10 @@ export function classeDoTipo(code: TipoDeData): string {
 
 /** Que tipo de data um período especial passa a valer nas noites que cobre. */
 export const TIPOS_DE_PERIODO: readonly { code: TipoDePeriodo; label: string; nota: string }[] = [
-  { code: "reveillon", label: "Réveillon",      nota: "precedência 100 — vence tudo" },
-  { code: "carnaval",  label: "Carnaval",       nota: "precedência 100 — vence tudo" },
-  { code: "alta",      label: "Alta temporada", nota: "precedência 60 — perde para feriado" },
-  { code: "evento",    label: "Evento",         nota: "faixa marcada no calendário" },
+  { code: "reveillon", label: "Réveillon",      nota: "vale acima de tudo" },
+  { code: "carnaval",  label: "Carnaval",       nota: "vale acima de tudo" },
+  { code: "alta",      label: "Alta temporada", nota: "feriado vale mais" },
+  { code: "evento",    label: "Evento",         nota: "marcação no calendário" },
 ] as const;
 
 export function rotuloDoPeriodo(code: TipoDePeriodo): string {

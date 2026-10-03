@@ -61,7 +61,7 @@ export function ListaDeReservas({
       <div className="overflow-x-auto rounded-xl border border-border/60 bg-card/60">
         <table className="w-full min-w-[62rem] border-collapse text-sm">
           <caption className="sr-only">
-            Reservas do recorte atual, com código, produto, hóspede, estadia, valores e situação
+            Reservas dos filtros atuais, com código, produto, hóspede, estadia, valores e situação
           </caption>
           <thead>
             <tr className="border-b border-border/60 text-xs text-muted-foreground">
@@ -159,8 +159,8 @@ function ListaVazia({ filtrada, caminho }: { filtrada: boolean; caminho: string 
   if (filtrada) {
     return (
       <EstadoVazio
-        titulo="Nenhuma reserva neste recorte"
-        descricao="O filtro atual não encontrou nada. Vale conferir a faixa de datas — ela recorta as estadias que tocam o intervalo, não as criadas nele."
+        titulo="Nenhuma reserva com esses filtros"
+        descricao="Nenhuma reserva com esses filtros. Confira as datas: o filtro procura estadias que passam por esse período, não reservas feitas nele."
         acao={
           <Button variant="outline" onClick={() => router.replace(caminho)}>
             Limpar os filtros
@@ -175,8 +175,9 @@ function ListaVazia({ filtrada, caminho }: { filtrada: boolean; caminho: string 
       titulo="Ainda não há reservas"
       descricao={
         <>
-          A venda começa no mapa: escolha a data livre, monte o orçamento e a pré-reserva nasce segurando
-          o calendário por 48 horas. Enquanto o sinal não entra, a data volta a ser vendável sozinha.
+          A venda começa no mapa: escolha uma data livre, monte o orçamento e crie a pré-reserva, que guarda
+          as datas pelo prazo da política comercial. Se o sinal não for pago nesse prazo, as datas voltam a
+          ficar livres sozinhas.
         </>
       }
       acao={
@@ -202,7 +203,7 @@ function Paginacao({ meta, caminho }: { meta: Meta; caminho: string }) {
   if (meta.total_pages <= 1) {
     return (
       <p className="text-xs text-muted-foreground">
-        <span className="tabular-nums">{meta.total}</span> reserva{meta.total === 1 ? "" : "s"} no recorte.
+        <span className="tabular-nums">{meta.total}</span> reserva{meta.total === 1 ? "" : "s"} no total.
       </p>
     );
   }
@@ -216,7 +217,7 @@ function Paginacao({ meta, caminho }: { meta: Meta; caminho: string }) {
       <p className="text-xs text-muted-foreground">
         Página <span className="tabular-nums">{meta.page}</span> de{" "}
         <span className="tabular-nums">{meta.total_pages}</span> ·{" "}
-        <span className="tabular-nums">{meta.total}</span> reserva{meta.total === 1 ? "" : "s"} no recorte.
+        <span className="tabular-nums">{meta.total}</span> reserva{meta.total === 1 ? "" : "s"} no total.
       </p>
       <div className="flex items-center gap-2">
         <Passo href={anterior} rotulo="Página anterior" icone={ChevronLeft} />

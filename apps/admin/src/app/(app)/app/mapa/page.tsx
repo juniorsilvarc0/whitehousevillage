@@ -52,7 +52,7 @@ export default async function MapaPage({
         <EstadoDeErro
           code={configuracao.code}
           titulo="Não foi possível carregar o inventário"
-          detalhe="Sem os produtos e a composição não há como agrupar as unidades nem derivar a linha da casa inteira."
+          detalhe="Sem a lista de produtos e apartamentos, o mapa não consegue ser montado. Tente recarregar a página."
         />
       </div>
     );
@@ -64,7 +64,7 @@ export default async function MapaPage({
         <EstadoDeErro
           code={ocupacao.code}
           titulo="Não foi possível carregar a ocupação"
-          detalhe="A matriz unidade × dia vem de GET /availability/units."
+          detalhe="Tente recarregar a página em instantes."
         />
       </div>
     );

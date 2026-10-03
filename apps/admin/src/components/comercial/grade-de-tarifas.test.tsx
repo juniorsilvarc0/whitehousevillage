@@ -60,7 +60,7 @@ function celula(produto: string, tipo: string): HTMLInputElement {
 }
 
 function salvarBotao(): HTMLButtonElement {
-  return screen.getByRole("button", { name: /salvar a grade/i }) as HTMLButtonElement;
+  return screen.getByRole("button", { name: /salvar os preços/i }) as HTMLButtonElement;
 }
 
 function respostaOk(escopo: string[], celulas: TarifaDaGrade[], removidas = 0): Resultado<GradeGravada> {
@@ -106,8 +106,8 @@ describe("GradeDeTarifas", () => {
     expect(celula("Cobertura", "Réveillon").value).toBe("");
 
     const texto = document.body.textContent ?? "";
-    expect(texto, "a precedência precisa estar na própria tela").toContain("precedência 100");
-    expect(texto).toContain("mín. 4n");
+    expect(texto, "a precedência precisa estar na própria tela").toContain("prioridade 1");
+    expect(texto).toContain("mín. 4 noites");
   });
 
   it("começa sem nada para salvar", () => {
@@ -157,9 +157,9 @@ describe("GradeDeTarifas", () => {
       expect(
         document.body.textContent,
         "esvaziar uma célula é apagar a tarifa; a tela precisa dizer isso antes de salvar",
-      ).toContain("será removida");
+      ).toContain("será removido");
     });
-    expect(document.body.textContent).toContain("RATE_NOT_FOUND");
+    expect(document.body.textContent).toContain("não poderão ser orçadas");
   });
 
   it("de fato remove a célula esvaziada do corpo enviado", async () => {
@@ -211,7 +211,7 @@ describe("GradeDeTarifas", () => {
     fireEvent.click(salvarBotao());
 
     const aviso = await screen.findByRole("alert");
-    expect(aviso.textContent).toContain("nenhum orçamento sairia");
+    expect(aviso.textContent).toContain("nenhum orçamento poderia ser feito");
     expect(aoSalvar).not.toHaveBeenCalled();
   });
 
@@ -227,15 +227,15 @@ describe("GradeDeTarifas", () => {
 
   it("diz que o passado não muda, e só depois de salvar", async () => {
     montar();
-    expect(document.body.textContent).not.toContain("Grade salva");
+    expect(document.body.textContent).not.toContain("Preços salvos");
 
     fireEvent.change(celula("Cobertura", "Normal"), { target: { value: "2.000,00" } });
     fireEvent.click(salvarBotao());
 
     await waitFor(() => {
-      expect(document.body.textContent).toContain("Grade salva");
+      expect(document.body.textContent).toContain("Preços salvos");
     });
-    expect(document.body.textContent).toContain("já emitidos não mudam");
+    expect(document.body.textContent).toContain("já feitos não mudam");
     // A resposta do servidor vira a nova base: não sobra nada por salvar.
     expect(salvarBotao().disabled).toBe(true);
   });
@@ -296,7 +296,7 @@ describe("GradeDeTarifas", () => {
       expect(
         document.body.textContent,
         "remoção que só aparece quando a venda falha é remoção invisível",
-      ).toContain("2 removidas");
+      ).toContain("2 removidos");
     });
   });
 
@@ -312,7 +312,7 @@ describe("GradeDeTarifas", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /salvar a grade/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /salvar os preços/i })).toBeNull();
     expect(celula("Cobertura", "Normal").disabled).toBe(true);
   });
 });

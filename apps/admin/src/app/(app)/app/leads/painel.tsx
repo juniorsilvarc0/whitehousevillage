@@ -21,10 +21,12 @@ import { Select } from "@/components/ui/select";
 import type { Produto } from "@/lib/api/comercial";
 import type { FalhaCrm } from "@/lib/crm/api";
 import { codigoGeral } from "@/lib/crm/codigos";
+import { formatarTelefone } from "@/lib/contatos/telefone";
 import { ConversaoFormulario } from "@/lib/crm/esquemas";
 import type { EstadoDoLead, EtapaDoFunil, Funil, Lead } from "@/lib/crm/tipos";
 import { formatarData, formatarDataCurta, noitesEntre } from "@/lib/datas";
 import { reaisDeCentavos } from "@/lib/dinheiro";
+import { rotuloDaOrigem } from "@/lib/origem";
 import { cn } from "@/lib/utils";
 
 import { converterLead, descartarLead } from "./acoes";
@@ -70,8 +72,8 @@ export function PainelDeLeads({
         <AvisosDoCrm />
         <EstadoVazio
           icone={Sparkles}
-          titulo="Nenhum lead neste recorte"
-          descricao="Lead sem dono não aparece para quem tem escopo próprio — ele fica na fila da gestão até ser distribuído, e é assim que tem de ser: ainda não é de ninguém."
+          titulo="Nenhum lead com esses filtros"
+          descricao="Se o seu perfil vê só os seus leads, os que ainda não têm dono não aparecem aqui: eles ficam com a gestão até serem distribuídos."
         />
       </>
     );
@@ -105,8 +107,8 @@ export function PainelDeLeads({
         descricao={
           <>
             O lead de <strong>{descartando?.contact_name}</strong> passa a <strong>descartado</strong> e sai
-            da fila — mas <strong>não é apagado</strong>. É ele que alimenta o funil de perdas anterior à
-            oportunidade: quanto interesse chega e quanto morre sem virar negócio.
+            da fila — mas <strong>não é apagado</strong>. Ele continua contando nos números de quanto
+            interesse chega e quanto não vira negócio.
           </>
         }
         aoConfirmar={async () => {
@@ -149,10 +151,10 @@ function CartaoDeLead({
           <Badge variant={convertido ? "accent" : lead.status === "descartado" ? "outline" : "neutral"}>
             {ROTULO_DO_ESTADO[lead.status]}
           </Badge>
-          <Badge variant="outline">{lead.source}</Badge>
+          <Badge variant="outline">{rotuloDaOrigem(lead.source)}</Badge>
           {lead.score > 0 ? (
             <span className="font-mono text-[0.68rem] tabular-nums text-muted-foreground">
-              score {lead.score}
+              pontuação {lead.score}
             </span>
           ) : null}
         </div>
@@ -161,7 +163,7 @@ function CartaoDeLead({
           {lead.contact_phone_e164 ? (
             <a href={`tel:${lead.contact_phone_e164}`} className="flex items-center gap-1.5 hover:text-foreground">
               <Phone className="size-3.5" aria-hidden="true" />
-              {lead.contact_phone_e164}
+              {formatarTelefone(lead.contact_phone_e164)}
             </a>
           ) : null}
           <span>{lead.interest_unit_type_name ?? "Produto não informado"}</span>
@@ -174,7 +176,7 @@ function CartaoDeLead({
           ) : (
             <span>Datas não informadas</span>
           )}
-          <span>{lead.owner_name ?? "Sem dono — fila da gestão"}</span>
+          <span>{lead.owner_name ?? "Sem dono — aguardando a gestão"}</span>
         </p>
       </div>
 
@@ -279,7 +281,7 @@ function ModalDeConversao({
       notificarSucesso(
         "Oportunidade criada",
         resultado.data.auto_task
-          ? `A tarefa "${resultado.data.auto_task.subject}" já nasceu com o prazo do SLA da etapa.`
+          ? `A tarefa "${resultado.data.auto_task.subject}" já foi criada com o prazo da etapa.`
           : undefined,
       );
       setAberto(false);
@@ -317,9 +319,9 @@ function ModalDeConversao({
       {lead ? (
         <form id="form-conversao" onSubmit={enviar} className="flex flex-col gap-4">
           <Nota>
-            Tudo aqui é <strong>opcional</strong>. O que ficar em branco é herdado do lead: produto,
-            datas e dono. Sem funil escolhido, cai no funil padrão; sem etapa, na primeira dele — e a
-            entrada na etapa já cria a tarefa de follow-up.
+            Tudo aqui é <strong>opcional</strong>. O que ficar em branco vem do lead: produto, datas e
+            dono. Sem funil escolhido, vai para o funil padrão; sem etapa, para a primeira — e a tarefa
+            de retorno ao cliente é criada automaticamente.
           </Nota>
 
           <ResumoDoLead lead={lead} />
@@ -391,7 +393,7 @@ function ModalDeConversao({
               )}
             </Campo>
 
-            <Campo id="conv-saida" label="Saída" erro={erros.check_out} hint="Exclusiva: a noite da saída não é cobrada.">
+            <Campo id="conv-saida" label="Saída" erro={erros.check_out} hint="O dia da saída não conta como diária.">
               {(props) => (
                 <Input
                   {...props}
@@ -430,7 +432,12 @@ function ModalDeConversao({
           </div>
 
           {falha ? (
-            <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3">
+            <div
+              role="alert"
+              data-codigo={falha.code}
+              title={`Código para o suporte: ${falha.code}`}
+              className="rounded-xl border border-destructive/30 bg-destructive/8 px-3.5 py-3"
+            >
               <p className="flex items-start gap-2 text-sm text-destructive">
                 <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
                 <span className="min-w-0">{descricaoDaFalha(falha)}</span>
@@ -443,7 +450,6 @@ function ModalDeConversao({
                   Abrir a oportunidade que já existe
                 </Link>
               ) : null}
-              <p className="mt-2 font-mono text-[0.68rem] text-muted-foreground">{falha.code}</p>
             </div>
           ) : null}
         </form>
@@ -457,7 +463,7 @@ function ResumoDoLead({ lead }: { lead: Lead }) {
     <dl className="grid gap-2 rounded-xl border border-border/60 bg-muted/20 p-3 text-sm sm:grid-cols-3">
       <div>
         <dt className="text-xs text-muted-foreground">Origem</dt>
-        <dd>{lead.source}</dd>
+        <dd>{rotuloDaOrigem(lead.source)}</dd>
       </div>
       <div>
         <dt className="text-xs text-muted-foreground">Interesse</dt>

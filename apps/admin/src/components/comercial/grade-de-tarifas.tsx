@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { GradeGravada, MetaDaGrade, Tarifa, TarifaDaGrade, TipoDeData } from "@/lib/api/comercial";
 import { mensagemDoErro, type Resultado } from "@/lib/acoes/resultado";
-import { TIPOS_DE_DATA, classeDoTipo } from "@/lib/comercial/tipos-de-data";
+import { TIPOS_DE_DATA, classeDoTipo, prioridadeDoTipo } from "@/lib/comercial/tipos-de-data";
 import { centavosDeTexto, reaisDeCentavos } from "@/lib/dinheiro";
 import { cn } from "@/lib/utils";
 
@@ -132,13 +132,13 @@ export function GradeDeTarifas({
 
     if (invalidas.length > 0) {
       setErro(
-        `${invalidas.length} célula${invalidas.length === 1 ? "" : "s"} com valor inválido. A diária precisa ser um valor em reais maior que zero.`,
+        `${invalidas.length} ${invalidas.length === 1 ? "preço" : "preços"} com valor inválido. A diária precisa ser um valor em reais maior que zero.`,
       );
       return;
     }
     if (preenchidas.length === 0) {
       setErro(
-        "A grade inteira está vazia. Salvar assim apagaria a tarifa de todos os produtos desta tela e nenhum orçamento sairia.",
+        "A tabela inteira está vazia. Salvar assim apagaria o preço de todos os produtos e nenhum orçamento poderia ser feito.",
       );
       return;
     }
@@ -190,8 +190,8 @@ export function GradeDeTarifas({
       <div className="overflow-x-auto rounded-xl border border-border/60 bg-card/60">
         <table className="w-full min-w-[46rem] border-collapse text-sm">
           <caption className="sr-only">
-            Tarifa da diária por produto e tipo de data, em reais. As colunas estão em ordem
-            decrescente de precedência.
+            Preço da diária por produto e tipo de data, em reais. As colunas estão em ordem de
+            prioridade: a primeira vale acima das outras.
           </caption>
           <thead>
             <tr className="border-b border-border/60">
@@ -204,8 +204,8 @@ export function GradeDeTarifas({
                     {tipo.label}
                   </span>
                   <span className="mt-1 block text-[0.65rem] font-normal tabular-nums text-muted-foreground">
-                    precedência {tipo.precedencia}
-                    {minimosPorTipo[tipo.code] ? ` · mín. ${minimosPorTipo[tipo.code]}n` : ""}
+                    prioridade {prioridadeDoTipo(tipo)}
+                    {minimosPorTipo[tipo.code] ? ` · mín. ${minimosPorTipo[tipo.code]} noites` : ""}
                   </span>
                 </th>
               ))}
@@ -251,10 +251,10 @@ export function GradeDeTarifas({
 
       {removidas.length > 0 ? (
         <Nota variante="atencao">
-          {removidas.length} célula{removidas.length === 1 ? "" : "s"} ficou vazia e será{" "}
-          <strong>removida</strong> ao salvar — o salvamento substitui a grade dos produtos desta tela.
-          Sem a célula, uma noite daquele tipo passa a recusar o orçamento com{" "}
-          <code>RATE_NOT_FOUND</code>, que é melhor do que vender por um valor inventado.
+          {removidas.length} {removidas.length === 1 ? "preço ficou vazio e será" : "preços ficaram vazios e serão"}{" "}
+          <strong>{removidas.length === 1 ? "removido" : "removidos"}</strong> ao salvar. Sem preço, noites
+          daquele tipo não poderão ser orçadas nem vendidas para esse produto — melhor isso do que vender
+          por um valor inventado.
         </Nota>
       ) : null}
 
@@ -269,32 +269,30 @@ export function GradeDeTarifas({
           {estado === "salvo" && !sujo ? (
             <span className="inline-flex flex-wrap items-center gap-x-1.5 text-alcada-livre">
               <Check className="size-3.5" aria-hidden="true" />
-              <span>Grade salva.</span>
+              <span>Preços salvos.</span>
               {gravado ? (
                 <span className="tabular-nums">
-                  {gravado.created} criada{gravado.created === 1 ? "" : "s"}, {gravado.updated} atualizada
-                  {gravado.updated === 1 ? "" : "s"}, {gravado.unchanged} inalterada
-                  {gravado.unchanged === 1 ? "" : "s"},{" "}
+                  {gravado.created} {gravado.created === 1 ? "novo" : "novos"}, {gravado.updated}{" "}
+                  {gravado.updated === 1 ? "alterado" : "alterados"}, {gravado.unchanged} sem mudança,{" "}
                   <strong className={cn(gravado.removed > 0 && "text-destructive")}>
-                    {gravado.removed} removida{gravado.removed === 1 ? "" : "s"}
+                    {gravado.removed} {gravado.removed === 1 ? "removido" : "removidos"}
                   </strong>{" "}
                   em {gravado.unit_type_ids.length} produto{gravado.unit_type_ids.length === 1 ? "" : "s"}.
                 </span>
               ) : null}
               <span>
-                Vale do próximo cálculo em diante — orçamentos e reservas já emitidos não mudam.
+                Vale para os próximos orçamentos — orçamentos e reservas já feitos não mudam.
               </span>
             </span>
           ) : sujo ? (
             <>
-              <span className="tabular-nums">{alteradas.length}</span> célula
-              {alteradas.length === 1 ? "" : "s"} alterada{alteradas.length === 1 ? "" : "s"}, ainda não
-              salva{alteradas.length === 1 ? "" : "s"}.
+              <span className="tabular-nums">{alteradas.length}</span>{" "}
+              {alteradas.length === 1 ? "preço alterado, ainda não salvo" : "preços alterados, ainda não salvos"}.
             </>
           ) : (
             <>
-              <span className="tabular-nums">{preenchidas.length}</span> tarifas nesta tabela. Total da grade
-              cheia: {produtos.length * TIPOS_DE_DATA.length} células.
+              <span className="tabular-nums">{preenchidas.length}</span> de{" "}
+              {produtos.length * TIPOS_DE_DATA.length} preços preenchidos nesta tabela.
             </>
           )}
         </p>
@@ -307,7 +305,7 @@ export function GradeDeTarifas({
             </Button>
             <Button size="sm" onClick={salvar} disabled={!sujo || estado === "salvando"}>
               {estado === "salvando" ? <Loader2 className="animate-spin" aria-hidden="true" /> : <Save aria-hidden="true" />}
-              Salvar a grade
+              Salvar os preços
             </Button>
           </div>
         ) : null}
@@ -321,18 +319,15 @@ export function GradeDeTarifas({
 export function ReguaDePrecedencia({ minimosPorTipo }: { minimosPorTipo: Partial<Record<TipoDeData, number>> }) {
   return (
     <ol className="flex flex-col gap-1.5">
-      {TIPOS_DE_DATA.map((tipo, indice) => (
+      {TIPOS_DE_DATA.map((tipo) => (
         <li key={tipo.code} className="flex items-center gap-3 rounded-lg bg-card/70 px-3 py-2">
-          <span className="w-5 shrink-0 text-center font-mono text-xs text-muted-foreground">{indice + 1}</span>
+          <span className="w-5 shrink-0 text-center font-mono text-xs text-muted-foreground">{prioridadeDoTipo(tipo)}</span>
           <span className={cn("shrink-0 rounded-full px-2 py-0.5 text-[0.7rem]", classeDoTipo(tipo.code))}>
             {tipo.label}
           </span>
           <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{tipo.regra}</span>
-          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-            {tipo.precedencia}
-          </span>
-          <span className="w-16 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
-            {minimosPorTipo[tipo.code] ? `mín. ${minimosPorTipo[tipo.code]}n` : "mín. 1n"}
+          <span className="w-24 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+            {minimosPorTipo[tipo.code] ? `mín. ${minimosPorTipo[tipo.code]} noites` : "mín. 1 noite"}
           </span>
         </li>
       ))}

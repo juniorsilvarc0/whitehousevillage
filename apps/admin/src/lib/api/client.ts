@@ -161,7 +161,7 @@ async function apiRequest<T, M = Meta>(path: string, init: ApiFetchInit): Promis
         : { cache: "no-store" as const }),
     });
   } catch (causa) {
-    throw new ApiError("NETWORK_ERROR", "Não foi possível falar com o servidor.", 0, {
+    throw new ApiError("NETWORK_ERROR", "Sem conexão com o sistema agora.", 0, {
       cause: causa instanceof Error ? causa.message : String(causa),
     });
   }

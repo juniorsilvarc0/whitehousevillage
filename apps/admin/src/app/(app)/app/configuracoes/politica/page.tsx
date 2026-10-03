@@ -33,34 +33,34 @@ export default async function PoliticaPage() {
       <CabecalhoDeTela
         voltar={{ href: "/app/configuracoes", rotulo: "Configurações" }}
         titulo="Política comercial e de cancelamento"
-        descricao="Tudo aqui é dado versionado, não constante em código. Cada reserva congela a versão que valia quando nasceu."
+        descricao="As regras de venda e de cancelamento. Cada reserva segue as regras que valiam no dia em que foi feita."
       />
 
       <Nota variante="atencao">
         <strong>Salvar cria uma versão nova e não altera nenhuma reserva já feita.</strong> Não existe
-        &ldquo;editar a política vigente&rdquo;: o servidor numera a versão nova como a seguinte e
-        recusa reescrever ou antedatar uma publicada. Voltar atrás é publicar de novo a regra antiga —
-        que entra como versão nova e deixa rastro de quem mudou o quê.
+        &ldquo;editar a política atual&rdquo;: cada mudança vira uma versão nova, com data para começar a
+        valer, e não pode valer para trás. Para desfazer, publique de novo a regra antiga — fica
+        registrado quem mudou o quê.
       </Nota>
 
       <Secao
         titulo="Política comercial"
-        descricao="Sinal para confirmar, vencimento do saldo, validade da pré-reserva, caução de evento e as alçadas de desconto."
+        descricao="Sinal para confirmar, vencimento do saldo, prazo da pré-reserva, caução de evento e os limites de desconto."
       >
         {comercial.ok || comercial.code === "NOT_FOUND" ? (
           <FormularioComercial politica={comercial.ok ? comercial.data : null} podeEditar={podeEditar} />
         ) : (
           <EstadoDeErro
             code={comercial.code}
-            titulo="Não foi possível carregar a política comercial vigente"
-            detalhe="Publicar sem conhecer a versão atual criaria uma versão nova em cima de valores que ninguém conferiu."
+            titulo="Não foi possível carregar a política comercial atual"
+            detalhe="Por segurança, não é possível publicar mudanças sem ver primeiro as regras atuais. Tente recarregar a página."
           />
         )}
       </Secao>
 
       <Secao
         titulo="Política de cancelamento"
-        descricao="Faixas por antecedência até o check-in. O motor aplica a primeira faixa aplicável, de cima para baixo."
+        descricao="Quanto se devolve conforme a antecedência do cancelamento. Vale a primeira faixa que servir, de cima para baixo."
       >
         {cancelamento.ok || cancelamento.code === "NOT_FOUND" ? (
           <FormularioDeCancelamento
@@ -70,7 +70,7 @@ export default async function PoliticaPage() {
         ) : (
           <EstadoDeErro
             code={cancelamento.code}
-            titulo="Não foi possível carregar a política de cancelamento vigente"
+            titulo="Não foi possível carregar a política de cancelamento atual"
           />
         )}
       </Secao>

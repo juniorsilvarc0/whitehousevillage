@@ -62,9 +62,9 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
         titulo="Leads"
         descricao={
           <>
-            O lead guarda o <strong>interesse</strong>, não a pessoa: nome, telefone e e-mail vivem no
-            cadastro de contatos, um registro por pessoa. É essa separação que deixa o WhatsApp
-            reconhecer quem já existe em vez de abrir um segundo cadastro a cada mensagem.
+            O lead guarda o <strong>interesse</strong> do cliente; nome, telefone e e-mail ficam no
+            cadastro de contatos, um por pessoa. Assim o WhatsApp reconhece quem já escreveu em vez de
+            criar outro cadastro a cada mensagem.
           </>
         }
       />
@@ -86,15 +86,14 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
           {leads.data.meta.total_pages > 1 ? (
             <p className="text-xs text-muted-foreground">
               Página {leads.data.meta.page} de {leads.data.meta.total_pages} ·{" "}
-              <span className="tabular-nums">{leads.data.meta.total}</span> leads no recorte.
+              <span className="tabular-nums">{leads.data.meta.total}</span> leads no total.
             </p>
           ) : null}
 
           {!funis.ok || !etapas.ok ? (
             <Nota variante="atencao">
-              O catálogo de funis não carregou por inteiro ({!funis.ok ? funis.code : !etapas.ok ? etapas.code : ""}). A
-              conversão ainda funciona — sem funil escolhido, o servidor usa o funil padrão e a primeira
-              etapa dele.
+              A lista de funis não carregou por inteiro. Ainda dá para converter leads: sem funil
+              escolhido, o lead entra na primeira etapa do funil padrão.
             </Nota>
           ) : null}
         </>

@@ -90,7 +90,7 @@ export function SeletorDeTabelas({
               <span className="text-foreground">sem data de fim</span>
             )}
           </span>
-          {vigenteHoje(selecionada) ? <Badge variant="accent">vigente hoje</Badge> : null}
+          {vigenteHoje(selecionada) ? <Badge variant="accent">valendo hoje</Badge> : null}
 
           <span className="ml-auto flex gap-1">
             {permissoes.editar ? (
@@ -119,9 +119,9 @@ export function SeletorDeTabelas({
         rotuloConfirmar="Desativar tabela"
         descricao={
           <>
-            Desativar não apaga as tarifas: reservas antigas continuam apontando para esta tabela e
-            mantêm o preço que congelaram. Se esta for a única tabela vigente hoje, o servidor recusa —
-            sem tabela vigente nenhum orçamento sai.
+            Desativar não apaga os preços: as reservas antigas continuam com o preço combinado. Se esta
+            for a única tabela valendo hoje, não será possível desativar — sem ela, nenhum orçamento
+            poderia ser feito.
           </>
         }
         aoConfirmar={() => desativarTabela(aDesativar!.id)}
@@ -186,7 +186,7 @@ function ModalDeTabela({ controle }: { controle: React.RefObject<ControleDeModal
       open={aberto}
       onOpenChange={aoMudar}
       title={tabela ? `Editar ${tabela.name}` : "Nova tabela de tarifas"}
-      description="A tabela é versionada por vigência. A vigente numa data é a de maior início que cobre a data."
+      description="Cada tabela vale por um período. Se duas valerem na mesma data, vale a que começou mais recentemente."
       footer={
         <>
           <Button variant="ghost" onClick={() => aoMudar(false)} disabled={isSubmitting}>
@@ -211,19 +211,19 @@ function ModalDeTabela({ controle }: { controle: React.RefObject<ControleDeModal
           label="Nome"
           obrigatorio
           erro={errors.name?.message}
-          hint="Chave natural dentro da propriedade — Tabela Comercial V1, Tabela 2027."
+          hint="Um nome que não se repita — Tabela Comercial V1, Tabela 2027."
         >
           {(p) => <Input {...p} {...form.register("name")} />}
         </Campo>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <Campo id="tabela-de" label="Vigente a partir de" obrigatorio erro={errors.valid_from?.message}>
+          <Campo id="tabela-de" label="Vale a partir de" obrigatorio erro={errors.valid_from?.message}>
             {(p) => <Input {...p} type="date" {...form.register("valid_from")} className="tabular-nums" />}
           </Campo>
 
           <Campo
             id="tabela-ate"
-            label="Vigente até"
+            label="Vale até"
             erro={errors.valid_to?.message}
             hint="Em branco = sem fim."
           >
@@ -234,7 +234,7 @@ function ModalDeTabela({ controle }: { controle: React.RefObject<ControleDeModal
         <CheckboxCampo
           id="tabela-active"
           label="Ativa"
-          hint="Tabela inativa não é escolhida por nenhum cálculo novo; as reservas que a congelaram seguem intactas."
+          hint="Desmarcada, a tabela não é usada em orçamentos novos; as reservas antigas não mudam."
           {...form.register("active")}
         />
       </form>

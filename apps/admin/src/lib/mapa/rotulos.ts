@@ -15,7 +15,7 @@ export const ROTULO_DO_STATUS: Readonly<Record<StatusDaCelulaSintetica, string>>
   checked_out: "Estadia cumprida",
   maintenance: "Manutenção",
   owner_hold: "Uso do proprietário",
-  ota: "Reserva de canal",
+  ota: "Site de reservas",
   parcial: "Casa parcialmente ocupada",
 };
 
@@ -25,13 +25,13 @@ export const ROTULO_DO_STATUS: Readonly<Record<StatusDaCelulaSintetica, string>>
  * desenhado é uma decisão que precisa estar escrita onde se olha.
  */
 export const EXPLICACAO_DO_STATUS: Readonly<Record<StatusDaCelulaSintetica, string>> = {
-  livre: "Sem bloqueio — a data está vendável.",
-  hold: "Data segurada sem sinal. Expira sozinha e volta ao estoque.",
-  confirmed: "Sinal recebido. É a venda firme.",
-  checked_out: "A estadia aconteceu e terminou; a data já é vendável de novo.",
-  maintenance: "Bloqueio operacional. Não é venda e não gera receita.",
+  livre: "Livre — pode ser vendida.",
+  hold: "Datas guardadas, ainda sem sinal. Se o prazo vencer, voltam a ficar livres sozinhas.",
+  confirmed: "Sinal recebido. A venda está garantida.",
+  checked_out: "A estadia já terminou; a data já pode ser vendida de novo.",
+  maintenance: "Fechado para manutenção. Não é venda e não gera receita.",
   owner_hold: "Uso da casa pelos proprietários.",
-  ota: "Veio de canal externo. Alterações são feitas no canal, não aqui.",
+  ota: "Reserva que veio de um site de reservas (como Booking ou Airbnb). Mudanças são feitas lá, não aqui.",
   parcial: "Alguma unidade está ocupada — a casa inteira não pode ser vendida neste dia.",
 };
 

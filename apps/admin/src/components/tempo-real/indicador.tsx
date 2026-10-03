@@ -72,7 +72,7 @@ export function IndicadorDeTempoReal({
       </span>
       {idade && !atualizando ? <span className="text-muted-foreground/80 tabular-nums">{idade}</span> : null}
       {descricao.ofereceReconectar ? (
-        <Button variant="ghost" size="iconSm" onClick={aoReconectar} aria-label="Reconectar o canal de eventos">
+        <Button variant="ghost" size="iconSm" onClick={aoReconectar} aria-label="Reconectar a atualização automática">
           <RefreshCw />
         </Button>
       ) : null}

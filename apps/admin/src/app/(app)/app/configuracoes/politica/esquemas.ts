@@ -28,14 +28,14 @@ export const PoliticaComercialFormulario = z
     deposit_pct: percentualDe("O sinal precisa ser um percentual entre 0 e 100."),
     balance_due_days: inteiroDe(0, "Informe em quantos dias antes do check-in o saldo vence."),
     hold_hours: inteiroDe(1, "A pré-reserva precisa durar ao menos 1 hora."),
-    discount_auto_pct: percentualDe("Informe o teto da alçada da gestão, entre 0 e 100."),
-    discount_approval_pct: percentualDe("Informe o teto com aprovação do proprietário, entre 0 e 100."),
+    discount_auto_pct: percentualDe("Informe o limite de desconto da gestão, entre 0 e 100."),
+    discount_approval_pct: percentualDe("Informe o limite de desconto com aprovação do proprietário, entre 0 e 100."),
     event_deposit_cents: dinheiroDe(0, "Informe a caução de evento em reais (0 se não houver)."),
     valid_from: dataDe("Informe a partir de quando esta versão vale."),
   })
   .refine((v) => paraNumero(v.discount_approval_pct) >= paraNumero(v.discount_auto_pct), {
     path: ["discount_approval_pct"],
-    message: "A faixa de aprovação não pode ser menor que a automática.",
+    message: "O limite com aprovação do proprietário não pode ser menor que o da gestão.",
   });
 
 export type PoliticaComercialFormulario = z.infer<typeof PoliticaComercialFormulario>;

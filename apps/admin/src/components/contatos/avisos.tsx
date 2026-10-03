@@ -71,6 +71,8 @@ export function AvisoDeErro({
   return (
     <div
       role="alert"
+      data-codigo={code}
+      title={`Código para o suporte: ${code}`}
       className={cn(
         "rounded-xl border px-5 py-4",
         semPermissao ? "border-border/60 bg-muted/25" : "border-destructive/30 bg-destructive/8",
@@ -86,9 +88,6 @@ export function AvisoDeErro({
           <h3 className="font-display text-base text-foreground">{titulo}</h3>
           <p className="mt-1 text-sm text-muted-foreground">{mensagemDeContato(code)}</p>
           {detalhe ? <p className="mt-2 text-sm text-muted-foreground">{detalhe}</p> : null}
-          <code className="mt-2 inline-block rounded-md bg-card px-2 py-0.5 font-mono text-xs text-muted-foreground">
-            {code}
-          </code>
         </div>
       </div>
     </div>

@@ -53,7 +53,7 @@ export function ListaDeContatos({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           {contatos.length === 0
-            ? "Nenhum contato no recorte."
+            ? "Nenhum contato com esses filtros."
             : `${contatos.length} ${contatos.length === 1 ? "contato" : "contatos"} nesta página.`}
         </p>
         {permissoes.criar ? (
@@ -76,9 +76,8 @@ export function ListaDeContatos({
               </>
             ) : (
               <>
-                O cadastro de contatos é a base de tudo que tem gente: a reserva exige um
-                <code className="mx-1 font-mono text-xs">contact_id</code>, e o lead guarda o
-                interesse, não a pessoa.
+                O cadastro de contatos é a base de tudo que envolve pessoas: toda reserva precisa de
+                um contato, e o lead guarda o interesse, não a pessoa.
               </>
             )
           }
@@ -153,13 +152,13 @@ export function ListaDeContatos({
 
                     <div className="flex shrink-0 items-center gap-1.5">
                       {anonimizado ? (
-                        <Badge variant="outline" title="Ficha esvaziada a pedido do titular. Existe para sustentar as reservas antigas.">
+                        <Badge variant="outline" title="Dados pessoais apagados a pedido da pessoa. A ficha fica para manter as reservas antigas.">
                           <ShieldOff aria-hidden="true" />
                           anonimizado
                         </Badge>
                       ) : null}
                       {contato.marketing_opt_in ? (
-                        <Badge variant="accent" title="Aceitou receber ofertas — com data de consentimento registrada.">
+                        <Badge variant="accent" title="Aceitou receber ofertas — com a data do aceite registrada.">
                           opt-in
                         </Badge>
                       ) : null}

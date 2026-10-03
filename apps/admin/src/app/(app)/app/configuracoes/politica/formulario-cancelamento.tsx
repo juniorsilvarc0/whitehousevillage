@@ -93,7 +93,7 @@ export function FormularioDeCancelamento({
           <>
             <Badge variant="accent">versão {politica.version}</Badge>
             <span>
-              vigente desde <span className="tabular-nums text-foreground">{formatarData(politica.valid_from)}</span>
+              valendo desde <span className="tabular-nums text-foreground">{formatarData(politica.valid_from)}</span>
             </span>
           </>
         ) : (
@@ -238,9 +238,9 @@ export function FormularioDeCancelamento({
 
       {buracos.length > 0 ? (
         <Nota variante="atencao">
-          Nenhuma faixa cobre {buracos.join(", ")}. Um cancelamento com essa antecedência cai no caso
-          &ldquo;sem faixa aplicável&rdquo; e o motor <strong>retém tudo por omissão</strong> — o hóspede
-          perde o sinal por um buraco no cadastro, não por uma decisão comercial.
+          Nenhuma faixa cobre {buracos.join(", ")}. Um cancelamento com essa antecedência
+          <strong> não devolve nada</strong> — o hóspede perderia o sinal por uma falha no cadastro, não
+          por uma decisão sua.
         </Nota>
       ) : null}
 
@@ -253,15 +253,15 @@ export function FormularioDeCancelamento({
       {versaoPublicada !== null ? (
         <p role="status" className="flex items-center gap-2 rounded-lg bg-alcada-livre/12 px-3 py-2 text-sm text-alcada-livre">
           <Check className="size-4" aria-hidden="true" />
-          Versão {versaoPublicada} publicada. Cada reserva antiga continua apontando para a versão que
-          congelou.
+          Versão {versaoPublicada} publicada. As reservas antigas continuam com as regras da época em
+          que foram feitas.
         </p>
       ) : null}
 
       <Nota variante="atencao">
-        Salvar <strong>publica uma versão nova com as faixas inteiras</strong>. Cancelar uma reserva
-        aplica a versão que <em>ela</em> congelou na criação, nunca esta — mudar as regras hoje não muda
-        o que já foi prometido a quem reservou ontem.
+        Salvar <strong>publica uma versão nova com todas as faixas</strong>. Ao cancelar uma reserva,
+        valem as regras do dia em que <em>ela</em> foi feita, não estas — mudar as regras hoje não muda o
+        que já foi prometido a quem reservou ontem.
       </Nota>
 
       {podeEditar ? (

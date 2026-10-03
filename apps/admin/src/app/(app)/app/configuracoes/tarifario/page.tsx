@@ -63,7 +63,7 @@ export default async function TarifarioPage({
       <CabecalhoDeTela
         voltar={{ href: "/app/configuracoes", rotulo: "Configurações" }}
         titulo="Tarifário"
-        descricao="Um valor de diária por produto e por tipo de data. Cada noite recebe um único tipo, decidido por precedência."
+        descricao="O preço da diária de cada produto em cada tipo de data (normal, fim de semana, feriado…)."
         acoes={
           <Link href="/app/orcamento" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
             <Calculator aria-hidden="true" />
@@ -73,9 +73,8 @@ export default async function TarifarioPage({
       />
 
       <Nota>
-        Alterar uma tarifa muda o <strong>próximo</strong> orçamento e não muda nenhum orçamento ou
-        reserva já emitidos: a reserva guarda a tabela que usou e o preço de cada noite. Corrigir um
-        valor aqui nunca reescreve uma venda de ontem.
+        Mudar um preço vale para os <strong>próximos</strong> orçamentos. Orçamentos e reservas já
+        feitos continuam com o preço combinado, noite a noite.
       </Nota>
 
       {!tabelas.ok ? <EstadoDeErro code={tabelas.code} titulo="Não foi possível carregar as tabelas de tarifas" /> : null}
@@ -88,25 +87,25 @@ export default async function TarifarioPage({
       {tabelas.ok && tabelas.data.length === 0 ? (
         <EstadoVazio
           titulo="Nenhuma tabela de tarifas"
-          descricao="Sem tabela vigente nenhum orçamento sai: o motor não teria onde procurar a diária da noite."
+          descricao="Sem uma tabela de preços valendo, não dá para fazer orçamentos. Crie a primeira."
         />
       ) : null}
 
       {escolhida && produtos.ok ? (
         <Secao
-          titulo={`Grade — ${escolhida.name}`}
-          descricao="Edição em linha, salvamento em lote: ou a grade inteira entra, ou nada entra."
+          titulo={`Preços — ${escolhida.name}`}
+          descricao="Altere os valores direto na tabela e salve tudo de uma vez. Se algo der errado, nada é salvo pela metade."
         >
           {tarifas === null || !tarifas.ok ? (
             <EstadoDeErro
               code={tarifas?.code ?? "INTERNAL"}
               titulo="Não foi possível carregar as tarifas desta tabela"
-              detalhe="A grade não é editável enquanto os valores atuais não chegarem — salvar por cima do desconhecido apagaria o que estivesse lá."
+              detalhe="Por segurança, só dá para editar depois de ver os preços atuais. Tente recarregar a página."
             />
           ) : produtos.data.length === 0 ? (
             <EstadoVazio
               titulo="Nenhum produto ativo"
-              descricao="A grade é produto × tipo de data. Cadastre os produtos no inventário para ter linhas."
+              descricao="Cada linha da tabela é um produto. Cadastre os produtos no inventário primeiro."
               acao={
                 <Link href="/app/configuracoes/inventario" className={cn(buttonVariants({ size: "sm", variant: "outline" }))}>
                   Abrir o inventário
@@ -131,14 +130,13 @@ export default async function TarifarioPage({
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Secao
-          titulo="Precedência — por que a noite custa o que custa"
-          descricao="Cada noite recebe um tipo só. Períodos se sobrepõem de propósito; vence o de maior precedência."
+          titulo="Qual preço vale em cada noite"
+          descricao="Cada noite tem um tipo só. Quando dois períodos caem na mesma noite, vale o que está mais acima nesta lista."
         >
           <ReguaDePrecedencia minimosPorTipo={minimosPorTipo} />
           <Nota className="mt-3">
-            Réveillon dentro da alta temporada é sobreposição esperada, não erro de cadastro: 31/12 numa
-            sexta-feira é <strong>réveillon</strong> (100), não fim de semana (40). Mudar a ordem é mudar
-            uma linha de dado no banco, não o código.
+            Réveillon dentro da alta temporada é normal, não é erro de cadastro: 31/12 numa sexta-feira
+            é cobrado como <strong>réveillon</strong>, não como fim de semana.
           </Nota>
         </Secao>
 

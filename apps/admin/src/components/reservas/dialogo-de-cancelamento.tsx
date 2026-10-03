@@ -183,7 +183,7 @@ export function DialogoDeCancelamento({
           id="cancel-motivo"
           label="Motivo"
           obrigatorio
-          hint="Não é burocracia: “não compareceu” aplica retenção integral e termina a reserva num estado diferente. O motivo muda a conta."
+          hint="O motivo muda a conta: “não compareceu”, por exemplo, faz a casa ficar com todo o sinal."
         >
           {(props) => (
             <Select {...props} value={motivo} onChange={(evento) => setMotivo(evento.target.value)}>
@@ -215,7 +215,7 @@ export function DialogoDeCancelamento({
         {simulacao && !simulacao.ok ? (
           <Recusa
             falha={simulacao}
-            garantia="A reserva não foi tocada — isto era só a simulação."
+            garantia="Nada mudou na reserva — isto era só a simulação."
           />
         ) : null}
 
@@ -225,8 +225,8 @@ export function DialogoDeCancelamento({
 
         {previsao ? (
           <Nota variante="atencao">
-            Confirmando, as unidades desta reserva <strong>voltam a ser vendáveis na hora</strong> e o
-            evento entra na linha do tempo com o motivo. O histórico fica; a data, não.
+            Ao confirmar, as datas desta reserva <strong>voltam a ficar livres para venda na hora</strong> e o
+            cancelamento entra no histórico com o motivo.
           </Nota>
         ) : null}
       </div>
@@ -309,7 +309,7 @@ function PrevisaoDoCancelamento({
           // O caso da pré-reserva: `refund 0 / retained 0` com a faixa dizendo
           // "devolução integral" se lê como se a casa estivesse ficando com o
           // dinheiro. Não há dinheiro — e é isso que precisa estar escrito.
-          <>Nada foi recebido ainda, então não há o que devolver nem o que reter. A faixa acima é a que valeria se houvesse sinal.</>
+          <>Nada foi recebido ainda, então não há o que devolver nem o que reter. A regra acima é a que valeria se houvesse sinal.</>
         ) : (
           <>
             Base do cálculo: sinal recebido de{" "}
@@ -323,8 +323,8 @@ function PrevisaoDoCancelamento({
           Além disso, há{" "}
           <strong className="font-mono tabular-nums">{formatarBRL(previsao.credit_cents)}</strong> de{" "}
           <strong>crédito em aberto</strong> do hóspede — dinheiro que ele já pagou e que este cancelamento
-          não liquida. Devolução, retenção e crédito somados são tudo o que ele pagou; sem esta linha, a
-          tela diria que a conta está encerrada e não estaria.
+          não resolve. Devolução, valor retido e crédito somados dão tudo o que ele pagou: a conta com ele
+          ainda não está fechada.
         </p>
       ) : null}
 

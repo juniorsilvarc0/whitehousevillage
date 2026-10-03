@@ -56,7 +56,7 @@ function revalidar(id: string): void {
  */
 function chaveInvalida(chave: string): Resultado<never> | null {
   if (chave.length < 8 || chave.length > 255) {
-    return falha("VALIDATION_ERROR", "Chave de idempotência ausente. Recarregue a tela e tente de novo.");
+    return falha("VALIDATION_ERROR", "Não foi possível enviar. Recarregue a página e tente de novo.");
   }
   return null;
 }

@@ -171,24 +171,24 @@ export const CATALOGO: NavItem[] = [
   { title: "Leads",         href: "/app/leads",         icon: ContactRound,      group: "Comercial",     recurso: "crm.leads" },
 
   { title: "WhatsApp",      href: "/app/chat",          icon: MessageCircle,     group: "Comercial",     recurso: "chat",
-    emConstrucao: true, quando: "Fase 1g — atendimento por WhatsApp via uazapi." },
+    emConstrucao: true, quando: "Em breve — atendimento por WhatsApp dentro do sistema." },
   { title: "Agenda",        href: "/app/agenda",        icon: CalendarDays,      group: "Operação",      recurso: "agenda",
-    emConstrucao: true, quando: "Fase 2 — agenda operacional e visitas do corretor." },
+    emConstrucao: true, quando: "Em breve — agenda da operação e visitas do corretor." },
   { title: "Financeiro",    href: "/app/financeiro",    icon: Wallet,            group: "Análise",       recurso: "finance.receivables",
-    emConstrucao: true, quando: "Fase 2 — recebíveis, pagáveis e conciliação." },
+    emConstrucao: true, quando: "Em breve — contas a receber, a pagar e conferência de pagamentos." },
   { title: "Comissões",     href: "/app/comissoes",     icon: Users,             group: "Comercial",     recurso: "finance.commissions",
-    emConstrucao: true, quando: "Fase 2 — comissão gerada, liberada e paga." },
+    emConstrucao: true, quando: "Em breve — comissões dos corretores." },
   // A *configuração* do inventário já existe, em Configurações → Inventário.
   // Este item é a tela **operacional** (ordens de manutenção, enxoval), que é
   // outra coisa e é de outra fase. Repontá-lo para a tela de configuração seria
   // criar dois caminhos para o mesmo lugar e acender dois itens do menu ao mesmo
   // tempo, porque `estaAtivo()` casa por prefixo.
   { title: "Inventário",    href: "/app/inventario",    icon: Package,           group: "Operação",      recurso: "inventory",
-    emConstrucao: true, quando: "Fase 5 — inventário operacional e manutenção. O cadastro já está em Configurações." },
+    emConstrucao: true, quando: "Em breve — manutenção e controle dos apartamentos. O cadastro já está em Configurações." },
   { title: "Canais",        href: "/app/canais",        icon: Share2,            group: "Administração", recurso: "channels",
-    emConstrucao: true, quando: "Fase 4 — iCal de Airbnb e Booking, com painel de conflitos." },
+    emConstrucao: true, quando: "Em breve — reservas do Airbnb e do Booking direto no calendário." },
   { title: "Relatórios",    href: "/app/relatorios",    icon: ChartLine,         group: "Análise",       recurso: "reports",
-    emConstrucao: true, quando: "Fase 3 — ocupação, ADR, RevPAR e conversão." },
+    emConstrucao: true, quando: "Em breve — relatórios de ocupação, diária média e vendas." },
 
   { title: "Configurações", href: "/app/configuracoes", icon: SlidersHorizontal, group: "Administração", recurso: "settings" },
 ];

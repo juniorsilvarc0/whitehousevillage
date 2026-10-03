@@ -74,19 +74,19 @@ export function normalizarCodigoCrm(code: string | undefined, status: number): C
 export function mensagemCrm(code: CodigoCrm, padrao?: string): string {
   switch (code) {
     case "STAGE_NOT_IN_PIPELINE":
-      return "Esta etapa é de outro funil. Recarregue a tela: o funil mudou enquanto ela estava aberta.";
+      return "Esta etapa é de outro funil. Recarregue a página: o funil mudou enquanto ela estava aberta.";
     case "STAGE_ORDER_INCOMPLETE":
-      return "A reordenação precisa listar todas as etapas do funil. Recarregue e tente de novo.";
+      return "Não foi possível reordenar as etapas. Recarregue a página e tente de novo.";
     case "DEFAULT_PIPELINE_REQUIRED":
       return "Tem de existir um funil padrão. Marque outro como padrão antes de desmarcar este.";
     case "OPPORTUNITY_ALREADY_CLOSED":
-      return "Esta oportunidade já foi ganha ou perdida, e negócio fechado não volta a ser editado. Negócio que renasce é oportunidade nova, com o mesmo contato.";
+      return "Esta oportunidade já foi ganha ou perdida e não pode mais ser alterada. Se o cliente voltar, crie uma oportunidade nova para o mesmo contato.";
     case "LOSS_REASON_REQUIRED":
-      return "Escolha um motivo de perda ativo. É dele que sai o relatório de por que a casa perde negócio.";
+      return "Escolha um motivo de perda. É com ele que a casa entende por que perde negócios.";
     case "QUOTE_REQUIRED_TO_WIN":
-      return "Não há orçamento vigente para virar reserva. Emita o orçamento antes de ganhar — o preço não se inventa no fechamento.";
+      return "Esta oportunidade não tem orçamento válido. Faça o orçamento antes de marcar como ganha — é dele que vem o preço da reserva.";
     case "LEAD_ALREADY_CONVERTED":
-      return "Este lead já virou oportunidade. Abra o card existente em vez de criar um segundo.";
+      return "Este lead já virou oportunidade. Abra a que já existe em vez de criar outra.";
     default:
       return mensagemDoErro(code, padrao);
   }
@@ -111,7 +111,7 @@ export function tituloCrm(code: CodigoCrm): string {
     case "NOT_FOUND":
       return "Registro não encontrado";
     case "NETWORK_ERROR":
-      return "Sem conexão com o servidor";
+      return "Sem conexão com o sistema";
     default:
       return "Não foi possível concluir";
   }

@@ -76,8 +76,8 @@ export function BarraDeLeads() {
         <datalist id="origens-de-lead">
           <option value="whatsapp" />
           <option value="site" />
-          <option value="indicacao" />
-          <option value="ota" />
+          <option value="indicacao">indicação</option>
+          <option value="ota">site de reservas</option>
           <option value="telefone" />
           <option value="instagram" />
         </datalist>

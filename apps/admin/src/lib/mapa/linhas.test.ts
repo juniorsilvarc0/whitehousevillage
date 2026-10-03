@@ -160,7 +160,7 @@ describe("montarGrupos", () => {
   const grupos = montarGrupos({ produtos, composicoes, linhas, janela: JANELA });
 
   it("agrupa por produto, em sort_order, com as unidades em ordem de código", () => {
-    expect(grupos.map((g) => g.nome)).toEqual(["AP2S", "COB", "Fora de composição", "COMPLETA"]);
+    expect(grupos.map((g) => g.nome)).toEqual(["AP2S", "COB", "Fora de qualquer produto", "COMPLETA"]);
     expect(grupos[0]?.linhas.map((l) => l.codigo)).toEqual(["AP-01", "AP-02"]);
   });
 

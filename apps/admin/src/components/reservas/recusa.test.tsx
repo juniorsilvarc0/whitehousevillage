@@ -33,10 +33,12 @@ describe("Recusa", () => {
 
     expect(screen.getByText(/A unidade AP-03 já está ocupada de 20\/12\/2026 a 23\/12\/2026/)).toBeDefined();
     expect(screen.getByText(/Nada foi alterado: WH-2026-0001 continua de pé/)).toBeDefined();
-    expect(screen.getByText("DATE_CONFLICT")).toBeDefined();
+    // O código fica para o suporte, fora do texto visível.
+    const alerta = container.querySelector("[role=alert]")!;
+    expect(alerta.getAttribute("data-codigo")).toBe("DATE_CONFLICT");
+    expect(screen.queryByText("DATE_CONFLICT")).toBeNull();
 
     // Tom de aviso, não de falha: sem a borda destrutiva.
-    const alerta = container.querySelector("[role=alert]")!;
     expect(alerta.className).toContain("alcada-atencao");
     expect(alerta.className).not.toContain("border-destructive");
   });
@@ -53,7 +55,7 @@ describe("Recusa", () => {
   it("nunca ecoa o texto da API — a frase é a da casa, escolhida pelo código", () => {
     render(<Recusa falha={falha("UNIT_NOT_AVAILABLE", { unit_code: "AP-02" })} />);
     expect(screen.queryByText(/TEXTO CRU DA API/)).toBeNull();
-    expect(screen.getByText(/A unidade escolhida está ocupada nesse período/)).toBeDefined();
+    expect(screen.getByText(/O apartamento escolhido está ocupado nesse período/)).toBeDefined();
   });
 
   it("teto do sinal aparece em reais, com o motivo de existir", () => {
