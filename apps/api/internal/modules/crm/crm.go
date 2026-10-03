@@ -25,12 +25,6 @@
 // que a gestão lê.
 package crm
 
-import (
-	"net/http"
-
-	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
-)
-
 // Recursos do catálogo de RBAC (semeados por cmd/seed/acesso.go).
 //
 // `crm.pipelines` cobre funis, ETAPAS e MOTIVOS DE PERDA: os três são
@@ -108,74 +102,12 @@ const diasParadoParaAlerta = 15
 
 // ─────────────────────────── Erros do módulo ────────────────────────
 //
-// Estes sete códigos pertencem ao `internal/platform/apperr` — é lá que o
-// vocabulário estável da API mora, e o enum do contrato já os lista. Estão
-// declarados AQUI porque `internal/platform` não é pasta deste agente nesta
-// rodada, e uma edição paralela do mesmo arquivo é a colisão que a divisão por
-// pasta existe para evitar. São construídos pela mesma forma que o pacote usa
-// (código + mensagem + status), então mudam de casa sem mudar de comportamento.
-//
-// Ver "PARA O INTEGRADOR" no relatório.
-func erro(codigo, mensagem string, status int) *apperr.Error {
-	return (&apperr.Error{Code: codigo, Message: mensagem}).WithStatus(status)
-}
-
-var (
-	// EtapaForaDoFunil — a etapa citada é de outro funil. Aceitar moveria a
-	// oportunidade de funil junto com o card, sem histórico e sem coluna.
-	EtapaForaDoFunil = erro("STAGE_NOT_IN_PIPELINE",
-		"A etapa informada não pertence a este funil.", http.StatusUnprocessableEntity)
-
-	// OrdemIncompleta — `reorder` sem listar todas as etapas do funil. Aceitar
-	// deixaria as ausentes com a posição de antes, e o kanban desenharia duas
-	// colunas na mesma casa.
-	OrdemIncompleta = erro("STAGE_ORDER_INCOMPLETE",
-		"A ordem precisa listar todas as etapas do funil.", http.StatusUnprocessableEntity)
-
-	// FunilPadraoObrigatorio — tirar o `is_default` (ou desativar) o último
-	// funil padrão. Sem padrão, `POST /crm/opportunities` sem `pipeline_id` não
-	// tem onde cair, e o erro apareceria longe daqui.
-	FunilPadraoObrigatorio = erro("DEFAULT_PIPELINE_REQUIRED",
-		"É preciso haver um funil padrão ativo. Marque outro antes de desmarcar este.", http.StatusConflict)
-
-	// OportunidadeFechada — o que está fechado é história.
-	OportunidadeFechada = erro("OPPORTUNITY_ALREADY_CLOSED",
-		"Oportunidade já ganha ou perdida não é mais editável.", http.StatusConflict)
-
-	// MotivoDePerdaObrigatorio — `/lose` sem motivo, ou com motivo inativo. É a
-	// regra que faz o relatório de motivos de perda existir em vez de ser uma
-	// coluna de "outros".
-	MotivoDePerdaObrigatorio = erro("LOSS_REASON_REQUIRED",
-		"Informe um motivo de perda ativo do catálogo.", http.StatusUnprocessableEntity)
-
-	// OrcamentoObrigatorioParaGanhar — `/win` sem orçamento vigente. Sem preço
-	// congelado não há o que virar reserva, e inventar o preço na hora é o que
-	// a spec §3 proíbe.
-	OrcamentoObrigatorioParaGanhar = erro("QUOTE_REQUIRED_TO_WIN",
-		"Não há orçamento vigente para transformar em reserva.", http.StatusUnprocessableEntity)
-
-	// LeadJaConvertido — `/convert` repetido. `details.opportunity_id` leva o
-	// segundo clique ao card certo, em vez de criar um card gêmeo.
-	LeadJaConvertido = erro("LEAD_ALREADY_CONVERTED",
-		"Este lead já virou oportunidade.", http.StatusConflict)
-
-	// RecursoEmUso e TransicaoInvalida REUSAM o vocabulário que já existe nesta
-	// árvore em vez de inflar o enum: excluir funil/etapa/motivo em uso é
-	// exatamente o "ainda há algo apontando para isto" que o inventário já
-	// responde, e destino terminal em `/stage` é exatamente uma transição
-	// ilegítima de estado.
-	RecursoEmUso = erro("RESOURCE_IN_USE",
-		"Ainda há registros usando este item.", http.StatusConflict)
-
-	TransicaoInvalida = erro("INVALID_STATE_TRANSITION",
-		"Transição de estado não permitida.", http.StatusConflict)
-
-	// NomeEmUso — nome repetido dentro do escopo natural (funil na propriedade,
-	// etapa no funil, motivo na propriedade). Mesmo código que o inventário usa
-	// para código de unidade repetido.
-	NomeEmUso = erro("CODE_IN_USE",
-		"Já existe um registro com esse nome.", http.StatusConflict)
-)
+// Os códigos do funil (STAGE_NOT_IN_PIPELINE, STAGE_ORDER_INCOMPLETE,
+// DEFAULT_PIPELINE_REQUIRED, OPPORTUNITY_ALREADY_CLOSED, LOSS_REASON_REQUIRED,
+// QUOTE_REQUIRED_TO_WIN, LEAD_ALREADY_CONVERTED) e os que o CRM reusa
+// (RESOURCE_IN_USE, INVALID_STATE_TRANSITION, CODE_IN_USE) moram em
+// `internal/platform/apperr`, com status e frase padrão. Os pontos de uso
+// trocam a frase com WithMessage quando o contexto pede.
 
 // EstadoParaContrato traduz o status do BANCO (`aberto|ganho|perdido`) para o do
 // CONTRATO (`aberta|ganha|perdida`).

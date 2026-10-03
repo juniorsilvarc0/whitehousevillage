@@ -131,7 +131,7 @@ func (a *ambiente) chamar(t *testing.T, metodo, caminho, token string, corpo any
 	if err != nil {
 		t.Fatalf("%s %s: %v", metodo, caminho, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	lido, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -268,16 +268,6 @@ func (a *ambiente) emailDe(t *testing.T, id uuid.UUID) string {
 		t.Fatalf("lendo o e-mail: %v", err)
 	}
 	return email
-}
-
-func (a *ambiente) papelDe(t *testing.T, id uuid.UUID) uuid.UUID {
-	t.Helper()
-
-	var papel uuid.UUID
-	if err := a.pool.QueryRow(a.ctx, `SELECT role_id FROM users WHERE id = $1`, id).Scan(&papel); err != nil {
-		t.Fatalf("lendo o papel: %v", err)
-	}
-	return papel
 }
 
 func (a *ambiente) celulasDoPerfil(t *testing.T, perfil uuid.UUID) int {

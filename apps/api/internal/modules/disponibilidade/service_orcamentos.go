@@ -2,11 +2,14 @@ package disponibilidade
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/booking"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 )
@@ -44,11 +47,6 @@ func (s *Servico) Emitir(ctx context.Context, e Entrada) (OrcamentoSalvo, error)
 		if err != nil {
 			return err
 		}
-		validoAte, err := validade(e.ValidoAte, agora)
-		if err != nil {
-			return err
-		}
-
 		contato, err := s.contatoDaEmissao(ctx, u.PropertyID, e)
 		if err != nil {
 			return err
@@ -58,6 +56,17 @@ func (s *Servico) Emitir(ctx context.Context, e Entrada) (OrcamentoSalvo, error)
 		// é o que faz o preço gravado e o preço devolvido serem o mesmo cálculo,
 		// e não dois cálculos que por acaso coincidiram.
 		orcamento, err := s.Orcar(ctx, e)
+		if err != nil {
+			return err
+		}
+
+		// A validade sai da política que PRECIFICOU este orçamento — a versão
+		// que vai para `quotes.policy_version` —, e não da vigente relida:
+		// entre as duas leituras outra versão pode ter entrado em vigor, e o
+		// preço sairia de uma e a validade de outra. O resultado é congelado
+		// em `quotes.valid_until` (regra 7): publicar outra validade amanhã
+		// não mexe em orçamento emitido.
+		validoAte, err := s.validadeDoOrcamento(ctx, u.PropertyID, orcamento, e.ValidoAte, agora)
 		if err != nil {
 			return err
 		}
@@ -143,22 +152,34 @@ func (s *Servico) emissor(ctx context.Context) (*auth.Usuario, error) {
 	return u, nil
 }
 
-// validade resolve `valid_until`.
-//
-// Ausente vale `validadePadraoEmDias` a partir de AGORA — o agora do banco, no
-// fuso da casa. No passado é 422 e não um `CHECK` estourando no COMMIT:
-// "proposta que nasce vencida não é proposta" merece o nome do campo, e não uma
-// mensagem genérica de constraint.
-func validade(pedido *time.Time, agora time.Time) (time.Time, error) {
-	if pedido == nil {
-		return agora.AddDate(0, 0, validadePadraoEmDias), nil
+// validadeDoOrcamento resolve `valid_until` pela regra do domínio
+// (booking.QuoteValidUntil) com a política da versão exata que precificou o
+// orçamento. O pedido no passado é 422 em `valid_until`; política sem
+// `quote_validity_days` é defeito de leitura e sai 500, alto, em vez de um
+// orçamento nascido vencido.
+func (s *Servico) validadeDoOrcamento(ctx context.Context, casa uuid.UUID, o Orcamento, pedido *time.Time, agora time.Time) (time.Time, error) {
+	comercial, err := s.repo.Contexto(ctx, casa, &o.RateTableID, &o.PolicyVersion)
+	if err != nil {
+		return time.Time{}, err
 	}
-	if !pedido.After(agora) {
-		return time.Time{}, apperr.Validation(map[string]string{
-			"valid_until": "precisa ser no futuro: proposta que nasce vencida não é proposta.",
-		})
+	validoAte, err := booking.QuoteValidUntil(pedido, agora, comercial.Politica)
+	if err != nil {
+		var regra *booking.RuleError
+		if errors.As(err, &regra) && regra.Code == apperr.CodeValidationError {
+			// Mapa de CAMPOS (`map[string]string`), o mesmo formato de todo
+			// VALIDATION_ERROR da API: a tela que pinta o campo lê esse tipo.
+			campos := make(map[string]string, len(regra.Details))
+			for k, v := range regra.Details {
+				campos[k] = fmt.Sprint(v)
+			}
+			return time.Time{}, apperr.Validation(campos).WithMessage(regra.Message).WithCause(err)
+		}
+		if errors.As(err, &regra) {
+			return time.Time{}, traduzirRegra(err)
+		}
+		return time.Time{}, apperr.Internal.WithCause(err)
 	}
-	return *pedido, nil
+	return validoAte, nil
 }
 
 // contatoDaEmissao resolve para QUEM é o orçamento e confere a coerência com a

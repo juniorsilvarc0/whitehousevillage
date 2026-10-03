@@ -1,5 +1,5 @@
-# Ambiente de desenvolvimento. Produção acrescenta infra/docker-compose.prod.yml
-# (Traefik + labels + réplicas).
+# Ambiente de desenvolvimento. Produção é infra/docker-compose.prod.yml, um arquivo
+# autônomo (não override) — ver docs/infra.md §0.
 name: whitehousevillage
 
 # api, worker, migrate e seed são a MESMA imagem, trocando só o entrypoint.
@@ -110,13 +110,37 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Worker (hoje um job só: holds.expire, a cada minuto). SEM profile: sobe com
+  # `make up`, com o `smoke-stack` e com qualquer `docker compose up`.
+  #
+  # Até 02/10/2026 ele ficava em `profiles: ["full"]`, herança da fundação, e
+  # nenhum alvo do Makefile ligava esse profile: no dev e na fumaça do CI
+  # nenhuma pré-reserva expirava, e a data ficava presa até alguém lembrar de
+  # `--profile full`. Tirar o profile, e não ligá-lo nos alvos, porque job que
+  # depende de opt-in é job esquecido: um `docker compose up` cru, um deploy
+  # digitado à mão ou um `down` sem o mesmo profile deixam o worker de fora (ou
+  # órfão) sem nenhuma linha vermelha. O `smoke-stack` confere que ele está de pé
+  # (`make worker-vivo`), para o worker não sumir de novo em silêncio.
+  #
+  # Não depende do `migrate`, de propósito: schema é passo explícito (ver acima).
+  # Medido em 02/10/2026 contra um banco vazio: sem schema o worker NÃO cai. Cada
+  # rodada loga `expiração de holds falhou ... (SQLSTATE 42P01)` e espera o
+  # minuto seguinte; a primeira rodada depois do `migrate up` passou limpa, sem
+  # reinício. Entre o `make up` e o `make migrate`, um ERROR por minuto no log do
+  # worker é esperado; depois do migrate, não é.
   worker:
     <<: *imagem-api
     entrypoint: ["/app/worker"]
-    profiles: ["full"]
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: ${DATABASE_URL}
+      # O worker não assina token nenhum, mas o `config.Load` que ele compartilha
+      # com a API exige JWT_SECRET de 32 bytes quando APP_ENV=production. Sem esta
+      # linha, este compose com APP_ENV=production deixa o worker em crash loop:
+      # medido, sai 1 com "JWT_SECRET precisa de ao menos 32 bytes em produção" e
+      # o `restart` o sobe para morrer de novo. Sai daqui quando a validação
+      # passar a ser só do processo que assina token.
+      JWT_SECRET: ${JWT_SECRET}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       TZ: ${TZ:-America/Fortaleza}
     depends_on:

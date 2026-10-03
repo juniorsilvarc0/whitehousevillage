@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/pii"
 )
 
 // Contato é o schema `Contato` do contrato.
@@ -31,6 +33,53 @@ type Contato struct {
 	AnonimizadoEm   *time.Time `json:"anonymized_at"`
 	CriadoEm        time.Time  `json:"created_at"`
 	AtualizadoEm    time.Time  `json:"updated_at"`
+}
+
+// ContatoNaLista é o schema `ContatoNaLista`: a linha de `GET /contacts`.
+//
+// Documento, telefone e e-mail saem MASCARADOS (pii.Mascarar*), e
+// `birth_date` e `notes` não existem como chave — nem `null`. Data de
+// nascimento ajuda a reidentificar quem tem o nome, e texto livre não tem
+// máscara possível. É um tipo próprio, e não um `Contato` com campos
+// zerados, para que esquecer de mascarar seja erro de compilação: não há
+// como devolver a ficha cheia por este tipo.
+//
+// Até 02/10/2026 a lista servia a ficha inteira sem rastro (F2-23: 11 CPFs
+// completos para um corretor, `pii_access_log` parado em 43). A regra agora é
+// do contrato: coleção mascara e não grava; a ficha devolve cheio e grava.
+type ContatoNaLista struct {
+	ID              uuid.UUID  `json:"id"`
+	Nome            string     `json:"name"`
+	Email           *string    `json:"email"`
+	Telefone        *string    `json:"phone_e164"`
+	TipoDeDocumento *string    `json:"doc_type"`
+	Documento       *string    `json:"doc_number"`
+	Cidade          *string    `json:"city"`
+	Estado          *string    `json:"state"`
+	BaseLegal       *string    `json:"lgpd_basis"`
+	OptInMarketing  bool       `json:"marketing_opt_in"`
+	ConsentimentoEm *time.Time `json:"consent_at"`
+	AnonimizadoEm   *time.Time `json:"anonymized_at"`
+	CriadoEm        time.Time  `json:"created_at"`
+}
+
+// NaLista é a única porta de `Contato` para `ContatoNaLista`.
+func NaLista(c Contato) ContatoNaLista {
+	return ContatoNaLista{
+		ID:              c.ID,
+		Nome:            c.Nome,
+		Email:           pii.MascararEmail(c.Email),
+		Telefone:        pii.MascararTelefone(c.Telefone),
+		TipoDeDocumento: c.TipoDeDocumento,
+		Documento:       pii.MascararDocumento(c.TipoDeDocumento, c.Documento),
+		Cidade:          c.Cidade,
+		Estado:          c.Estado,
+		BaseLegal:       c.BaseLegal,
+		OptInMarketing:  c.OptInMarketing,
+		ConsentimentoEm: c.ConsentimentoEm,
+		AnonimizadoEm:   c.AnonimizadoEm,
+		CriadoEm:        c.CriadoEm,
+	}
 }
 
 // Anonimizado diz se a ficha já foi esvaziada.
@@ -68,13 +117,20 @@ type Vinculos struct {
 
 	Hospedes   int `json:"reservation_guests"`
 	Orcamentos int `json:"quotes"`
+
+	// Corretores conta o cadastro de corretor (`brokers.contact_id`, FK
+	// RESTRICT desde 20261002180000). Sem ele, DELETE da ficha de um corretor
+	// estourava 23503 em brokers_contact_id_fkey e saía 422 genérico no lugar
+	// do 409 RESOURCE_IN_USE com a contagem. Fora do schema VinculosDoContato
+	// por enquanto, como os dois de cima — ver o relatório.
+	Corretores int `json:"brokers"`
 }
 
 // Total é quantos registros de qualquer tipo apontam para o contato. Zero é a
 // única condição em que o `DELETE` pode seguir.
 func (v Vinculos) Total() int {
 	return v.Reservas + v.Leads + v.Oportunidades + v.Atividades +
-		v.Notas + v.Conversas + v.Hospedes + v.Orcamentos
+		v.Notas + v.Conversas + v.Hospedes + v.Orcamentos + v.Corretores
 }
 
 // ContatoCompleto é o schema `ContatoCompleto`: a ficha mais as contagens.

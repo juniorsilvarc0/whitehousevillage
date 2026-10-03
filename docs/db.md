@@ -13,7 +13,10 @@ exatamente o que aconteceu com `crm_opportunities.quote_id` (§7).
 Conferido em **31/08/2026** contra o Postgres do compose (`schema_migrations =
 20260827150000`) e, para `20260831100000` — que já está na árvore e ainda **não** foi
 aplicada lá —, contra um Postgres descartável com todas as migrations do repositório
-aplicadas. Para repetir a conferência de qualquer afirmação daqui:
+aplicadas. Em **02/10/2026**, §2, §5, §10, §14, §15 e §16 foram conferidos de novo
+contra um Postgres descartável com todas as migrations até `20261002180000`
+(`brokers` e as FKs de `broker_id`) e o seed aplicado. Para repetir a conferência de
+qualquer afirmação daqui:
 
 ```bash
 # quais tabelas existem
@@ -140,7 +143,18 @@ O eixo **`scope`** é o que o portal_amimoveis não tem e é exatamente o que re
 
 **Escopo `own` exige coluna de dono — e permissão simétrica.** Onde não há dono identificável, `resources.supports_own` é `false` e a grade nem oferece "só os meus"; oferecer um escopo que o SQL não sabe aplicar degrada silenciosamente para `all`. E conceder `criar` sem `excluir` no mesmo recurso é armadilha, não restrição: a revisão mediu o corretor bloqueando as 8 unidades por 364 dias em `calendar` (`POST /blocks` → 201) sem conseguir desfazer (`DELETE /blocks/{id}` → 403). O seed passou a conceder as quatro ações de `calendar` em `own`, o que só é seguro porque `stay_blocks.owner_id` existe e o repositório filtra por ele.
 
-`users.broker_id` é o vínculo do usuário de perfil `corretor` com o cadastro comercial dele (`brokers`, §10). Nasce **sem foreign key**, e de propósito: `brokers` só existe a partir da migration do financeiro, e uma FK não pode apontar para tabela que ainda não foi criada. A FK entra junto com a tabela referenciada; até lá o índice parcial `users(broker_id) WHERE broker_id IS NOT NULL` já paga o join do painel do corretor.
+`users.broker_id` é o vínculo da conta de perfil `corretor` com o cadastro comercial dela (`brokers`, §10). Nasceu sem foreign key em `20260820140000`, porque `brokers` ainda não existia; desde `20261002180000` a FK existe, e é **composta**:
+
+```sql
+CONSTRAINT users_broker_id_fkey FOREIGN KEY (broker_id, id)
+  REFERENCES brokers(id, user_id) ON UPDATE RESTRICT ON DELETE RESTRICT
+```
+
+O par, e não `(broker_id) → brokers(id)`, porque é este valor que o escopo `own` das reservas usa como "o corretor da própria conta" (F2-13, `commission.ResolveBroker`). Com a FK simples, a conta da gestão poderia apontar para o cadastro de um corretor que existe e passar a "ser" ele; com o par, `users.broker_id = B` só é aceito se `B.user_id` for a própria conta. Somado ao `UNIQUE (user_id)` de `brokers`, `users.broker_id` vale `NULL` ou exatamente o cadastro que aponta de volta para a conta. A única assimetria possível — `brokers.user_id` preenchido e `users.broker_id` nulo — falha **fechado**: o ator `own` sem corretor só grava venda direta.
+
+Consequência para quem escreve: ligar a conta é `brokers.user_id` primeiro e `users.broker_id` depois; desligar é o inverso (`ON UPDATE RESTRICT` recusa a outra ordem — e `CASCADE` ali reescreveria `users.id`). Violação sai como `23503` com `constraint = users_broker_id_fkey`. A API não grava este campo nesta fase (o contrato o declara só leitura, e o CRUD de `/brokers` é do F2-17/Fase 3); hoje o vínculo nasce pelo seed (§16). O índice parcial `users(broker_id) WHERE broker_id IS NOT NULL` continua pagando o join do painel do corretor.
+
+O recurso RBAC `brokers` (`supports_own = true`) tem dono na linha desde que a tabela existe: escopo `own` em `brokers` é `AND brokers.user_id = $usuario`.
 
 `resources.sort_order` é a ordem das linhas na grade de perfis — o agrupamento visual da tela é dado, não uma ordenação alfabética que embaralharia "Reservas" com "Recebíveis".
 
@@ -242,7 +256,7 @@ máquina é migration com dono, não edição desta página.
 
 `CHECK (total_cents = subtotal_cents − discount_cents + cleaning_cents + event_deposit_cents)` escreve no banco a identidade do motor (`booking.Build`), que é exata em centavos porque o arredondamento acontece no total e nunca noite a noite. `balance_cents` (saldo) e `avg_nightly_cents` (diária média) **não são colunas**: são `total − sinal` e `total / noites`, e guardar o que se deriva é criar a segunda verdade que um dia diverge.
 
-`valid_until` é o que separa "proposta em pé" de "preço que já venceu" — é por ela que um orçamento expira em vez de precisar ser apagado. É `timestamptz` porque vencimento é instante, e instante tem fuso. **De onde sai o número**: de quem grava quando informa; do padrão da política quando não informa. Desde `20260831100000` esse padrão é `commercial_policies.quote_validity_days` (§4, dívida **D7**) e não mais a constante `validadePadraoEmDias = 7` do binário — mudar de 7 para 15 dias deixou de exigir recompilar a API. O que **não** muda: `quotes.valid_until` é `NOT NULL` e congelada na emissão (regra 7 do CLAUDE.md), então alterar a política nunca move a validade de orçamento já emitido.
+`valid_until` é o que separa "proposta em pé" de "preço que já venceu" — é por ela que um orçamento expira em vez de precisar ser apagado. É `timestamptz` porque vencimento é instante, e instante tem fuso. **De onde sai o número**: de quem grava quando informa; do padrão da política quando não informa. Desde `20260831100000` o **schema** guarda esse padrão em `commercial_policies.quote_validity_days` (§4, dívida **D7**). A **aplicação** ainda não o lê: conferido em 02/10/2026 nesta árvore, a emissão usa a constante `validadePadraoEmDias = 7` (`disponibilidade/dto_orcamento_salvo.go:22`, aplicada em `service_orcamentos.go:154`). Esta página dizia o contrário. A coluna passa a valer quando o F2-05 ligar a leitura — até lá, mudar de 7 para 15 dias continua exigindo recompilar a API. O que **não** muda: `quotes.valid_until` é `NOT NULL` e congelada na emissão (regra 7 do CLAUDE.md), então alterar a política nunca move a validade de orçamento já emitido.
 
 A armadilha que essa coluna traz está nomeada na própria migration: `PublicarPoliticaComercial` monta o `INSERT` listando colunas nome a nome, e enquanto `quote_validity_days` não estiver nessa lista toda publicação de versão nova devolve o campo ao `DEFAULT 7` **em silêncio** — sem erro e sem linha de auditoria. É o item F2-05.
 
@@ -258,6 +272,7 @@ reservations(id, property_id, code UNIQUE,            -- WH-2026-0001, DEFAULT p
              status, is_event, event_type?,
              hold_expires_at, confirmed_at, cancelled_at, cancel_reason,
              rebooked_from_id?, notes, created_by, created_at, updated_at)   -- 23 colunas
+             -- broker_id → brokers(id) ON DELETE RESTRICT desde 20261002180000 (abaixo)
              -- channel_id entra com o módulo de canais (Fase 4); ainda não existe na tabela
 
 reservation_pricing(reservation_id PK/FK,            -- 1:1, satélite do bloco financeiro
@@ -299,6 +314,21 @@ O critério da separação não é "financeiro", é **ciclo de vida**. `reservat
 Não é `SEQUENCE` porque sequence não é transacional, e a Fase 1 tem um caminho de rollback muito frequente — o `23P01` de data ocupada. Cada recusa queimaria um número, e a numeração de contrato teria buracos inexplicáveis.
 
 Como é `DEFAULT`, nenhum caminho de criação pode esquecer de gerar o código, e a **ordem de travamento** fica garantida pelo banco: a linha de `reservations` nasce antes de qualquer `stay_blocks` (a FK exige), então o lock do contador vem sempre antes dos locks das unidades. Ordem única de aquisição é o que impede deadlock entre as duas travas. O repositório **omite** `code` no `INSERT` e o lê no `RETURNING`.
+
+### `broker_id` — o corretor da venda
+
+`broker_id` aponta para **`brokers(id)`**, não para `users(id)`: é o cadastro comercial que recebe a comissão (§10), e a partir do F2-13 é esta coluna que decide para quem vai o dinheiro. Até `20261002180000` ela não tinha FK nenhuma, e a medida do backlog F2-09 mostrou o efeito: um UUID inventado na hora respondeu `201` (`WH-2026-0008`). Desde então:
+
+```sql
+CONSTRAINT reservations_broker_id_fkey FOREIGN KEY (broker_id)
+  REFERENCES brokers(id) ON DELETE RESTRICT
+```
+
+Anulável — `NULL` é venda direta, a maioria. `RESTRICT` porque corretor com venda não some: ele se desativa (`brokers.active = false`) e a venda continua dizendo de quem foi. Corretor inexistente sai como `23503` com `constraint = reservations_broker_id_fkey`, que a API traduz para `422 VALIDATION_ERROR` em `details.broker_id` — **sem** `SELECT` antes do `INSERT`, que seria TOCTOU. O nome segue o padrão do Postgres (`<tabela>_<coluna>_fkey`) para `db.campoDaConstraint` tirar dele o campo `broker_id`.
+
+**O que a FK não fecha**: o corretor atribuir a venda a **outro** corretor que existe. Isso é autorização, não integridade, e é do F2-13 (escopo `own` só grava o `users.broker_id` do ator, §2).
+
+**Os órfãos que existiam.** A migration anulou todo `broker_id` sem cadastro (com `brokers` recém-criada, isso é todo valor não nulo) em `reservations` e em `users`, e registrou cada um em `audit_log` com o valor antigo em `before`, ator nulo e `request_id = 'migration:20261002180000'`, além de um `RAISE WARNING` com a contagem e os códigos das reservas — conferido plantando os dois casos da medida (UUID inventado e id de outro usuário) num banco em `20260831100000` antes de aplicá-la. Não fere a regra 7 do CLAUDE.md: não há fato financeiro a congelar — nenhuma comissão existia, `broker_id` não está no snapshot de `reservation_pricing`, e o valor não identificava ninguém a quem pagar. O `down` não devolve esses valores (seriam a porta reaberta à mão); eles ficam na trilha.
 
 ### `owner_id` — o escopo `own`
 
@@ -511,15 +541,43 @@ agenda_blocks(id, property_id, starts_at, ends_at, all_day, reason)
 
 ## 10. Financeiro
 
-> **Ainda não existe no banco — nenhuma das dez tabelas abaixo, `brokers` inclusive.**
-> Conferido em `information_schema.tables`. O desenho abaixo é ponto de partida da
-> Fase 2, não descrição do que está lá: `brokers` nasce em F2-09 e o restante do
-> schema em F2-10, e é o contrato de F2-08 que decide a forma final. Os recursos RBAC
-> `finance.receivables`, `finance.payables`, `finance.commissions` e `brokers` já
-> existem em `resources` — catálogo de permissão, não tabela de negócio.
->
-> Duas consequências para quem escreve código agora: `users.broker_id` **não tem FK**
-> (§2) porque o alvo não existe, e qualquer `SELECT` daqui responde `42P01`.
+> **`brokers` existe desde `20261002180000` (F2-09). As outras nove tabelas desta
+> seção ainda não existem no banco** — conferido em `information_schema.tables` em
+> 02/10/2026. O desenho delas é ponto de partida da Fase 2, não descrição do que está
+> lá: nascem em F2-10, e é o contrato de F2-08 que decide a forma final. Os recursos
+> RBAC `finance.receivables`, `finance.payables` e `finance.commissions` já existem em
+> `resources` — catálogo de permissão, não tabela de negócio —, e qualquer `SELECT`
+> nas tabelas ainda não criadas responde `42P01`.
+
+### `brokers` — o cadastro comercial do corretor (existe)
+
+```
+brokers(id, property_id, contact_id, user_id?, goal_cents, active,
+        created_by?, created_at, updated_at)                           -- 9 colunas
+```
+
+| Coluna | Regra |
+|---|---|
+| `contact_id` | `NOT NULL` → `contacts(id) ON DELETE RESTRICT` · `UNIQUE` (`brokers_contact_id_key`) |
+| `user_id` | anulável → `users(id) ON DELETE RESTRICT` · `UNIQUE` (`brokers_user_id_key`) — único **quando presente**: `NULL` não colide com `NULL` |
+| `goal_cents` | `bigint NOT NULL DEFAULT 0` · `CHECK (goal_cents >= 0)` (`brokers_goal_cents_check`) — meta **mensal** (spec §11); `0` é "sem meta definida" |
+| `active` | `NOT NULL DEFAULT true` — o soft delete desta tabela |
+| `(id, user_id)` | `UNIQUE` (`brokers_id_user_id_key`) — não restringe nada (`id` já é PK); existe porque é o alvo da FK composta `users_broker_id_fkey` (§2) |
+
+Índices: `brokers_property_idx (property_id)`, `brokers_criador_idx (created_by) WHERE created_by IS NOT NULL`; `contact_id` e `user_id` são servidos pelos índices das `UNIQUE`. Quem aponta para cá: `reservations.broker_id` (§5) e `users.broker_id` (§2), as duas com `RESTRICT`.
+
+As decisões, com o porquê:
+
+- **A pessoa vive em `contacts`** ("uma pessoa, um registro", spec §6). Nome, telefone e documento ficam lá — e por isso a anonimização da LGPD alcança o corretor sem tocar a comissão. `UNIQUE (contact_id)`: dois cadastros para a mesma pessoa dividiriam vendas, metas e comissões entre dois ids, e o "desempenho por corretor" (spec §15) contaria uma pessoa como duas.
+- **A conta de login é opcional.** O corretor parceiro pode existir sem acesso ao painel; quando tem conta, ela é no máximo uma, e o vínculo é conferido dos dois lados (§2).
+- **Corretor com venda não se apaga.** `RESTRICT` nas FKs que apontam para cá; `active = false` é como ele sai de cena. Não há `deleted_at` ao lado — diria a mesma coisa de outro jeito.
+- **Autor e instantes no padrão do CRM e de `quotes`**: `created_by`, `created_at`, `updated_at`. Quem mudou a meta fica em `audit_log`, com antes e depois — `updated_by` guardaria só o último.
+- **`commission_rule_id` não existe ainda.** `commission_rules` só nasce no F2-10, e a convenção do projeto é a FK nascer junto com a tabela que ela referencia — a mesma que deixou `users.broker_id` e `crm_leads.campaign_id` sem FK até o alvo existir. Criar a coluna antes seria criar outro `uuid` que aceita qualquer coisa, exatamente o que o F2-09 fechou.
+- **Sem gatilho**: nenhuma tabela vizinha mantém `updated_at` por trigger (quem escreve o atualiza), e o barramento de tempo real (§13a) não desenha corretor.
+
+**Pendência fora do schema**: `DELETE /contacts/{id}` conta os vínculos do contato antes de apagar (`contatos.Vinculos`) e ainda não conta `brokers`. Apagar a ficha de um corretor estoura `23503` em `brokers_contact_id_fkey`, que sai como `422` genérico em vez do `409 RESOURCE_IN_USE` com a contagem — handoff do F2-09 para o `backend-go`.
+
+### O que ainda não existe (F2-10)
 
 ```
 accounts(id, property_id, code, name, kind)                 -- plano de contas
@@ -536,7 +594,8 @@ commissions(id, broker_id, reservation_id, base_cents, pct, amount_cents, status
 owner_payouts(id, property_id, period_start, period_end, gross_cents, fees_cents, net_cents, status)
 ledger_entries(id, property_id, entry_date, account_code, debit_cents, credit_cents,
                ref_type, ref_id, created_at)                -- append-only, sem UPDATE
-expense_categories · brokers(id, contact_id, user_id?, commission_rule_id?, goal_cents, active)
+expense_categories
+-- e, em brokers (acima), a coluna commission_rule_id? → commission_rules(id), que nasce com ela
 ```
 
 Comissão incide sobre diárias, nunca sobre limpeza ou caução. Caução é `receivables.kind='security_deposit'` com `refundable=true`; o check-out gera `payables.kind='deposit_refund'`, integral ou parcial com laudo anexado.
@@ -665,6 +724,7 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 | `reservations` | `code` com `DEFAULT proximo_codigo_reserva()` — numeração por ano, densa e sem corrida |
 | `reservations` | `(property_id, status, check_in)` — a listagem · `(unit_type_id, check_in)` — ocupação por produto |
 | `reservations` | parciais em `owner_id`, `broker_id`, `rebooked_from_id`, `created_by` — FKs majoritariamente nulas |
+| `reservations` | `reservations_broker_id_fkey`: `broker_id → brokers(id) ON DELETE RESTRICT` — corretor inexistente é `23503`, que a API traduz para `422` em `broker_id` (§5) |
 | `reservation_pricing` | `PRIMARY KEY (reservation_id)` **é** a FK — é isto que faz o 1:1 · `CHECK (discount_cents <= subtotal_cents)` · `CHECK (discount_pct BETWEEN 0 AND 100)` — teto de sanidade; a alçada comercial é política versionada, não constraint (§5) |
 | `reservation_units` | `(unit_id)` e parcial em `(stay_block_id)` — a PK começa por `reservation_id` e não serve a busca pela unidade |
 | `reservation_guests` | `(contact_id)` — mesma razão |
@@ -673,7 +733,9 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 | `idempotency_keys` | `(created_at)` — a varredura que expira chaves |
 | `role_permissions` | `PRIMARY KEY (role_id, resource_code, action)` |
 | `resources` | `CHECK (cardinality(actions) > 0 AND actions <@ ARRAY['ver','criar','editar','excluir'])` |
-| `users` | `UNIQUE(email)` · `INDEX(broker_id) WHERE broker_id IS NOT NULL` — parcial porque só corretor tem vínculo; a FK entra com `brokers` |
+| `users` | `UNIQUE(email)` · `INDEX(broker_id) WHERE broker_id IS NOT NULL` — parcial porque só corretor tem vínculo |
+| `users` | `users_broker_id_fkey`: `(broker_id, id) → brokers(id, user_id) ON UPDATE RESTRICT ON DELETE RESTRICT` — FK **composta**: a conta só aponta para o cadastro que aponta de volta para ela (§2) |
+| `brokers` | `UNIQUE(contact_id)` — uma pessoa, um cadastro · `UNIQUE(user_id)` — uma conta, no máximo um cadastro (NULLs não colidem) · `UNIQUE(id, user_id)` — alvo da FK composta · `CHECK (goal_cents >= 0)` · `(property_id)` · `(created_by) WHERE created_by IS NOT NULL` (§10) |
 | `special_periods` | `UNIQUE(property_id, name)` — chave natural do seed |
 | `rate_tables` | `UNIQUE(property_id, name)` — chave natural do seed |
 | `cancellation_tiers` | `UNIQUE(policy_id, sort_order)` — chave natural do seed |
@@ -694,7 +756,7 @@ Cada gatilho de `UPDATE` tem `WHEN` com as colunas que a tela realmente desenha 
 | `crm_opportunities` | **não tem `quote_id`** desde `20260827150000`; o orçamento vigente é `quotes.opportunity_id` (§7) |
 | quase todas | índice em toda FK — **não é "todas"**, e a diferença é medível |
 
-A linha anterior dizia `todas`. A consulta abaixo devolve hoje **15** chaves
+A linha anterior dizia `todas`. A consulta abaixo devolve hoje **16** chaves
 estrangeiras sem índice que comece por elas:
 
 ```sql
@@ -706,7 +768,7 @@ SELECT c.conrelid::regclass, c.conname
                       AND (i.indkey::int2[])[0:array_length(c.conkey,1)-1] = c.conkey::int2[]);
 ```
 
-Nem toda uma delas é dívida. Três grupos, e só o primeiro custa alguma coisa:
+Nem toda uma delas é dívida. Quatro grupos, e só o terceiro custa alguma coisa:
 
 - **Coberta como coluna não-inicial de um índice composto** — `rates(unit_type_id)` e
   os três `date_type` (`rates`, `reservation_nights`, `quote_nights`,
@@ -724,9 +786,18 @@ Nem toda uma delas é dívida. Três grupos, e só o primeiro custa alguma coisa
   `role_permissions(resource_code)` custa menos do que parece — toda leitura da matriz
   filtra por `role_id`, que é o prefixo da PK; o índice ausente só pesa na checagem de
   FK quando `resources` muda, e `resources` é catálogo estático.
+- **Falso positivo da consulta: FK composta coberta por índice de uma coluna** —
+  `users_broker_id_fkey` (`(broker_id, id)`, desde `20261002180000`). A consulta exige
+  um índice que comece pelas DUAS colunas, mas a checagem que o Postgres faz ao
+  apagar ou alterar um `brokers` é `WHERE broker_id = $1 AND id = $2`, e o índice
+  parcial `users_broker_idx (broker_id)` a resolve sozinho — `users.broker_id` é, na
+  prática, único (a FK composta somada a `UNIQUE (brokers.user_id)` impede duas contas
+  no mesmo cadastro). Medido com plano genérico e `enable_seqscan = off`:
+  `Index Scan using users_broker_idx … Index Cond: (broker_id = $1) Filter: (id = $2)`.
+  Um índice `(broker_id, id)` ao lado seria um segundo índice para a mesma busca.
 
 Fica escrito em vez de virar migration porque índice que ninguém mede é peso de
-escrita comprado no escuro — e `docs/db.md` não é pasta de quem cria migration.
+escrita comprado no escuro.
 
 **Disponibilidade por unidade e período não ganha índice próprio.** O `EXCLUDE USING gist (unit_id WITH =, period WITH &&) WHERE status IN ('hold','confirmed')` já cria exatamente esse índice, com exatamente o predicado do mapa de ocupação. Criar um igual ao lado dobraria o custo de escrita sem ganhar leitura nenhuma.
 
@@ -739,7 +810,7 @@ escrita comprado no escuro — e `docs/db.md` não é pasta de quem cria migrati
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`), e por isso ela sobe **no mesmo commit** da migration:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261002180000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -755,11 +826,16 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20260827130000_orcamentos_persistidos` | `quotes` (25 colunas) e `quote_nights`, com os `CHECK` da aritmética do motor e o `CONSTRAINT TRIGGER` adiado que faz o snapshot fechar (§4a). O orçamento deixa de ser calculado e jogado fora — é o que destrava `/win` |
 | `20260827140000_troca_de_consumes_com_venda_viva` | `unit_types.consumes` passa a ser imutável com reserva viva, nas duas direções, com trava de linha contra a venda concorrente (§3). Avisa (`RAISE WARNING`, no log do servidor) sobre estado legado já trocado, sem reparar nem abortar — reclassificação passada pode ter sido decisão comercial legítima |
 | `20260827150000_documento_unico_e_coluna_morta_do_funil` | `contacts_doc_unico_idx` — o `409 CONTACT_DUPLICATE` que a API prometia passa a ter lastro no banco, e não só na trava de aplicação que não alcança seed nem `psql` (§6). E `crm_opportunities.quote_id`, coluna que ninguém escrevia nem lia desde que o orçamento virou tabela própria, é derrubada (§7) |
-| `20260831100000_validade_do_orcamento_versionada` | `commercial_policies.quote_validity_days` (`NOT NULL DEFAULT 7`, `CHECK (> 0)`) — a validade do orçamento sai do binário e vira dado versionado (dívida **D7**, metade de schema; a outra metade é F2-05). **Na árvore, não aplicada no banco do compose em 31/08/2026** — `schema_migrations` lá ainda diz `20260827150000`, e `router.SchemaVersionEsperada` também |
+| `20260831100000_validade_do_orcamento_versionada` | `commercial_policies.quote_validity_days` (`NOT NULL DEFAULT 7`, `CHECK (> 0)`) — a validade do orçamento vira dado versionado no schema (dívida **D7**, metade de schema; a leitura pela aplicação é F2-05, §4a) |
+| `20261002180000_brokers_e_fk_do_corretor` | `brokers` (9 colunas, §10) e as FKs `reservations_broker_id_fkey` e `users_broker_id_fkey` — esta **composta**, `(broker_id, id) → brokers(id, user_id)` (§2). Anula, com linha em `audit_log` e `RAISE WARNING`, todo `broker_id` órfão que encontrar; o `down` não os devolve (§5). `commission_rule_id` fica para o F2-10, junto com `commission_rules` |
 
 ## 16. Seeds
 
-`cmd/seed` popula, numa **transação única**: propriedade, 8 unidades, 4 produtos e a composição (a Completa apontando para as oito), tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (24 tarifas + estadia mínima), política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 23 recursos, os 3 perfis com a matriz inteira e um usuário de cada perfil para desenvolvimento.
+`cmd/seed` popula, numa **transação única**: propriedade, 8 unidades, 4 produtos e a composição (a Completa apontando para as oito), tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (24 tarifas + estadia mínima), política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 23 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento e, desde `20261002180000`, o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`).
+
+**O corretor de desenvolvimento** (etapa `corretores_de_desenvolvimento`, `cmd/seed/corretores.go`). Sem ele, `corretor@wh.local` entra no painel com `broker_id` nulo, e a partir do F2-13 isso tem efeito: em escopo `own` o corretor só atribui venda ao próprio `users.broker_id`, e a API não tem como criar o vínculo (o CRUD de `/brokers` é do F2-17/Fase 3). São três escritas por conta de perfil `corretor` em `usuariosSeed`, na ordem que as FKs exigem: a ficha em `contacts` (chave natural: telefone; `+5585900000010`, base `contrato`, sem opt-in), o cadastro em `brokers` (chave natural: `UNIQUE (user_id)`) e o vínculo em `users.broker_id`. O `DO UPDATE` do cadastro corrige só `contact_id`; `goal_cents` e `active` são decisão da gestão e o seed não os reescreve — a mesma regra das contas, que não têm a senha reescrita. A etapa segue a trava das **contas** de desenvolvimento (`SEED_DEV_USERS`), não a dos contatos de demonstração: o cadastro é da conta. E termina com uma pós-condição conferida no banco — conta de corretor sem cadastro que aponte de volta para ela é erro, e o seed inteiro volta atrás —, porque os `JOIN`s da etapa descartariam em silêncio um e-mail digitado errado e a contagem diria "inalterada".
+
+Contagem medida em 02/10/2026 num banco recém-migrado: primeira execução `previstas 301, criadas 300, atualizadas 1` (o vínculo é `UPDATE` numa conta que a etapa anterior criou); segunda execução `criadas 0, atualizadas 0, inalteradas 301`.
 
 Os **contatos de demonstração** existem por duas razões. A primeira: `reservations.contact_id` e `crm_opportunities.contact_id` são `NOT NULL`, então sem contato não há como abrir orçamento, pré-reserva, oportunidade nem smoke test da jornada num banco recém-semeado. A segunda: com **um** contato só, a tela de contatos e o funil nascem praticamente vazios — não dá para ver ordenação, busca por nome, recorte por base legal, nem a diferença entre quem aceitou receber oferta e quem não aceitou. Tela vazia não prova que a tela funciona.
 

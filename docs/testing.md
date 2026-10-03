@@ -22,19 +22,36 @@ imagem nova, migra, semeia e só então mede — que é a ordem de um deploy, e 
 única que impede a fumaça de dar por boa uma tela que a árvore contém e a
 imagem não.
 
-> **`make check` continua sem se completar, e agora por duas razões.** A
-> primeira é a de sempre: `golangci-lint` não está instalado e nada no
-> repositório o instala — o alvo morre no primeiro passo, antes de rodar um
-> teste. Para exercitá-lo:
-> `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6`
-> **de fora do módulo** (`cd /tmp`), para não encostar no `go.mod` da API.
+> **`make check` se completa desde `e0bc08e` (02/10/2026).** Até ali ele não
+> chegava a rodar um teste: `golangci-lint` não estava instalado em lugar
+> nenhum, e quando instalado reprovava com 11 apontamentos (§3.3), e `lint` é a
+> primeira dependência de `check`. Os 11 foram corrigidos, e na Rodada 5 o
+> `Makefile` absorveu o que aquela correção ensinou:
 >
-> A segunda apareceu quando ele foi instalado à mão: `make check` **reprova
-> com 11 problemas** (§3.3), todos em código de produção. Como `lint` é a
-> primeira dependência de `check`, o portão nunca chega aos testes. Hoje
-> `make check` não é executável de ponta a ponta em nenhuma máquina, com ou sem
-> a ferramenta: **"o portão passou" continua sendo uma frase que ninguém pode
-> dizer honestamente.**
+> - **A versão vive num lugar só**: `GOLANGCI_LINT_VERSION` no `Makefile`
+>   (v2.5.0). O job `lint-go` do CI lê dali (`make -s golangci-versao`); fora do
+>   CI, versão diferente só avisa, porque a contagem pode divergir.
+> - **Sem teto de repetição**: `make lint-golangci` roda com
+>   `--max-same-issues=0 --max-issues-per-linter=0`. O padrão da ferramenta
+>   esconde apontamentos iguais a partir do quarto — e quem relata número
+>   precisa do número inteiro.
+> - **Fora do `PATH` não é "não instalado"**: o alvo procura no `PATH`, depois
+>   em `go env GOBIN` e em cada `GOPATH/bin`. Quem instalou com `go install`
+>   e não pôs `~/go/bin` no `PATH` tinha o binário e o portão dizia que não.
+>   Sem binário nenhum, o alvo imprime o comando de instalação da versão do CI.
+>
+> O lint **ainda não enxerga** os arquivos `//go:build integration`: com
+> `--build-tags=integration` são **6** apontamentos (eram 15), todos
+> `defer resp.Body.Close()` em `internal/router/*_integration_test.go`. Até
+> zerar, `GOLANGCI_LINT_TAGS` fica vazia. Para medir:
+> `make lint-golangci GOLANGCI_LINT_TAGS=integration`.
+>
+> **E uma lição que nenhum `Makefile` absorve**: `make check; echo $?` seguido
+> de outro comando na mesma linha, ou `make check | tail`, devolve o código de
+> saída do **último** comando, não do `make`. Foi assim que o lint vermelho passou
+> por verde numa sessão de 02/10. Leia a saída — a última linha do `make`, o
+> `ok`/`FAIL` de cada pacote, o `Test Files … passed` do vitest —, e não confie
+> em código de saída de pipeline sem `set -o pipefail`.
 
 ### Unidade
 
@@ -118,7 +135,7 @@ DATABASE_URL="$URL" go test -tags=integration ./... -race -count=1
 >
 > Isso passou a valer para mais do que ele: **a jornada da Fase 1 e os invariantes de `internal/router` também exigem seed** e fazem `t.Skip` com a instrução no texto quando não o encontram. Um `skip` ali é a jornada inteira do produto saindo da execução sem ninguém reparar — é por isso que a etapa do seed é obrigatória, e não uma conveniência.
 
-O seed é **idempotente por contrato** e a suíte depende disso: rodá-lo duas vezes seguidas deixa `criadas=0, atualizadas=0, inalteradas=276` e a contagem de linhas idêntica em `units`, `unit_types`, `resources`, `roles`, `role_permissions`, `users` e `rates`. Um seed que duplicasse na segunda execução quebraria toda fixture que resolve por chave natural.
+O seed é **idempotente por contrato** e a suíte depende disso. Medido em 02/10/2026 (schema `20261002180000`): num banco novo, `previstas 301, criadas 300, atualizadas 1` — o `1` é o vínculo `users.broker_id` do corretor de desenvolvimento, que é `UPDATE` por natureza —; rodá-lo de novo deixa `criadas=0, atualizadas=0, inalteradas=301` e *"nada mudou"*, e a contagem de linhas idêntica em `units`, `unit_types`, `resources`, `roles`, `role_permissions`, `users` e `rates`. Um seed que duplicasse na segunda execução quebraria toda fixture que resolve por chave natural.
 
 ## 2. O que cada suíte protege
 
@@ -447,7 +464,81 @@ O teste continua no lugar como **regressão**: ele é a única coisa que impede 
 
 A tela de login como componente de decisão: a mensagem de erro é **a mesma** para e-mail inexistente, senha errada e bloqueio (o contrato usa um único `INVALID_CREDENTIALS`; distinguir na tela devolveria a enumeração de usuários que a API fecha de propósito), a validação segura o envio antes de gastar uma das cinco tentativas, e a tela reage ao `code`, nunca ao texto que a API mandou.
 
-## 3. Estado atual: o portão verde, menos o `lint` que ninguém consegue passar
+## 3. Estado atual
+
+### 3.0 Medido em 02/10/2026, ao fim da Rodada 5
+
+Pelo `squad-lead`, sobre a árvore que o integrador commita, contra o Postgres de
+teste da porta 55432 **recriado do zero** (migrations até `20261002180000` e
+seed). Sem Docker neste ambiente: o que depende de imagem não rodou (fim da
+seção).
+
+| Passo | Resultado |
+|---|---|
+| `make check` (inteiro, de ponta a ponta) | ✅ `exit=0`, lido na saída: `golangci-lint (2.5.0) … 0 issues`, 24 pacotes Go `ok`, painel `40 passed (40)` / `340 passed (340)` |
+| `go build`, `go vet`, `go vet -tags=integration`, `gofmt -l` | ✅ limpos |
+| `golangci-lint run --max-same-issues=0 --max-issues-per-linter=0 ./...` | ✅ **0** |
+| O mesmo com `--build-tags=integration` | ❌ **6** (eram 15 na verificação de 02/10): `errcheck` de `defer resp.Body.Close()` em `internal/router/api_integration_test.go:120,159`, `jornada_fase1_integration_test.go:123`, `regressao_criticos_integration_test.go:60,103`, `regressao_rodada3_integration_test.go:68`. Fora do portão até zerar |
+| `go test ./... -race -count=1` | ✅ 24 pacotes, 0 FAIL |
+| Integração: banco recriado + `make it-suite` (`-p 1 -race`) | ✅ 24 pacotes, `exit=0` |
+| A mesma suíte com `-v` (sem `-race`), para contar | ✅ **701 testes de topo, 978 com subtestes, 0 FAIL, 0 SKIP** |
+| Seed 1ª / 2ª | ✅ `previstas 301, criadas 300, atualizadas 1` / `criadas 0, atualizadas 0, inalteradas 301` — *"nada mudou"* |
+| `pnpm lint`, `pnpm exec tsc --noEmit` | ✅ zero |
+| `pnpm test --run` | ✅ **40 arquivos, 340 testes** (eram 334 em 27/08) |
+| Fumaça do site, `node apps/site/e2e/fumaca-site.mjs` contra nginx 1.24 local com o `nginx.conf` do repositório | ✅ APROVADO, 17 recursos internos; `/admin`, `/admin/`, `/scripts/admin.js` e caminho inventado = 404 |
+
+**Sobre o "0 SKIP"**: sem `-v`, o `go test` não imprime `--- SKIP`, e contar
+`SKIP` na saída de `make it-suite` dá zero sempre — inclusive com metade da suíte
+pulada. A contagem que vale é a da execução com `-v`.
+
+**O que não rodou, e por quê**: `make up`, `make smoke`/`smoke-stack` com o painel,
+`make smoke-site-imagem`, o worker em contêiner e o `nginx:1.27-alpine` da imagem
+do site — o ambiente da rodada não tinha Docker. A prova deles vem no primeiro CI
+depois do commit (jobs `smoke`, `site` e `lint-go`; este último nunca rodou num
+runner). `make it-concorrencia` foi rodado pelo `backend-go` depois da suíte
+verde (`14 testes de concorrência x 10 repetições`, `exit=0`); não foi refeito
+pelo `squad-lead`.
+
+**Os testes novos desta rodada**, todos `PASS` na execução com `-v`, cada um com
+controle negativo medido por quem o escreveu: `TestPoliticaNaoPerdeColunaAoRepublicar`,
+`TestValidadeDoOrcamentoVemDaPoliticaECongelaNaEmissao`,
+`TestColecaoDeContatosNaoServeDocumentoCheioComoCorretor`,
+`TestPatchDeContatoRegistraLeituraERecusaEmailMascarado`,
+`TestFullDaReservaRegistraCadaHospedeExibido`, `TestTelefoneDoLeadSaiSempreMascarado`,
+`TestFullDaOportunidadeRegistraOContato`, `TestCorretorOwnNaoAtribuiAVendaAoColega`,
+`TestCorretorOwnOmitindoGravaOProprio`, `TestCorretorOwnNaEdicao`,
+`TestGuardaDoCorretorNoSQLRecusaContaQueMudou`, `TestAdminAtribuiCorretorExistenteEOInexistenteEh422`,
+`TestOutraContaNaoApontaParaOCadastroDoCorretor`, `TestVendaComCorretorInexistenteEhRecusadaPeloBanco`,
+`TestExcluirFichaDeCorretorDa409ComAContagem`; e, sem banco, os cinco de
+`internal/platform/apperr/catalogo_test.go` e a mesa de `internal/domain/commission`
+(22 casos e 864 combinações exaustivas).
+
+**Duas intermitências**, uma fechada e uma aberta, as duas de `TestOverbookingEhImpedidoPeloBanco`:
+os cenários C e D colidiam em data com as rodadas 7 e 9 do cenário B e falhavam
+quando a Completa vencia a disputa (reproduzido injetando a vitória; datas
+movidas, `-count=5` verde). O cenário **A** tem outra, de tempo: numa de seis
+execuções isoladas, as 49 respostas vieram `DATE_CONFLICT` e nenhuma recusa foi
+atribuída ao `23P01` — não mexida; a suíte completa e as 10 repetições passaram.
+
+**Higiene que ficou para o dono de `internal/router` — e já está acontecendo.**
+`GET /reservations/{id}/full` e `GET /crm/opportunities/{id}/full` agora gravam
+`pii_access_log` com o ator, e a FK `pii_access_log_actor_id_fkey` não tem
+cascata. O cleanup do usuário descartável (`internal/router/api_integration_test.go:281`)
+não apaga a trilha antes do usuário, e **dois testes já deixam lixo**: a suíte com
+`-v` registrou `LIMPEZA INCOMPLETA` em `TestReajusteDeTarifaNaoAlcancaVendaJaEmitida`
+e `TestRemarcarParaMaisBaratoNaoFazDinheiroDoHospedeEvaporar` — o usuário fica
+(23503 em `pii_access_log_actor_id_fkey`) e, com ele, o perfil de teste (23503 em
+`users_role_id_fkey`). Há uma terceira ocorrência, **anterior à rodada**:
+`TestPapelAcimaDoTetoDoAtorEhRecusado` deixa um perfil no banco também em
+`957e6e3` (medido rodando o teste de uma cópia do `HEAD`). Nada disso reprova,
+porque a limpeza só faz `t.Logf` — **e `t.Logf` de teste que passa só aparece
+com `-v`**: a saída de `make it-suite` mostra zero `LIMPEZA INCOMPLETA` com cinco
+acontecendo. Os relatórios da rodada que contaram "0 `LIMPEZA INCOMPLETA`" sem
+`-v` contaram nada. Conserto: apagar `pii_access_log WHERE actor_id = $1` antes
+do usuário (dono de `internal/router` de teste); e a limpeza incompleta passar a
+reprovar, ou o alvo da suíte rodar com `-v` e reprovar ao achar a marca.
+
+### 3.1–3.5 Medido em 27/08/2026 — o portão verde, menos o `lint` que ninguém conseguia passar
 
 Medido em 27/08/2026, ao fim da rodada de quitação de dívida técnica, contra
 Postgres 16 efêmero próprio (`whv-qa-r5`, porta 55490, `PGDATA` em `tmpfs`),
@@ -516,6 +607,11 @@ eles duas subtelas de configuração que ninguém tinha posto na lista.
 
 ### 3.3 Os 11 achados do `golangci-lint` — nenhum é de teste, nenhum é bug
 
+> **Corrigidos em `e0bc08e` (02/10/2026).** Conferido no código pela
+> verificação de 02/10 e medido de novo na Rodada 5: `golangci-lint run
+> --max-same-issues=0 --max-issues-per-linter=0 ./...` = **0 issues**. A tabela
+> fica como registro do que travava o portão.
+
 | Onde | O que | Juízo |
 |---|---|---|
 | `cmd/api/main.go:41,165` | `os.Stderr.WriteString` e `resp.Body.Close` sem checar retorno (errcheck) | Cosmético. |
@@ -581,6 +677,6 @@ A mensagem de falha é escrita para quem **não** está com o código aberto. `"
 - **e2e de jornada (Playwright)** — `apps/admin/e2e/` hoje tem a **fumaça**, que percorre 10 telas e 15 links com o navegador de verdade, mas ela **não executa nenhuma escrita**: navega, lê e confere. Continua faltando a jornada pela TELA — emitir a pré-reserva clicando, confirmar o sinal no diálogo, cancelar lendo o número da simulação. Ela é a única camada que provaria que a Server Action, o BFF e a API concordam sobre o corpo de escrita; hoje isso é conferido por um teste de forma (`corpo-de-escrita.test.ts`), que é **one-way** (painel → Go) e por construção não vê campo novo que só existe do lado Go. O ambiente para escrevê-la já existe (`make smoke-stack`); o que falta é a escrita ser reversível — uma venda de teste na tela deixa reserva no banco de desenvolvimento, e a fumaça é rodada em cima do ambiente de todo mundo.
 - **Mesa de 20 cenários de tarifa e teste de propriedade** (spec §4) — o motor de `internal/domain/booking` está implementado e a jornada confere os valores da Tabela V1 ponta a ponta, mas a mesa completa de 20 combinações (feriado × fim de semana × período especial × evento × desconto) ainda não foi escrita. É o próximo alvo natural: é teste puro, sem banco, e cada linha da mesa é uma conversa de venda que já aconteceu.
 - **O limite comercial de bloqueio (8 unidades × 364 dias) não tem teste porque não tem dono.** A revisão mediu o corretor fechando a Cobertura por dois meses de alta temporada com um `POST /blocks`. O `db-migrations` decidiu, com razão, que tamanho de bloqueio é regra de negócio e pertence a `internal/domain`, não a um `CHECK`; `reservas` não o implementou por ser pasta alheia. Ninguém o pegou. **Não escrevi teste vermelho para ele**: o QA guarda requisito acordado, e este ainda é proposta — a spec §11 não fixa limite nenhum. Precisa de decisão comercial antes de virar teste.
-- ~~**`pii_access_log`**~~ — **pago nesta rodada.** A tabela existia desde `20260820120000` e nunca havia sido escrita por linha nenhuma de Go; agora `GET /contacts/{id}` e `/contacts/{id}/export` gravam, e o módulo de contatos tem teste de integração para isso. O que **falta** é o helper morar em `internal/platform/pii`, irmão de `audit`: hoje ele vive dentro de `contatos/pii.go`, e a próxima tela que mostrar dado pessoal (financeiro, hóspedes de uma reserva, chat) teria de importar o módulo de contatos para conseguir a trilha. É dívida com dono declarado.
+- ~~**`pii_access_log`**~~ — **pago em 27/08, e a plataforma em 02/10.** O helper mora em `internal/platform/pii` desde `91d2388` (D6 do roadmap), e na Rodada 5 ganhou as máscaras do contrato e os motivos `rooming_list` e `opportunity`. O parágrafo abaixo é o de 27/08. **Pago nesta rodada.** A tabela existia desde `20260820120000` e nunca havia sido escrita por linha nenhuma de Go; agora `GET /contacts/{id}` e `/contacts/{id}/export` gravam, e o módulo de contatos tem teste de integração para isso. O que **falta** é o helper morar em `internal/platform/pii`, irmão de `audit`: hoje ele vive dentro de `contatos/pii.go`, e a próxima tela que mostrar dado pessoal (financeiro, hóspedes de uma reserva, chat) teria de importar o módulo de contatos para conseguir a trilha. É dívida com dono declarado.
 - **A mesa de PII na auditoria não tem controle negativo em `internal/router`.** `contatos/auditoria.go` mascara nome e telefone antes de gravar em `audit_log`, e o próprio módulo prova isso. O que não existe é a varredura no **sistema montado** — o equivalente de `TestTodaEscritaDaFase1DeixaTrilhaCompletaNoSistemaMontado` para PII: uma passada por `audit_log` inteiro atrás de telefone em formato E.164 e de nome de contato em claro. É teste barato e é o tipo de coisa que só quebra quando um módulo novo esquece de mascarar.
 - **Carga sustentada.** O desempenho está medido por requisição isolada (§2). Ninguém mediu ainda o comportamento com dezenas de operadores simultâneos no mapa durante a véspera de Réveillon.

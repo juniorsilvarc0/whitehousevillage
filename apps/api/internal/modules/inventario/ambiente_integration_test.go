@@ -217,7 +217,7 @@ func (a *ambiente) chamar(t *testing.T, metodo, caminho, token string, corpo any
 	if err != nil {
 		t.Fatalf("%s %s: %v", metodo, caminho, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	lido, err := io.ReadAll(resp.Body)
 	if err != nil {

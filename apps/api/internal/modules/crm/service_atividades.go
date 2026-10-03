@@ -177,7 +177,7 @@ func (s *Servico) AtualizarAtividade(ctx context.Context, id uuid.UUID, corpo At
 			// `done_at` é o insumo do tempo médio de resposta. Concluída é
 			// terminal para o PATCH; o que se reabre é a cancelada.
 			if antes.Status == AtividadeConcluida && v != AtividadeConcluida {
-				return TransicaoInvalida.
+				return apperr.InvalidStateTransition.
 					WithMessage("Atividade concluída não volta a pendente; crie a próxima ação.").
 					WithDetails(map[string]any{"status": antes.Status})
 			}
@@ -243,7 +243,7 @@ func (s *Servico) Concluir(ctx context.Context, id uuid.UUID, corpo PedidoDeConc
 			return err
 		}
 		if travada.Status == AtividadeCancelada {
-			return TransicaoInvalida.
+			return apperr.InvalidStateTransition.
 				WithMessage("Atividade cancelada não se conclui; reabra com PATCH (status: pendente) antes.").
 				WithDetails(map[string]any{"status": travada.Status})
 		}

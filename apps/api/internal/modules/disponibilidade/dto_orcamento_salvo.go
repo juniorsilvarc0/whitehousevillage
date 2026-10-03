@@ -8,19 +8,6 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
 )
 
-// validadePadraoEmDias é quanto tempo um orçamento emitido fica de pé quando
-// quem emite não diz até quando.
-//
-// DÍVIDA NOMEADA, e está escrita no contrato (PedidoDeOrcamento.valid_until):
-// "tudo que é regra comercial é dado versionado", e o lugar deste número é
-// `commercial_policies.quote_validity_days`, ao lado de `hold_hours` e
-// `balance_due_days`. A coluna não existe — e não pode ser criada por este
-// agente (regra 3: migrations só pelo `db-migrations`), com o agravante de que
-// `PublicarPoliticaComercial` copia coluna a coluna e uma coluna nova voltaria
-// ao DEFAULT a cada versão publicada. Fica aqui, com nome, para não virar
-// número mágico perdido no meio de uma expressão.
-const validadePadraoEmDias = 7
-
 // OrcamentoSalvo é o orçamento EMITIDO — schema `OrcamentoSalvo` do contrato.
 //
 // `Orcamento` embutido e SEM tag: os campos dele saem inline no JSON, que é

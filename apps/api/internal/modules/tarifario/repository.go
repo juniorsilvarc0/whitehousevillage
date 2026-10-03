@@ -215,7 +215,7 @@ func (r *Repository) ContarTabelasVigentes(ctx context.Context, prop uuid.UUID, 
 
 func (r *Repository) traduzirTabela(err error) error {
 	if db.IsUniqueViolation(err) {
-		return ErroCodigoEmUso.
+		return apperr.CodeInUse.
 			WithMessage("Já existe uma tabela de tarifas com este nome.").
 			WithDetails(map[string]string{"name": "já está em uso."}).
 			WithCause(err)
@@ -524,7 +524,7 @@ func (r *Repository) AplicarGrade(ctx context.Context, tabela uuid.UUID, remover
 
 func (r *Repository) traduzirTarifa(err error) error {
 	if db.IsUniqueViolation(err) {
-		return ErroCodigoEmUso.
+		return apperr.CodeInUse.
 			WithMessage("Já existe tarifa para este produto e tipo de data nesta tabela.").
 			WithCause(err)
 	}
@@ -659,7 +659,7 @@ func (r *Repository) ExcluirFeriado(ctx context.Context, prop, id uuid.UUID) err
 
 func (r *Repository) traduzirFeriado(err error) error {
 	if db.IsUniqueViolation(err) {
-		return ErroCodigoEmUso.
+		return apperr.CodeInUse.
 			WithMessage("Já existe feriado cadastrado nesta data.").
 			WithDetails(map[string]string{"date": "já está em uso."}).
 			WithCause(err)
@@ -809,7 +809,7 @@ func (r *Repository) ExcluirPeriodo(ctx context.Context, prop, id uuid.UUID) err
 
 func (r *Repository) traduzirPeriodo(err error) error {
 	if db.IsUniqueViolation(err) {
-		return ErroCodigoEmUso.
+		return apperr.CodeInUse.
 			WithMessage("Já existe um período especial com este nome.").
 			WithDetails(map[string]string{
 				"name": "já está em uso — o nome carrega o ano de propósito (\"Réveillon 2026/2027\").",
@@ -955,7 +955,7 @@ func (r *Repository) ExcluirMinimo(ctx context.Context, prop, id uuid.UUID) erro
 
 func (r *Repository) traduzirMinimo(err error) error {
 	if db.IsUniqueViolation(err) {
-		return ErroCodigoEmUso.
+		return apperr.CodeInUse.
 			WithMessage("Já existe mínimo de noites para este tipo de data nesta tabela.").
 			WithCause(err)
 	}

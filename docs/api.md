@@ -146,3 +146,5 @@ O cliente recebe "algo mudou" e refaz o fetch autenticado. Assim nenhum dado sen
 ## 8. Versionamento
 
 `/api/v1` estável. Mudança quebrando contrato cria `/api/v2` coexistindo, com `Deprecation` e `Sunset` no v1. Campo novo em resposta não é breaking; remover ou renomear é.
+
+**Exceção registrada em 02/10/2026 — correção de vazamento não ganha `/api/v2`.** `GET /contacts` passou a devolver o schema `ContatoNaLista`: `doc_number`, `phone_e164` e `email` mascarados, e sem as chaves `birth_date` e `notes`; `Lead.contact_phone_e164` sai sempre mascarado. É quebra de contrato em `/api/v1`, e deliberada: manter a forma antiga num v1 "estável" seria manter, por versionamento, a lista que servia CPF inteiro a qualquer corretor sem gravar `pii_access_log`. A regra única está no topo da OpenAPI ("Dado pessoal na resposta": coleção mascara e não grava; registro individual devolve cheio e grava). O único cliente é o painel deste repositório, e o ajuste dele é a dívida **D11** do roadmap. Cliente externo, quando existir (token de API, Fase 5), recebe a regra já nesta forma.

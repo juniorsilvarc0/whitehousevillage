@@ -192,7 +192,7 @@ func (r *Repository) InserirFunil(ctx context.Context, propriedade uuid.UUID, no
 	var id uuid.UUID
 	err := r.exec(ctx).QueryRow(ctx, q, propriedade, nome, padrao, ativo).Scan(&id)
 	if db.IsUniqueViolation(err, "crm_pipelines_property_id_name_key") {
-		return uuid.Nil, NomeEmUso.WithMessage("Já existe um funil com esse nome nesta propriedade.").WithCause(err)
+		return uuid.Nil, apperr.CodeInUse.WithMessage("Já existe um funil com esse nome nesta propriedade.").WithCause(err)
 	}
 	return id, db.MapError(err)
 }
@@ -203,7 +203,7 @@ func (r *Repository) AtualizarFunil(ctx context.Context, id uuid.UUID, nome stri
 	            WHERE id = $1`
 	_, err := r.exec(ctx).Exec(ctx, q, id, nome, padrao, ativo)
 	if db.IsUniqueViolation(err, "crm_pipelines_property_id_name_key") {
-		return NomeEmUso.WithMessage("Já existe um funil com esse nome nesta propriedade.").WithCause(err)
+		return apperr.CodeInUse.WithMessage("Já existe um funil com esse nome nesta propriedade.").WithCause(err)
 	}
 	return db.MapError(err)
 }
@@ -375,7 +375,7 @@ func (r *Repository) InserirEtapa(ctx context.Context, e Etapa) (uuid.UUID, erro
 	err := r.exec(ctx).QueryRow(ctx, q, e.FunilID, e.Nome, e.Posicao, e.Probabilidade, e.Cor, e.Tipo,
 		e.SLADias, e.TarefaAssunto, e.TarefaTipo, e.TarefaPrazoDias, e.Notificar).Scan(&id)
 	if db.IsUniqueViolation(err, "crm_stages_pipeline_id_name_key") {
-		return uuid.Nil, NomeEmUso.WithMessage("Já existe uma etapa com esse nome neste funil.").WithCause(err)
+		return uuid.Nil, apperr.CodeInUse.WithMessage("Já existe uma etapa com esse nome neste funil.").WithCause(err)
 	}
 	return id, db.MapError(err)
 }
@@ -397,10 +397,10 @@ func (r *Repository) AtualizarEtapa(ctx context.Context, e Etapa) error {
 	_, err := r.exec(ctx).Exec(ctx, q, e.ID, e.Nome, e.Posicao, e.Probabilidade, e.Cor, e.Tipo,
 		e.SLADias, e.TarefaAssunto, e.TarefaTipo, e.TarefaPrazoDias, e.Notificar)
 	if db.IsUniqueViolation(err, "crm_stages_pipeline_id_name_key") {
-		return NomeEmUso.WithMessage("Já existe uma etapa com esse nome neste funil.").WithCause(err)
+		return apperr.CodeInUse.WithMessage("Já existe uma etapa com esse nome neste funil.").WithCause(err)
 	}
 	if db.IsUniqueViolation(err, "crm_stages_posicao_unica") {
-		return NomeEmUso.WithMessage("Já existe uma etapa nessa posição; use POST /crm/stages/reorder.").WithCause(err)
+		return apperr.CodeInUse.WithMessage("Já existe uma etapa nessa posição; use POST /crm/stages/reorder.").WithCause(err)
 	}
 	return db.MapError(err)
 }
@@ -558,7 +558,7 @@ func (r *Repository) MotivoAtivo(ctx context.Context, propriedade, id uuid.UUID)
 	var ativo bool
 	err := r.exec(ctx).QueryRow(ctx, q, id, propriedade).Scan(&ativo)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return MotivoDePerdaObrigatorio.WithDetails(map[string]any{
+		return apperr.LossReasonRequired.WithDetails(map[string]any{
 			"lost_reason_id": "motivo desconhecido nesta propriedade.",
 		})
 	}
@@ -566,7 +566,7 @@ func (r *Repository) MotivoAtivo(ctx context.Context, propriedade, id uuid.UUID)
 		return db.MapError(err)
 	}
 	if !ativo {
-		return MotivoDePerdaObrigatorio.WithDetails(map[string]any{
+		return apperr.LossReasonRequired.WithDetails(map[string]any{
 			"lost_reason_id": "motivo inativo; escolha um do catálogo ativo.",
 		})
 	}
@@ -582,7 +582,7 @@ func (r *Repository) InserirMotivo(ctx context.Context, propriedade uuid.UUID, r
 	var id uuid.UUID
 	err := r.exec(ctx).QueryRow(ctx, q, propriedade, rotulo, ativo).Scan(&id)
 	if db.IsUniqueViolation(err, "crm_lost_reasons_property_id_label_key") {
-		return uuid.Nil, NomeEmUso.WithMessage("Já existe um motivo com esse rótulo.").WithCause(err)
+		return uuid.Nil, apperr.CodeInUse.WithMessage("Já existe um motivo com esse rótulo.").WithCause(err)
 	}
 	return id, db.MapError(err)
 }
@@ -592,7 +592,7 @@ func (r *Repository) AtualizarMotivo(ctx context.Context, id uuid.UUID, rotulo s
 	const q = `UPDATE crm_lost_reasons SET label = $2, active = $3, updated_at = now() WHERE id = $1`
 	_, err := r.exec(ctx).Exec(ctx, q, id, rotulo, ativo)
 	if db.IsUniqueViolation(err, "crm_lost_reasons_property_id_label_key") {
-		return NomeEmUso.WithMessage("Já existe um motivo com esse rótulo.").WithCause(err)
+		return apperr.CodeInUse.WithMessage("Já existe um motivo com esse rótulo.").WithCause(err)
 	}
 	return db.MapError(err)
 }

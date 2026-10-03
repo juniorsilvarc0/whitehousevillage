@@ -80,8 +80,10 @@ type MotivoDePerda struct {
 }
 
 // ContatoResumo é o contato como o CRM precisa dele. O cadastro completo é de
-// `/contacts`, de outra fase: expor só o resumo evita que a tela de
-// oportunidade vire uma segunda porta de leitura de dado pessoal.
+// `/contacts`: expor só o resumo (sem documento, nascimento nem notas) reduz o
+// que a tela da oportunidade entrega. Telefone e e-mail saem CHEIOS — é de
+// onde sai o `tel:` —, e por isso `GET /crm/opportunities/{id}/full` grava
+// `pii_access_log` com `reason: opportunity` (ver Servico.Completa).
 type ContatoResumo struct {
 	ID       uuid.UUID `json:"id"`
 	Nome     string    `json:"name"`

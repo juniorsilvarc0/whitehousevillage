@@ -30,8 +30,12 @@
 //
 // Três consequências que atravessam o módulo inteiro:
 //
-//  1. LEITURA de ficha individual grava `pii_access_log` (spec §16). A lista
-//     não grava: ela é a agenda do dia; a ficha é dado identificável.
+//  1. LEITURA de ficha individual grava `pii_access_log` (spec §16), e o
+//     PATCH também, porque devolve a ficha cheia. A LISTA não grava porque
+//     não serve a ficha: documento, telefone e e-mail saem mascarados e
+//     `birth_date`/`notes` nem aparecem (ContatoNaLista). Até 02/10/2026 este
+//     comentário dizia "a lista é a agenda do dia" e a lista servia o CPF
+//     inteiro — a premissa era falsa (F2-23).
 //  2. `POST /contacts/{id}/anonymize` atende ao direito de eliminação (LGPD
 //     art. 18, VI) SEM apagar o razão: o `id` e as FKs sobrevivem, a PII não.
 //  3. `GET /contacts/{id}/export` atende à portabilidade (art. 18, V).
@@ -50,8 +54,6 @@
 package contatos
 
 import (
-	"net/http"
-
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 )
 
@@ -99,43 +101,13 @@ var statusDeReservaViva = []string{"hold", "confirmed", "checked_in"}
 
 // ─────────────────────────── Erros do módulo ────────────────────────
 //
-// Os três códigos abaixo pertencem ao vocabulário estável da API e o enum do
-// contrato já os lista (`components.responses.Erro`). Estão declarados AQUI, e
-// não em `internal/platform/apperr`, pela mesma razão registrada em
-// `internal/modules/crm/crm.go`: `internal/platform` não é pasta deste agente
-// nesta rodada, e editar o mesmo arquivo que outro agente edita em paralelo é
-// exatamente a colisão que a divisão por pasta existe para evitar. São
-// construídos pela mesma forma do pacote (código + mensagem + status), então
-// mudam de casa sem mudar de comportamento.
-//
-// Ver "PARA O INTEGRADOR" no relatório.
-func erro(codigo, mensagem string, status int) *apperr.Error {
-	return (&apperr.Error{Code: codigo, Message: mensagem}).WithStatus(status)
-}
+// CONTACT_DUPLICATE, CONTACT_ANONYMIZED e RESOURCE_IN_USE moram em
+// `internal/platform/apperr`, com status e frase padrão.
 
-var (
-	// ContatoDuplicado — já existe alguém com este telefone ou documento.
-	//
-	// NUNCA sai seco: `details.contact_id` traz o registro que já existe, e é
-	// isso que transforma o erro em caminho. Quem tenta cadastrar de novo quer
-	// justamente CHEGAR na pessoa; um 409 sem o id manda o atendente procurar
-	// na lista o que a API acabou de encontrar para ele.
-	ContatoDuplicado = erro("CONTACT_DUPLICATE",
-		"Já existe um contato com este telefone ou documento.", http.StatusConflict)
-
-	// ContatoAnonimizado — ficha esvaziada não volta a receber dado pessoal.
-	// Aceitar a escrita reintroduziria na base o dado que o titular mandou
-	// eliminar, com a agravante de o `anonymized_at` continuar preenchido —
-	// a ficha diria "eliminada" carregando PII nova.
-	ContatoAnonimizado = erro("CONTACT_ANONYMIZED",
-		"Este contato foi anonimizado e não aceita mais dados pessoais.", http.StatusConflict)
-
-	// RecursoEmUso reusa o vocabulário que inventário, tarifário e CRM já usam
-	// para "ainda há algo apontando para isto", em vez de inflar o enum com um
-	// código novo por módulo.
-	RecursoEmUso = erro("RESOURCE_IN_USE",
-		"Este contato tem registros vinculados.", http.StatusConflict)
-)
+// mensagemContatoComVinculos é a frase do 409 do DELETE de contato com
+// histórico. Mais precisa que a padrão do RESOURCE_IN_USE ("Ainda há vínculo
+// ativo neste registro."), e a mesma que o módulo devolvia antes do F2-03.
+const mensagemContatoComVinculos = "Este contato tem registros vinculados."
 
 // escopoOwnInaplicavel é a recusa quando a matriz concede `own` sobre
 // `contacts`.

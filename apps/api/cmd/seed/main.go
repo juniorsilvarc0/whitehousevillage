@@ -68,6 +68,7 @@ func etapas() []etapa {
 		{"perfis", perfis},
 		{"permissoes", permissoes},
 		{"usuarios_de_desenvolvimento", usuariosDeDesenvolvimento},
+		{"corretores_de_desenvolvimento", corretoresDeDesenvolvimento},
 		{"funil_padrao", funilPadrao},
 		{"etapas_do_funil", etapasDoFunil},
 		{"motivos_de_perda", motivosDePerda},

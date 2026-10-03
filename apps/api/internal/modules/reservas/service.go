@@ -9,12 +9,14 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/commission"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/pii"
 )
 
 // Servico orquestra o ciclo de vida da reserva.
@@ -136,6 +138,24 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (ReservaCompleta, 
 			completa.PreviaDoCancelamento = &previa
 		}
 	}
+
+	// A rooming list sai com nome e telefone CHEIOS (é de onde a recepção liga
+	// para quem vai chegar), e por isso grava `pii_access_log`: UMA linha por
+	// hóspede exibido, `reason: rooming_list`, numa instrução só. A pergunta
+	// da LGPD — "quem viu o meu número?" — é por pessoa: abrir a reserva de um
+	// evento da Completa grava até 24 linhas, e é o custo certo.
+	//
+	// Por último, depois de toda leitura que pode falhar, e com falha FECHADA:
+	// se o registro não entra, a tela não sai. Reserva fora do escopo já
+	// respondeu 404 lá em cima, sem gravar nada; reserva sem hóspede não
+	// exibiu ninguém e não grava.
+	exibidos := make([]uuid.UUID, 0, len(completa.Hospedes))
+	for _, h := range completa.Hospedes {
+		exibidos = append(exibidos, h.ContactID)
+	}
+	if err := pii.RegistrarVarios(ctx, s.repo.pool, "contacts", exibidos, pii.MotivoListaDeHospedes); err != nil {
+		return ReservaCompleta{}, err
+	}
 	return completa, nil
 }
 
@@ -171,7 +191,15 @@ func (s *Servico) Criar(ctx context.Context, chave string, corpo ReservaCriar) (
 			return nil
 		}
 
-		reserva, _, err := s.emitir(ctx, u, corpo, EstadoHold, nil, nil)
+		// O corretor é decidido ANTES de emitir e dentro da transação: a
+		// recusa de autoridade (403) não pode deixar orçamento, alocação ou
+		// número de reserva consumidos para trás.
+		corretor, err := s.resolverCorretor(ctx, u, auth.AcaoCriar, commission.Create, corpo.BrokerID, nil, EstadoHold)
+		if err != nil {
+			return err
+		}
+
+		reserva, _, err := s.emitir(ctx, u, corpo, corretor, EstadoHold, nil, nil)
 		if err != nil {
 			return err
 		}
@@ -194,7 +222,11 @@ func (s *Servico) Criar(ctx context.Context, chave string, corpo ReservaCriar) (
 //
 // O segundo retorno é o CRÉDITO gerado: o pedaço do sinal herdado que não coube
 // na reserva nova. É sempre 0 na criação comum.
-func (s *Servico) emitir(ctx context.Context, u *auth.Usuario, corpo ReservaCriar, estado string, remarcadaDe *uuid.UUID, sinalHerdado *int64) (Reserva, int64, error) {
+//
+// `corretor` já vem decidido: na criação, por commission.ResolveBroker; na
+// remarcação, herdado da reserva original (herdar não é atribuir, e não passa
+// pela regra de autoridade).
+func (s *Servico) emitir(ctx context.Context, u *auth.Usuario, corpo ReservaCriar, corretor AtribuicaoDoCorretor, estado string, remarcadaDe *uuid.UUID, sinalHerdado *int64) (Reserva, int64, error) {
 	produto, err := s.repo.Produto(ctx, u.PropertyID, corpo.UnitTypeID)
 	if err != nil {
 		return Reserva{}, 0, err
@@ -241,7 +273,7 @@ func (s *Servico) emitir(ctx context.Context, u *auth.Usuario, corpo ReservaCria
 		PropertyID: u.PropertyID,
 		UnitTypeID: corpo.UnitTypeID,
 		ContactID:  corpo.ContactID,
-		BrokerID:   corpo.BrokerID,
+		BrokerID:   corretor.Corretor,
 		// O dono comercial é quem emitiu. É `users(id)`, e não `brokers(id)`,
 		// porque quem o RBAC filtra é o usuário autenticado.
 		OwnerID:     &u.ID,
@@ -256,6 +288,8 @@ func (s *Servico) emitir(ctx context.Context, u *auth.Usuario, corpo ReservaCria
 		RemarcadaDe: remarcadaDe,
 		Observacoes: corpo.Observacoes,
 		CriadaPor:   &u.ID,
+
+		CorretorRestritoA: corretor.RestritoA,
 	})
 	if err != nil {
 		return Reserva{}, 0, err
@@ -426,10 +460,11 @@ func (s *Servico) Substituir(ctx context.Context, id uuid.UUID, corpo ReservaAtu
 		return Reserva{}, apperr.Validation(map[string]string{"guests_count": "é obrigatório no PUT."})
 	}
 	// No PUT o que não veio volta ao padrão — é o que "substituição integral"
-	// significa, e é o que diferencia PUT de PATCH.
-	if !corpo.BrokerID.Set {
-		corpo.BrokerID = httpx.Nulo[uuid.UUID]()
-	}
+	// significa, e é o que diferencia PUT de PATCH. `broker_id` NÃO entra
+	// aqui: o padrão dele depende do escopo (null em `all`, o corretor do
+	// próprio ator em `own`), e quem o resolve é commission.ResolveBroker com
+	// Write=Replace. Forçar `null` aqui faria o PUT do corretor apagar a
+	// própria atribuição.
 	if !corpo.IsEvento.Set {
 		corpo.IsEvento = httpx.De(false)
 	}
@@ -442,11 +477,15 @@ func (s *Servico) Substituir(ctx context.Context, id uuid.UUID, corpo ReservaAtu
 	if !corpo.Observacoes.Set {
 		corpo.Observacoes = httpx.Nulo[string]()
 	}
-	return s.Atualizar(ctx, id, corpo)
+	return s.atualizar(ctx, id, corpo, commission.Replace)
 }
 
 // Atualizar é o PATCH: campo ausente não muda, `null` limpa.
 func (s *Servico) Atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtualizar) (Reserva, error) {
+	return s.atualizar(ctx, id, corpo, commission.Patch)
+}
+
+func (s *Servico) atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtualizar, verbo commission.Write) (Reserva, error) {
 	u, err := ator(ctx)
 	if err != nil {
 		return Reserva{}, err
@@ -480,11 +519,9 @@ func (s *Servico) Atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtua
 			})
 		}
 
-		corretor := e.BrokerID
-		if v, ok := corpo.BrokerID.Definido(); ok {
-			corretor = &v
-		} else if corpo.BrokerID.DeveLimpar() {
-			corretor = nil
+		corretor, err := s.resolverCorretor(ctx, u, auth.AcaoEditar, verbo, corpo.BrokerID, e.BrokerID, e.Status)
+		if err != nil {
+			return err
 		}
 
 		isEvento := e.IsEvento
@@ -514,7 +551,7 @@ func (s *Servico) Atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtua
 				IsEvento: e.IsEvento, TipoEvento: e.TipoEvento, Origem: e.Origem, Observacoes: e.Observacoes,
 			},
 			cadastroAuditado{
-				ContactID: contato, BrokerID: corretor, Hospedes: hospedes,
+				ContactID: contato, BrokerID: corretor.Corretor, Hospedes: hospedes,
 				IsEvento: isEvento, TipoEvento: tipoEvento, Origem: origem, Observacoes: notas,
 			}); err != nil {
 			return err
@@ -542,7 +579,7 @@ func (s *Servico) Descartar(ctx context.Context, id uuid.UUID) error {
 			return err
 		}
 		if e.Status != EstadoQuote {
-			return EstadoInvalido.
+			return apperr.InvalidStateTransition.
 				WithMessage("Reserva a partir de `hold` não se apaga; use POST /reservations/{id}/cancel.").
 				WithDetails(map[string]any{
 					"status":  e.Status,

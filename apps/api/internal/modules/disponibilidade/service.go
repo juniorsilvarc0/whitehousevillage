@@ -449,18 +449,14 @@ func conferirComposicao(p Produto, c ComposicaoDoProduto) error {
 // composição quebrada, e mandar o operador tentar outra semana seria mandá-lo
 // tentar para sempre. Quem age é a gestão do inventário.
 //
-// O Code é literal e não a constante de `reservas`: importar aquele pacote daqui
-// fecharia um ciclo (ele já importa este). O que amarra os dois é o teste de
-// integração, que exige de /quotes o mesmo código que /reservations devolve.
+// Code, status e frase vêm do apperr — o mesmo erro base que `reservas` usa,
+// sem importar aquele pacote (ele já importa este, e o ciclo seria imediato).
 func composicaoIncompleta(codigo string, c ComposicaoDoProduto) error {
 	faltando := c.Faltando
 	if faltando == nil {
 		faltando = []string{}
 	}
-	return (&apperr.Error{
-		Code:    "COMPOSITION_INCOMPLETE",
-		Message: "O produto não tem todas as unidades da composição ativas.",
-	}).WithStatus(422).WithDetails(map[string]any{
+	return apperr.CompositionIncomplete.WithDetails(map[string]any{
 		"unit_type_code":     codigo,
 		"expected_units":     c.Declaradas,
 		"active_units":       c.Ativas,
@@ -468,34 +464,27 @@ func composicaoIncompleta(codigo string, c ComposicaoDoProduto) error {
 	})
 }
 
-// traduzirRegra converte a violação do motor no erro da API PRESERVANDO o Code
-// e os details.
+// traduzirRegra converte a violação do motor no erro da API PRESERVANDO o Code,
+// a frase e os details.
 //
 // O front reage ao Code, nunca ao texto — então o código que sai daqui tem de
-// ser exatamente o que booking.RuleError carimbou. Onde o apperr já tem a
-// constante, usa-se a constante; onde ainda não tem (RATE_NOT_FOUND, que o motor
-// já emite hoje), monta-se o erro com o mesmo Code em 422, que é o status que o
-// contrato declara. Inventar VALIDATION_ERROR no lugar seria mentir sobre a
-// causa e deixar a tela sem como dizer "falta cadastrar a tarifa deste período".
+// ser exatamente o que booking.RuleError carimbou, com o status que o catálogo
+// do apperr dá a ele (todos os do motor são 422). Inventar VALIDATION_ERROR no
+// lugar seria mentir sobre a causa e deixar a tela sem como dizer "falta
+// cadastrar a tarifa deste período".
+//
+// Código que o catálogo não conhece é defeito nosso — o domínio carimbou algo
+// fora do contrato — e sai 500 com a causa no log, em vez de um code que o
+// painel não sabe ler. O teste de catálogo do apperr confere que todo code
+// carimbado em internal/domain existe lá, então isso não acontece hoje.
 func traduzirRegra(err error) error {
 	var regra *booking.RuleError
 	if !errors.As(err, &regra) {
 		return err
 	}
-
-	switch regra.Code {
-	case "VALIDATION_ERROR":
-		return apperr.Validation(regra.Details).WithMessage(regra.Message).WithCause(err)
-	case "CAPACITY_EXCEEDED":
-		return apperr.CapacityExceeded.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
-	case "MIN_STAY_NOT_MET":
-		return apperr.MinStayNotMet.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
-	case "DISCOUNT_ABOVE_LIMIT":
-		return apperr.DiscountAboveLimit.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
-	default:
-		return (&apperr.Error{Code: regra.Code, Message: regra.Message}).
-			WithStatus(422).
-			WithDetails(regra.Details).
-			WithCause(err)
+	base, conhecido := apperr.PorCodigo(regra.Code)
+	if !conhecido {
+		return apperr.Internal.WithCause(err)
 	}
+	return base.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
 }

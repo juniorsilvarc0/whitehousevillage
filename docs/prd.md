@@ -128,12 +128,17 @@ Implementado como **dado** (papel × recurso × ação × escopo `all|own`), nun
 
 ## 10. Não-objetivos (explícitos)
 
-- Motor de reservas público com pagamento online pelo hóspede (fase futura).
-- Aplicativo nativo — o painel é PWA responsivo.
+- Aplicativo nativo — o painel é web responsivo (o PWA prometido aqui ainda não existe: não há manifesto nem service worker em `apps/admin`).
 - Multi-tenant comercial (SaaS para outras pousadas). O schema já carrega `property_id` para não impedir, mas o produto não persegue isso agora.
 - Contabilidade fiscal completa e emissão de nota — o sistema entrega o dado para o contador.
-- Substituir o site público de marketing.
 - Rodar o modelo de IA internamente — o sistema é o **hub**; o agente é externo e consome a API.
+
+**Revertidos pela decisão de 02/10/2026** — deixaram de ser não-objetivos e estão aqui riscados para que ninguém os leia como vigentes:
+
+- ~~Motor de reservas público com pagamento online pelo hóspede (fase futura).~~ Entrou no escopo: o site de vendas virou `apps/site` e vai reservar e cobrar o sinal pela mesma API do painel.
+- ~~Substituir o site público de marketing.~~ O site **é** agora parte deste repositório, como front de cliente.
+
+O plano, a ordem, o que a abertura ao público obriga a pagar antes (pagamento online, limitador distribuído, LGPD na porta, defesa contra negação de inventário) e as decisões que esperam o dono do negócio estão em [`unificacao-site-crm.md`](unificacao-site-crm.md) e na seção "Decisões pendentes do dono do negócio" de [`roadmap.md`](roadmap.md).
 
 ## 11. Premissas e riscos de produto
 

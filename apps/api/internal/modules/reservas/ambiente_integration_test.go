@@ -252,7 +252,7 @@ func (a *ambiente) chamarCom(t *testing.T, metodo, caminho, token string, corpo 
 	if err != nil {
 		t.Fatalf("%s %s: %v", metodo, caminho, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	lido, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -353,6 +353,9 @@ func (a *ambiente) usuario(t *testing.T, perfilID uuid.UUID) (uuid.UUID, string)
 		// apagar o usuário não pode apagar a prova do que ele fez. Nos testes o
 		// usuário é descartável, então a trilha dele vai junto.
 		a.executar(t, `DELETE FROM audit_log WHERE actor_id = $1`, id)
+		// `/full` grava `pii_access_log` (rooming list e contato da
+		// oportunidade), que referencia o ator sem cascata.
+		a.executar(t, `DELETE FROM pii_access_log WHERE actor_id = $1`, id)
 		a.executar(t, `DELETE FROM users WHERE id = $1`, id)
 	})
 

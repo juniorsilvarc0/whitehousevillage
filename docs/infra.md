@@ -1,5 +1,140 @@
 # Infraestrutura
 
+> **Leia antes: parte deste documento é ALVO, não estado.** Conferido em 02/10/2026.
+> **Existe**: `infra/docker-compose.prod.yml` e `infra/deploy.sh` (§0 abaixo) —
+> escritos e validados com `docker compose config`, mas **ainda não executados
+> numa VPS**. **Não existem**: serviço de `backup` automático, restore verificado,
+> `/metrics`, push de imagem para registry. O backup que existe é `make backup`,
+> manual; `make restore` reprova de propósito. O worker **não** usa River: é um
+> loop próprio com um job (`holds.expire`). As seções 2, 3, 5, 6 e 7 são plano.
+
+## 0. Deploy na VPS (82.29.59.229) sem afetar o que já roda nela
+
+A VPS já atende outros serviços. O stack de produção foi desenhado para **não
+encostar em nenhum deles**:
+
+| Garantia | Como |
+|---|---|
+| Nada fora do projeto é tocado | Nome de projeto `whv-gestao`: containers, redes, volumes e imagens com prefixo próprio. O `deploy.sh` nunca roda `down`, `prune` nem `--remove-orphans` |
+| Nenhuma porta pública | Painel e site escutam só em `127.0.0.1` (`WHV_ADMIN_PORT`, padrão 3110; `WHV_SITE_PORT`, padrão 3210). Postgres e API não publicam porta nenhuma |
+| Porta ocupada não é tomada | O `deploy.sh` confere com `ss` e **para** se a porta for de outro serviço |
+| 80/443 continuam do proxy atual | O Traefik do compose só sobe com `--proxy-proprio`, e o script recusa essa opção se 80 ou 443 estiverem ocupadas |
+
+DNS (já configurado): `www`, `gestor` e `corretor` `.whitehousevillage.com.br` → 82.29.59.229.
+`gestor` e `corretor` são o **mesmo painel**: o que cada perfil vê sai da matriz de
+permissões, não do endereço.
+
+**Primeiro deploy**, na VPS:
+
+```bash
+git clone https://github.com/juniorsilvarc0/whitehousevillage.git /opt/whv-gestao && cd /opt/whv-gestao
+cp infra/.env.production.example infra/.env.production && chmod 600 infra/.env.production
+# preencha: senhas (openssl rand -base64 48), JWT_SECRET, portas livres.
+# Para a apresentação, SEED_DEV_USERS=true cria admin/gestao/corretor @wh.local
+# com a senha de desenvolvimento — troque as senhas logo depois e volte para false.
+bash infra/deploy.sh
+```
+
+**O que já roda na VPS (medido em 02/10/2026 com `docker ps`)**: crmsup, escalakids,
+rdguara, spinchat e supabase, com estas portas no loopback: 3001, 3010, 3020, 3201,
+3203, 5433, 8001, 8080, 8090, 9000, 9001, 9010, 9011. Nenhum container publica 80/443,
+então o HTTPS é de um proxy **no host** (nginx, presumivelmente). Daí os padrões
+3110 e 3210 — e a `3201`, a primeira escolha, era justamente a do `crmsup-gateway`.
+Nomes de container deste stack começam com `whv-gestao-`, que não colide com nenhum.
+
+O script termina com uma fumaça em `127.0.0.1` (site 200, `/admin/` 404, login do
+painel 200 nos dois nomes). Falta então **o proxy que já atende 80/443** encaminhar
+os três nomes. Exemplos para os proxies mais comuns:
+
+No nginx do host, **um arquivo novo, só nosso** — nada dos sites existentes é editado:
+
+```bash
+sudo nano /etc/nginx/sites-available/whv-gestao      # conteúdo abaixo
+sudo ln -s /etc/nginx/sites-available/whv-gestao /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx         # reload, não restart: conexões vivas seguem
+sudo certbot --nginx -d www.whitehousevillage.com.br -d gestor.whitehousevillage.com.br -d corretor.whitehousevillage.com.br
+```
+
+`nginx -t` reprova antes de qualquer coisa mudar se o arquivo tiver erro, e o
+`certbot --nginx -d ...` só edita os blocos desses três nomes.
+
+```nginx
+# /etc/nginx/sites-available/whv-gestao
+server { listen 80; server_name www.whitehousevillage.com.br;
+  location / { proxy_pass http://127.0.0.1:3210; proxy_set_header Host $host;
+               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+               proxy_set_header X-Forwarded-Proto $scheme; } }
+server { listen 80; server_name gestor.whitehousevillage.com.br corretor.whitehousevillage.com.br;
+  location / { proxy_pass http://127.0.0.1:3110; proxy_set_header Host $host;
+               proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+               proxy_set_header X-Forwarded-Proto $scheme;
+               # o mapa usa SSE: sem buffer e com leitura longa
+               proxy_buffering off; proxy_read_timeout 1h; } }
+```
+
+```caddy
+# Caddy (emite o certificado sozinho)
+www.whitehousevillage.com.br { reverse_proxy 127.0.0.1:3210 }
+gestor.whitehousevillage.com.br, corretor.whitehousevillage.com.br { reverse_proxy 127.0.0.1:3110 }
+```
+
+Se o proxy da VPS for um Traefik em container, ele não alcança `127.0.0.1` do
+host: use um roteador de arquivo apontando para o IP da bridge do Docker
+(`172.17.0.1:3110` / `:3210`), ou mude as portas para escutar nessa bridge.
+
+### CD pelo GitHub
+
+`.github/workflows/deploy.yml`: quando o CI passa num push na `main`, o GitHub entra
+por SSH e roda o **mesmo** `infra/deploy.sh`, no commit exato que o CI aprovou. CI
+vermelho não chega na VPS; dois deploys nunca rodam juntos; há também o botão
+*Run workflow* para redeploy manual. Os segredos da aplicação **não** passam pelo
+GitHub: ficam em `infra/.env.production`, só na VPS.
+
+Configuração, uma vez só:
+
+1. **Na VPS, um usuário só para deploy** (não o root), com acesso ao Docker:
+   ```bash
+   sudo adduser --disabled-password --gecos "" deploy
+   sudo usermod -aG docker deploy
+   sudo mkdir -p /opt/whv-gestao && sudo chown deploy: /opt/whv-gestao
+   ```
+   Estar no grupo `docker` equivale a poder administrar o Docker da VPS inteira
+   (inclusive os outros projetos). Quem protege os outros projetos é o
+   `deploy.sh`, que só mexe em `whv-gestao` — e por isso o workflow não roda
+   outro comando além dele.
+2. **Chave SSH do deploy** (na sua máquina, que entra na VPS com o atalho
+   `ssh gondor` do `~/.ssh/config`):
+   ```bash
+   ssh -G gondor | grep -E '^(user|hostname|port) '     # porta ≠ 22 vira o segredo VPS_PORT
+   ssh-keygen -t ed25519 -N "" -C "github-deploy-whv" -f ~/.ssh/whv_deploy
+   # `deploy` não tem senha (--disabled-password): ssh-copy-id não serve, quem
+   # instala a chave é o acesso que você já tem.
+   cat ~/.ssh/whv_deploy.pub | ssh gondor 'sudo install -d -m 700 -o deploy -g deploy /home/deploy/.ssh && sudo tee -a /home/deploy/.ssh/authorized_keys >/dev/null && sudo chown deploy:deploy /home/deploy/.ssh/authorized_keys && sudo chmod 600 /home/deploy/.ssh/authorized_keys'
+   # prova: o MESMO atalho, trocando só usuário e chave — entra sem senha
+   ssh -i ~/.ssh/whv_deploy -o IdentitiesOnly=yes deploy@gondor 'id && docker ps --format "{{.Names}}" | head -3'
+   # impressão digital lida do próprio servidor (VPS_KNOWN_HOSTS)
+   ssh gondor 'cat /etc/ssh/ssh_host_ed25519_key.pub'
+   ```
+   `VPS_KNOWN_HOSTS` = `82.29.59.229 ` + a linha acima (com porta ≠ 22:
+   `[82.29.59.229]:PORTA ` + a linha).
+3. **Leitura do repositório pela VPS** (o repositório é privado): como `deploy`,
+   gere outra chave (`ssh-keygen -t ed25519 -N "" -f ~/.ssh/github`), cadastre o
+   `.pub` em GitHub → repositório → Settings → *Deploy keys* (**sem** permissão de
+   escrita) e clone por SSH:
+   `GIT_SSH_COMMAND="ssh -i ~/.ssh/github" git clone git@github.com:juniorsilvarc0/whitehousevillage.git /opt/whv-gestao`,
+   depois `git -C /opt/whv-gestao config core.sshCommand "ssh -i ~/.ssh/github"`.
+4. **`infra/.env.production`** na VPS, preenchido (passo do primeiro deploy acima).
+5. **Segredos no GitHub** (Settings → Secrets and variables → Actions):
+   `VPS_HOST` = `82.29.59.229`, `VPS_PORT` (só se ≠ 22), `VPS_USER` = `deploy`, `VPS_SSH_KEY` = conteúdo de
+   `whv_deploy` (a privada), `VPS_KNOWN_HOSTS` = a linha do `ssh-keyscan`.
+6. Opcional: Settings → Environments → `producao` → *Required reviewers*, para cada
+   deploy esperar um clique seu.
+7. **Primeiro deploy à mão** (`bash infra/deploy.sh` como `deploy`) e o nginx do
+   host (acima). Daí em diante, merge na `main` = deploy.
+
+**Redeploy**: `git pull && bash infra/deploy.sh` — idempotente; migrations e seed
+só aplicam o que falta.
+
 ## 1. Ambientes
 
 | Ambiente | Onde | Domínio | Dados |
@@ -22,7 +157,7 @@ Configuração **100% por variável de ambiente** (`.env.example` é a fonte da 
              ┌───────────────┬───────────┴────────────┬──────────────┐
              ▼               ▼                        ▼              ▼
         admin (Next)     api (Go)                worker (Go)     postgres:16
-        standalone       chi + pgx               River jobs      volume nomeado
+        standalone       chi + pgx           loop próprio (*)    volume nomeado
                               │                       │              ▲
                               └───── LISTEN/NOTIFY ───┴──────────────┘
                                                               backup (cron pg_dump)
@@ -32,7 +167,7 @@ Configuração **100% por variável de ambiente** (`.env.example` é a fonte da 
 |---|---|---|
 | `traefik` | `traefik:v3` | Entrypoints 80/443, redirect para HTTPS, `acme.json` em volume com `chmod 600` |
 | `api` | multi-stage Go → `distroless/static` | Binário estático, usuário não-root, `/healthz` como healthcheck |
-| `worker` | mesma imagem, entrypoint `worker` | Jobs; escala independente da API |
+| `worker` | mesma imagem, entrypoint `worker` | (*) Loop próprio com um job, `holds.expire` (a expiração da pré-reserva), sem River. Escala independente da API. No dev, sobe no `make up` desde 02/10/2026 |
 | `admin` | `node:22-alpine` → `next start` (output standalone) | Só o BFF fala com a API |
 | `postgres` | `postgres:16-alpine` | Volume nomeado, `TZ=America/Fortaleza`, healthcheck `pg_isready` |
 | `migrate` | mesma imagem da API, entrypoint `migrate` | Roda sob demanda (`make migrate`), **nunca** no boot da API |
@@ -62,15 +197,18 @@ O que existe hoje em `.github/workflows/ci.yml` — a tabela é o arquivo, não 
 
 | Job | O que roda |
 |---|---|
-| `api` | `gofmt -l` (falha se houver arquivo fora de forma), `go vet ./...`, `go test ./... -race -count=1` |
+| `api` | `gofmt -l` (falha se houver arquivo fora de forma), `go vet ./...` e `go vet -tags=integration ./...`, `go test ./... -race -count=1` — o teste de contrato (toda rota na OpenAPI, seis verbos, permissão) roda aqui |
+| `lint-go` | `golangci-lint` na versão de `Makefile:GOLANGCI_LINT_VERSION` (v2.5.0, lida com `make -s golangci-versao`), instalado pela action e rodado por `make lint-golangci`, sem teto de repetição. Ainda **sem** a tag `integration` (6 apontamentos em `internal/router` de teste). Entrou em 02/10/2026 e não rodou num runner até o commit da Rodada 5 |
 | `migrations` | Postgres de serviço: `migrate up` → `version` → `down -all` → `up` → `version`, com o **nosso** `cmd/migrate` |
 | `integration` | Postgres de serviço: **schema → seed → suíte `-tags=integration` → concorrência repetida**. Detalhado abaixo |
-| `admin` | `pnpm install --frozen-lockfile`, `tsc --noEmit`, `pnpm build` |
-| `build-images` | Só em push para `main`: builda as imagens da API e do painel (sem push para registry enquanto não houver VPS) |
+| `admin` | `pnpm install --frozen-lockfile`, `pnpm lint` (eslint), `tsc --noEmit`, `pnpm test --run`, `pnpm build` |
+| `smoke` | `make smoke-stack`: sobe o stack com imagem reconstruída, migra, semeia, roda a fumaça do painel e a do site e confere o worker (`worker-vivo`) |
+| `site` | Constrói a imagem do site, sobe um contêiner dela **sem** o volume de desenvolvimento e roda a fumaça do site (`make smoke-site-imagem`) |
+| `build-images` | Só em push para `main`: builda as imagens da API, do painel e do site (sem push para registry enquanto não houver VPS); `needs` inclui `lint-go` e `site` |
 
-Pendências conhecidas do CI, para não parecerem entregues: `golangci-lint` e `eslint` ainda não têm job (rodam por `make lint`), o job de contrato (toda rota na OpenAPI) e o `e2e` com Playwright entram na Fase 1.
+Pendências conhecidas do CI, para não parecerem entregues: o `e2e` de jornada com escrita (Playwright) não existe; o lint não enxerga os arquivos `//go:build integration`; não há push de imagem nem deploy.
 
-Regras: `main` protegida, PR obrigatório, CI verde para merge, sem push direto.
+Regras-alvo: `main` protegida, PR obrigatório, CI verde para merge, sem push direto. **Ainda não são o estado**: quatro commits de 31/08 e 02/10 entraram por push direto (ver `roadmap.md`, Fase 2).
 
 ### 4.1 Job de integração — por que tem seed e por que repete
 

@@ -113,3 +113,40 @@ func TestRegistrarRecusaMotivoForaDoVocabulario(t *testing.T) {
 		t.Errorf("%d INSERT com motivo desconhecido; esperado 0", espiao.chamadas)
 	}
 }
+
+func TestRegistrarVariosGravaUmaInstrucaoComTodosOsIDs(t *testing.T) {
+	espiao := &execEspiao{}
+	ids := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	if err := RegistrarVarios(context.Background(), espiao, "contacts", ids, MotivoListaDeHospedes); err != nil {
+		t.Fatalf("RegistrarVarios: %v", err)
+	}
+	if espiao.chamadas != 1 {
+		t.Fatalf("instruções = %d, esperado 1", espiao.chamadas)
+	}
+	if got, ok := espiao.args[1].([]uuid.UUID); !ok || len(got) != 3 {
+		t.Fatalf("ids enviados = %#v", espiao.args[1])
+	}
+	if got := espiao.args[2].(string); got != MotivoListaDeHospedes {
+		t.Errorf("reason = %q", got)
+	}
+}
+
+func TestRegistrarVariosSemPessoaNaoGravaMasConfereOMotivo(t *testing.T) {
+	espiao := &execEspiao{}
+	if err := RegistrarVarios(context.Background(), espiao, "contacts", nil, MotivoListaDeHospedes); err != nil {
+		t.Fatalf("lista vazia virou erro: %v", err)
+	}
+	if espiao.chamadas != 0 {
+		t.Fatalf("lista vazia gravou %d vezes", espiao.chamadas)
+	}
+	if err := RegistrarVarios(context.Background(), espiao, "contacts", nil, "lista"); !errors.Is(err, errMotivoDesconhecido) {
+		t.Fatalf("motivo inventado com lista vazia passou: %v", err)
+	}
+}
+
+func TestRegistrarVariosPropagaAFalhaDoBanco(t *testing.T) {
+	espiao := &execEspiao{erro: errors.New("pii_access_log indisponível")}
+	if err := RegistrarVarios(context.Background(), espiao, "contacts", []uuid.UUID{uuid.New()}, MotivoOportunidade); err == nil {
+		t.Fatal("falha do banco foi engolida: a leitura sairia sem rastro")
+	}
+}

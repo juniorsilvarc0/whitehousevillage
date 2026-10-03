@@ -122,7 +122,7 @@ Navegação declarativa em `src/config/navigation.ts`. Cada item declara **recur
 | Componente | Nota de implementação |
 |---|---|
 | **`OccupancyMap`** | Linhas = 8 unidades agrupadas por produto + linha sintética "White House Completa". Colunas = dias (~90, virtualizados). Célula com cor de fundo pelo tipo de data e barra por cima: `hold` tracejado com contador de expiração, `confirmed` sólido, `maintenance` hachurado, `ota` com selo do canal. Drag cria bloqueio; hover mostra a tarifa. Atualiza por SSE. **É a tela mais cara do projeto — prototipar cedo.** |
-| **`QuoteBuilder`** | Noite a noite, agrupado por tipo, slider de desconto com semáforo de alçada (verde ≤5%, âmbar 6–10% "exige aprovação", vermelho >10% desabilita), limpeza fora do desconto, total e sinal |
+| **`QuoteBuilder`** | Noite a noite, agrupado por tipo, slider de desconto com semáforo de alçada (verde ≤5%, âmbar 6–10% "exige aprovação", vermelho >10% desabilita — *em 02/10/2026 o âmbar é só aviso: não há fluxo de aprovação no sistema; decisão 13 pendente do dono, em `roadmap.md`*), limpeza fora do desconto, total e sinal |
 | **`PipelineKanban`** | dnd-kit, movimento otimista com rollback, cor da etapa tinge a coluna (card fica neutro), menu "Mover para" como alternativa ao arrasto, faixa de SLA estourado no card |
 | **`OpportunityPage`** | Header + trilha de etapas + faixa de SLA + abas + rail lateral (alertas, próxima ação, linha do tempo) + cards de domínio com edição inline (salva no `blur`, sem botão Salvar) |
 | **`ChatShell`** | Escopo visual próprio (`.wa-surface`): o chat imita o WhatsApp, não o resto do app. Lista + thread + composer, ticks, takeover |

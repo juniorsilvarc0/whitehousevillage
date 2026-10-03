@@ -268,7 +268,17 @@ func validarEmail(erros map[string]string, v *string) {
 	if v == nil || strings.TrimSpace(*v) == "" {
 		return
 	}
-	if !httpx.ValidarValor(strings.TrimSpace(*v), "email,max=254") {
+	e := strings.TrimSpace(*v)
+	// `*` é a máscara que GET /contacts devolve (`f***@gmail.com`), e o
+	// validador de formato a APROVA — a RFC aceita `*` antes do `@`. Sem esta
+	// recusa, o formulário preenchido a partir da lista gravaria a máscara por
+	// cima do endereço verdadeiro, com 200. Nenhum cadastro real deste negócio
+	// usa `*` no e-mail.
+	if strings.Contains(e, "*") {
+		erros["email"] = "e-mail mascarado não é aceito: preencha o formulário pela ficha (GET /contacts/{id})."
+		return
+	}
+	if !httpx.ValidarValor(e, "email,max=254") {
 		erros["email"] = "e-mail inválido."
 	}
 }

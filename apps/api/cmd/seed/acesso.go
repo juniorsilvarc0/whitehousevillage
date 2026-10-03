@@ -355,6 +355,15 @@ var usuariosSeed = []usuarioSeed{
 	{"Corretor Demo", "corretor@wh.local", "corretor"},
 }
 
+// contasDeDesenvolvimentoLiberadas é a trava das contas de senha conhecida, num
+// lugar só porque duas etapas dependem dela: as contas (aqui) e o cadastro
+// comercial do corretor de desenvolvimento (corretores.go). Se cada uma lesse a
+// variável por conta própria, um ajuste numa deixaria a outra criando cadastro
+// de corretor para uma conta que não existe.
+func contasDeDesenvolvimentoLiberadas(st *estado) bool {
+	return !st.producao || os.Getenv("SEED_DEV_USERS") == "true"
+}
+
 func usuariosDeDesenvolvimento(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
 	var c contagem
 	c.Previstas = len(usuariosSeed)
@@ -362,7 +371,7 @@ func usuariosDeDesenvolvimento(ctx context.Context, tx pgx.Tx, st *estado) (cont
 	// Conta com senha publicada num repositório é porta dos fundos, não
 	// conveniência. Em produção o bloco só roda se alguém pedir explicitamente
 	// — e o aviso fica no log para quem pediu não esquecer de trocar depois.
-	if st.producao && os.Getenv("SEED_DEV_USERS") != "true" {
+	if !contasDeDesenvolvimentoLiberadas(st) {
 		slog.Warn("usuários de desenvolvimento ignorados em produção",
 			"motivo", "senha conhecida não entra em produção sem pedido explícito",
 			"como_forcar", "SEED_DEV_USERS=true")

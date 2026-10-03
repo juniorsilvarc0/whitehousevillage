@@ -154,7 +154,8 @@ func (r *Repository) Contexto(ctx context.Context, propriedade uuid.UUID, tabela
 		           cp.hold_hours,
 		           cp.discount_auto_pct::float8      AS auto_pct,
 		           cp.discount_approval_pct::float8  AS aprovacao_pct,
-		           cp.event_deposit_cents
+		           cp.event_deposit_cents,
+		           cp.quote_validity_days
 		      FROM commercial_policies cp, hoje
 		     WHERE cp.property_id = $1
 		       AND ( ($3::int IS NOT NULL AND cp.version = $3::int)
@@ -166,7 +167,7 @@ func (r *Repository) Contexto(ctx context.Context, propriedade uuid.UUID, tabela
 		       vigente.id,
 		       politica.version, politica.sinal_pct, politica.balance_due_days,
 		       politica.hold_hours, politica.auto_pct, politica.aprovacao_pct,
-		       politica.event_deposit_cents
+		       politica.event_deposit_cents, politica.quote_validity_days
 		  FROM hoje
 		  LEFT JOIN vigente  ON true
 		  LEFT JOIN politica ON true`
@@ -182,9 +183,10 @@ func (r *Repository) Contexto(ctx context.Context, propriedade uuid.UUID, tabela
 		auto     *float64
 		aprov    *float64
 		caucao   *int64
+		validade *int
 	)
 	err := r.exec(ctx).QueryRow(ctx, q, propriedade, tabela, versao).
-		Scan(&hoje, &rateID, &versaoDB, &sinal, &saldo, &hold, &auto, &aprov, &caucao)
+		Scan(&hoje, &rateID, &versaoDB, &sinal, &saldo, &hold, &auto, &aprov, &caucao, &validade)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return c, apperr.NotFound("Propriedade")
 	}
@@ -211,6 +213,7 @@ func (r *Repository) Contexto(ctx context.Context, propriedade uuid.UUID, tabela
 		DiscountAutoPct:     *auto,
 		DiscountApprovalPct: *aprov,
 		EventDeposit:        money.Cents(*caucao),
+		QuoteValidityDays:   *validade,
 	}
 	return c, nil
 }

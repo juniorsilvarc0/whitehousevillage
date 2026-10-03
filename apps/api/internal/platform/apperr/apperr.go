@@ -1,11 +1,15 @@
 // Package apperr define o erro da aplicação. O código é estável e faz parte do
 // contrato da API: o front reage ao Code, nunca ao texto da mensagem.
+//
+// O vocabulário inteiro — os 37 códigos do enum de `components.responses.Erro`,
+// cada um com o seu status e a sua mensagem padrão — mora em catalogo.go, e só
+// lá. Módulo não declara código: importa o erro daqui e, quando o contexto pede,
+// troca a frase com WithMessage e acrescenta o porquê com WithDetails.
 package apperr
 
 import (
 	"errors"
 	"fmt"
-	"net/http"
 )
 
 type Error struct {
@@ -44,64 +48,12 @@ func (e *Error) WithStatus(s int) *Error { c := *e; c.status = s; return &c }
 // consome.
 func (e *Error) WithMessage(m string) *Error { c := *e; c.Message = m; return &c }
 
-func define(code, msg string, status int) *Error {
-	return &Error{Code: code, Message: msg, status: status}
-}
-
-// Erros de plataforma.
-var (
-	Internal     = define("INTERNAL", "Erro interno.", http.StatusInternalServerError)
-	Unauthorized = define("UNAUTHORIZED", "Autenticação necessária.", http.StatusUnauthorized)
-	Forbidden    = define("FORBIDDEN", "Você não tem permissão para isso.", http.StatusForbidden)
-	RateLimited  = define("RATE_LIMITED", "Muitas requisições. Tente em instantes.", http.StatusTooManyRequests)
-)
-
-// Erros de domínio — o vocabulário do negócio, estável no contrato.
-var (
-	DateConflict        = define("DATE_CONFLICT", "As datas selecionadas acabaram de ser ocupadas.", http.StatusConflict)
-	MinStayNotMet       = define("MIN_STAY_NOT_MET", "Estadia abaixo do mínimo do período.", http.StatusUnprocessableEntity)
-	CapacityExceeded    = define("CAPACITY_EXCEEDED", "Número de hóspedes acima da capacidade.", http.StatusUnprocessableEntity)
-	DiscountAboveLimit  = define("DISCOUNT_ABOVE_LIMIT", "Desconto acima da alçada.", http.StatusUnprocessableEntity)
-	HoldExpired         = define("HOLD_EXPIRED", "A pré-reserva expirou.", http.StatusConflict)
-	IdempotencyMismatch = define("IDEMPOTENCY_MISMATCH", "Chave de idempotência reutilizada com corpo diferente.", http.StatusConflict)
-
-	// Os dois abaixo existem aqui porque quem os levanta é a PLATAFORMA, e não
-	// um módulo: `db.MapError` traduz as constraint triggers do banco
-	// (`unit_types_consumes_com_venda_viva` e
-	// `reservation_units_composicao_completa`) e precisa de um erro que não
-	// dependa de importar módulo nenhum — o pacote db é importado por todos
-	// eles, e o ciclo seria imediato.
-	//
-	// Os módulos `inventario`, `tarifario`, `crm`, `contatos` e `reservas`
-	// declaram versões próprias destes mesmos códigos, com mensagem própria.
-	// É dívida conhecida e está registrada em docs/roadmap.md (D3): o código é
-	// o que o contrato fixa, a mensagem é livre, e o teste de espelho
-	// (`internal/router/contrato_de_erros_test.go`) garante que nenhuma das
-	// cópias invente um code fora do enum.
-	ResourceInUse         = define("RESOURCE_IN_USE", "Ainda há vínculo ativo neste registro.", http.StatusConflict)
-	CompositionIncomplete = define("COMPOSITION_INCOMPLETE", "A casa inteira não pode ser vendida pela metade.", http.StatusUnprocessableEntity)
-)
-
-// Erros de identidade e acesso.
-//
-// InvalidCredentials é deliberadamente o MESMO erro para e-mail inexistente,
-// senha errada e e-mail bloqueado por tentativas. Um código próprio para
-// "bloqueado" confirmaria que a conta existe — vira oráculo de enumeração.
-var (
-	InvalidCredentials = define("INVALID_CREDENTIALS", "E-mail ou senha inválidos.", http.StatusUnauthorized)
-	TokenInvalid       = define("TOKEN_INVALID", "Token ausente, expirado ou desconhecido.", http.StatusUnauthorized)
-	TokenReused        = define("TOKEN_REUSED", "Sessão comprometida: faça login novamente.", http.StatusUnauthorized)
-	EmailInUse         = define("EMAIL_IN_USE", "E-mail já cadastrado.", http.StatusConflict)
-	RoleImmutable      = define("ROLE_IMMUTABLE", "Perfil de sistema não pode ser alterado nem excluído.", http.StatusConflict)
-	RoleInUse          = define("ROLE_IN_USE", "Ainda há usuários neste perfil.", http.StatusConflict)
-)
-
 func NotFound(resource string) *Error {
-	return define("NOT_FOUND", fmt.Sprintf("%s não encontrado.", resource), http.StatusNotFound)
+	return naoEncontrado.WithMessage(fmt.Sprintf("%s não encontrado.", resource))
 }
 
 func Validation(details any) *Error {
-	return define("VALIDATION_ERROR", "Dados inválidos.", http.StatusUnprocessableEntity).WithDetails(details)
+	return validacao.WithDetails(details)
 }
 
 // From converte qualquer erro no erro da aplicação, preservando a causa.

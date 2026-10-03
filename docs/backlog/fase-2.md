@@ -7,6 +7,10 @@
 > schema `20260827150000`. Tudo que este documento afirma sobre o estado atual foi
 > **medido no stack no ar** — API em `localhost:8080`, painel em `localhost:3100`,
 > Postgres em `localhost:5433` — e a medida está escrita junto da afirmação.
+>
+> **As medidas dos itens são de 31/08.** O estado em 02/10/2026 está no quadro
+> "Estado em 02/10/2026", logo abaixo da ordem; quando um item diz "hoje", leia
+> "em 31/08".
 
 ## O que a fase entrega, em linguagem de negócio
 
@@ -101,6 +105,49 @@ com sete itens que não entregam tela nenhuma.
 o roadmap manda e porque cada um deles duplica alguma coisa que o financeiro vai
 usar. O que roda em paralelo está no quadro no fim do documento.
 
+## Estado em 02/10/2026
+
+Conferido pelo `squad-lead` no fim da Rodada 5, sobre a árvore que o integrador
+commita (schema `20261002180000`). "Rodada 5" quer dizer: está na árvore,
+passou na revisão e nos portões refeitos (`make it-suite` com o banco recriado,
+24 pacotes; a mesma suíte com `-v`, 701 testes de topo, 0 FAIL, 0 SKIP), e entra
+no commit do fim da rodada. Este documento não tinha campo de estado, e por isso
+envelheceu de 31/08 a 02/10 dizendo "aberto" de cinco itens já entregues — é o
+risco R5 acontecendo com o próprio backlog.
+
+| # | Estado | Commit | Evidência |
+|---|---|---|---|
+| F2-01 | **feito** | `91d2388` | `internal/platform/pii`; `grep -rn "registrarAcessoPII\|semPII" apps/api/internal/modules` = 0 |
+| F2-02 | **feito** | `91d2388` | `internal/platform/idempotencia`; `ls apps/api/internal/modules/*/idempotencia*.go` não acha arquivo; `TestChaveNaoVazaEntreAtores` |
+| F2-03 | **feito** | Rodada 5 | `apperr/catalogo.go` com os 37; `grep -rn '"RESOURCE_IN_USE"' apps/api --include='*.go' \| grep -v _test` = 1 linha; `apperr/catalogo_test.go` (5 testes, 3 controles negativos). `definir` privado no lugar do `Definir` público — ver a prova reescrita no item |
+| F2-04 | **feito** | `91d2388` | migration `20260831100000`; seed com a coluna |
+| F2-05 | **feito** | Rodada 5 | `TestPoliticaNaoPerdeColunaAoRepublicar` e `TestValidadeDoOrcamentoVemDaPoliticaECongelaNaEmissao`, com controles negativos; `grep -rn validadePadraoEmDias apps/api/internal` = 0 |
+| F2-06 | **feito** | `91d2388` | `kanban.tsx:175` assina `crm`; `kanban.test.tsx` com identidade nova de `criarFonte`; bloco "funil ao vivo" na fumaça, verde no CI de `957e6e3` |
+| F2-07 | **feito** | `91d2388` | `docs/db.md` §7 com 23 colunas e sem `quote_id`. As duas afirmações falsas que o mesmo commit trouxe (validade "já" vinda da coluna; `SchemaVersionEsperada` atrasada) foram corrigidas pelo `db-migrations` na Rodada 5 |
+| F2-08 | aberto | — | `grep -c '^  /finance' apps/api/openapi/openapi.yaml` = 0 (75 paths, 147 operações, iguais a `957e6e3`). Espera as decisões 9 e 10 do roadmap para os cenários da comissão. O que a Rodada 5 pôs em `internal/domain/commission` é a **atribuição** do corretor (F2-13), não a base da comissão |
+| F2-09 | **feito** | Rodada 5 | migration `20261002180000`: `brokers` (9 colunas), `reservations_broker_id_fkey` e `users_broker_id_fkey` composta; `TestVendaComCorretorInexistenteEhRecusadaPeloBanco` (23503 no banco), `TestAdminAtribuiCorretorExistenteEOInexistenteEh422` (422 em `details.broker_id` pela API), `TestOutraContaNaoApontaParaOCadastroDoCorretor`; ciclo `up → down -all → up` medido pelo `db-migrations` num banco descartável |
+| F2-10 | aberto | — | nenhuma das tabelas do financeiro existe. Entrada F2-08 |
+| F2-11 | aberto | — | `select count(*) from resources` = 23 no banco recriado em 02/10; sem `finance.payments` nem `finance.reconciliation` |
+| F2-12 | aberto | — | ver a nota da caução no item: **escrito à letra, cobra a caução duas vezes** |
+| F2-13 | **parcial** | Rodada 5 | **feita a metade de escalada**: `own` só grava `null` ou o próprio corretor, na criação e na edição, conferido no domínio (`commission.ResolveBroker`) e no SQL da escrita; `TestCorretorOwnNaoAtribuiAVendaAoColega`, `TestCorretorOwnOmitindoGravaOProprio`, `TestCorretorOwnNaEdicao`, `TestGuardaDoCorretorNoSQLRecusaContaQueMudou`. **Falta a comissão** (precisa de F2-10 e F2-12) e o estorno na troca de corretor de venda confirmada. A regra do `PATCH` foi emendada (ver o item) |
+| F2-14 | aberto | — | — |
+| F2-15 | aberto | — | ver a nota da caução no item |
+| F2-16 | aberto | — | — |
+| F2-17 | aberto | — | e soma a **D11** do roadmap: o painel ainda trata a lista mascarada de contatos como ficha cheia |
+| F2-18 | aberto | — | — |
+| F2-19 | aberto | — | — |
+| F2-20 | aberto | — | — |
+| F2-21 | aberto | — | — |
+| F2-22 | **parcial** | Rodada 5 | a leitura de hóspedes que **já existia** em `GET /reservations/{id}/full` passou a gravar uma linha `rooming_list` de `pii_access_log` por hóspede exibido, com falha fechada (`TestFullDaReservaRegistraCadaHospedeExibido`). As rotas `/reservations/{id}/guests` e o índice único parcial de titular continuam faltando |
+| F2-23 | **feito** na API | Rodada 5 | coleção mascarada (`ContatoNaLista`, sem `birth_date` e `notes`); `PATCH` grava `detail`; e-mail com `*` dá 422; `TestColecaoDeContatosNaoServeDocumentoCheioComoCorretor`, `TestPatchDeContatoRegistraLeituraERecusaEmailMascarado`. O painel não acompanhou: **D11** |
+| F2-24 | aberto | — | entrada F2-10, F2-12, F2-22 |
+
+Saldo: **9 feitos, 2 parciais, 13 abertos.** O Bloco 0 está fechado; o Bloco 1
+começou pelo F2-09, fora da ordem do quadro (o F2-08, que é entrada dele, está
+aberto), porque a metade do F2-09 que importava — a FK — não dependia da decisão
+que o F2-08 tinha de tomar: o `docs/db.md` §10 já previa `brokers`, e foi para
+`brokers(id)` que a FK apontou.
+
 ---
 
 # Bloco 0 — A dívida abre a fase
@@ -194,6 +241,16 @@ Paga **D3**.
   `tarifario/erros.go:26`, `crm/crm.go:167`, `contatos/contatos.go:136`,
   `inventario/erros.go:27`, com **quatro** frases distintas); e
   `internal/router/contrato_de_erros_test.go` continua verde nos dois sentidos.
+- **Prova reescrita em 02/10/2026, na entrega (Rodada 5)**: entrou `definir`
+  **privado**, não `Definir` público — um construtor público é a porta para o
+  módulo voltar a declarar código, que é a dívida que o item paga. O que se prova
+  é: `apperr` declara os 37 (`go test ./internal/platform/apperr/` —
+  `TestCatalogoEspelhaOEnumDoContrato`); nenhum pacote fora do `apperr` declara
+  código (`TestNenhumPacoteDeclaraCodigoDeErroProprio`, vermelho com a cópia de
+  `tarifario/erros.go` de volta e com um `apperr.Error{…}` montado num módulo);
+  e o `grep` **com aspas**, `grep -rn '"RESOURCE_IN_USE"' apps/api --include='*.go' | grep -v _test`,
+  devolve uma linha — sem as aspas ele casa também os comentários que citam o
+  código, e nunca zera.
 - **Correção da medida do roadmap**: a entrada D3 diz "20 dos 37 códigos são
   declarados fora de `apperr`". Está invertido. **Medido hoje**: `apperr` declara
   **20** dos 37; **17** nascem nos módulos (`RATE_NOT_FOUND`, `POLICY_IMMUTABLE`,
@@ -248,6 +305,15 @@ Fecha **D7**. Este item existe separado do F2-04 porque **a metade perigosa é e
   Controle negativo obrigatório: **remova `quote_validity_days` da lista do INSERT e
   mostre o teste ficando vermelho.** Um teste que passa sem a coluna na lista não é
   guarda de nada. E `grep -rn validadePadraoEmDias apps/api` devolve zero.
+- **Prova corrigida em 02/10/2026**: o último `grep` é impossível como escrito —
+  a migration `20260831100000`, já aplicada, cita o nome no comentário (linha 15),
+  e migration aplicada não se edita. Vale `grep -rn validadePadraoEmDias apps/api/internal`
+  = 0, que é onde a constante vivia. Sobram duas citações históricas com dono:
+  o comentário de `cmd/seed/tarifario.go:147` (`db-migrations`) e o texto de
+  `openapi.yaml:6519-6522`, que repete a prova antiga (`tech-lead`). Na entrega,
+  o `INSERT` deixou de listar colunas: a versão nova é a anterior copiada pelo
+  banco (`jsonb_populate_record`), e o controle negativo foi medido nas duas
+  formas — copiar sobrescrevendo a coluna, e voltar à lista nome a nome sem ela.
 - **Bloqueia**: ninguém diretamente — mas é o item que impede que **toda** coluna
   criada de F2-09 em diante herde o mesmo silêncio.
 
@@ -482,6 +548,20 @@ Este item saiu de uma medida feita hoje e **não estava em nenhuma lista de dív
   a primeira fecha em 3 ms e a segunda em 10 ms, não houve disputa. A garantia é o
   índice único parcial do F2-10; o teste é o que mostra que ele está atuando.
   **Controle negativo: remova o índice e mostre o teste ficando vermelho.**
+- **⚠ A caução seria cobrada duas vezes — pendente de decisão do dono (decisão 9
+  do roadmap).** Medido em 02/10 no domínio: `internal/domain/booking/booking.go:186-188`
+  faz `Total = Subtotal − Desconto + Limpeza + Caução`, `Sinal = Total × deposit_pct`
+  e `Saldo = Total − Sinal`. Ou seja, a caução **já está dentro do total**, e o sinal
+  incide sobre ela. Seguida à letra, a prova acima gera o saldo como `total − sinal`
+  (que contém a caução) **e** um terceiro recebível `security_deposit` com a caução
+  de novo: o hóspede de evento seria cobrado duas vezes pelos mesmos R$ 2.000. O
+  item não começa antes de o dono dizer se a caução entra no total e na base do
+  sinal; conforme a resposta, ou o saldo vira `total − caução − sinal` e o motor
+  continua como está, ou o motor tira a caução do total (mudança no `tech-lead`,
+  com os testes de mesa do orçamento acompanhando) e o recebível de caução fica
+  sozinho. Nos dois casos, a prova ganha uma linha: **a soma dos recebíveis da
+  reserva é igual ao total que o hóspede aceitou no orçamento**, nem um centavo a
+  mais.
 - **Bloqueia**: F2-13, F2-14, F2-15, F2-16, F2-17, F2-18.
 - **Auditoria**:
   - **Idempotência**: `Idempotency-Key` já é obrigatória no `/confirm` — medido,
@@ -517,6 +597,24 @@ Este item saiu de uma medida feita hoje e **não estava em nenhuma lista de dív
   distinção que o §1 da spec registra e que já derrubou uma implementação correta por
   critério mal escrito.
 - **Bloqueia**: F2-16, F2-17, F2-18.
+- **Estado em 02/10/2026 — parcial.** A metade de **escalada** entrou na Rodada 5,
+  antes da comissão, de propósito: ela fecha o defeito medido em 31/08
+  (`WH-2026-0009`) e não depende de tabela financeira nenhuma. A regra mora em
+  `internal/domain/commission.ResolveBroker` (função pura, 22 casos de mesa e 864
+  combinações exaustivas) e é conferida **também no SQL da escrita** — o `INSERT`
+  e o `UPDATE` de reserva comparam com o `users.broker_id` do ator lido na própria
+  instrução, e zero linhas vira `403`. Falta a comissão, que espera F2-10 e F2-12.
+- **Emenda de 02/10/2026 à "escalada por edição" abaixo.** O texto pedia escopo
+  `all` para qualquer `PATCH` de `broker_id`. O contrato da Rodada 5 abriu a
+  edição ao `own` com três travas, e a revisão aceitou: em `own`, a troca só vai
+  de `null` para o próprio corretor ou do próprio para `null`; só sobre venda que
+  não é de outro corretor (`replaces_other_broker`); e só em `quote` ou `hold`
+  (`reservation_confirmed`). De `confirmed` em diante, só `all`, com `audit_log`
+  — e, quando a comissão existir, com o estorno. A razão: a comissão nasce no
+  `/confirm`, então antes dele nenhuma troca move dinheiro, e "atribuir a mim a
+  venda que é minha" é uso legítimo que o `all` puro proibiria. A recusa é `403`
+  com `details {field, scope, reason}`; corretor inexistente em escopo `all` é
+  `422` em `details.broker_id`, pela FK.
 - **Auditoria** — este é o item mais sensível da fase:
   - **Escopo `own` no SQL, não na aplicação**: o filtro é `AND c.broker_id = $ator`
     dentro do `WHERE`, como `crm/repository_oportunidades.go:118` já faz para
@@ -583,6 +681,12 @@ Este item saiu de uma medida feita hoje e **não estava em nenhuma lista de dív
   o `dry_run` já existe e funciona (medido: respondeu com `refund_cents` e
   `dry_run:false` na execução real), e ele não pode ganhar efeito colateral agora.
 - **Bloqueia**: F2-16, F2-18.
+- **⚠ Caução contada duas vezes — pendente da mesma decisão do F2-12** (decisão 9
+  do roadmap). Se a caução continuar dentro do total e da base do sinal
+  (`booking.go:186-188`), a devolução dela no check-out tem de sair do que entrou
+  **como caução**, e não de um recebível próprio que o F2-12 cobraria em dobro. E a
+  retenção parcial depende de outra decisão (11: quem autoriza reter e com que
+  comprovação). O item não fecha a prova do check-out antes das duas.
 - **Auditoria**: o valor devolvido sai de `deposit_paid_cents` da reserva, que **já
   tem faixa** (`1 <= pago <= total`, fechada na rodada anterior depois de uma
   devolução de R$ 960.000 numa venda de R$ 1.920). Este item não pode criar um
@@ -724,6 +828,15 @@ Este item saiu de uma medida feita hoje e **não estava em nenhuma lista de dív
   por índice único parcial, não por `SELECT` antes do `INSERT`); e
   `select count(*) from pii_access_log` **aumenta** a cada leitura da lista.
 - **Bloqueia**: F2-24.
+- **Estado em 02/10/2026 — parcial.** A verificação de 02/10 achou o que este item
+  não previa: a rooming list **já era servida** — `GET /reservations/{id}/full`
+  devolvia nome e telefone de cada hóspede, inclusive ao corretor nas reservas
+  `own`, sem gravar nada. Na Rodada 5 essa leitura passou a gravar uma linha
+  `reason='rooming_list'` em `pii_access_log` **por hóspede exibido**, numa
+  instrução só (`pii.RegistrarVarios`), depois de todas as leituras e com falha
+  fechada; reserva fora do escopo dá 404 antes e não grava nada
+  (`TestFullDaReservaRegistraCadaHospedeExibido`, vermelho sem a chamada). As
+  rotas `/guests` e o índice único parcial de titular continuam a fazer.
 - **Auditoria**: a rooming list é a tela mais densa em PII da fase — nome, CPF e
   telefone de até 24 pessoas numa resposta. Três exigências, todas com teste:
   ler a lista grava `pii_access_log`; a resposta **não** entra em log de aplicação
@@ -766,6 +879,17 @@ Item saído de uma medida feita hoje. **Não estava em nenhuma lista de dívida.
 - **Auditoria**: é o item de PII da fase. Vale para **toda** coleção nova: se a
   resposta identifica a pessoa, ou ela é mascarada, ou o acesso é registrado. Não há
   terceira opção, e "é só a lista" já foi tentada.
+- **Estado em 02/10/2026 — feito na API (Rodada 5), com a regra escrita no topo
+  da OpenAPI**: coleção mascara e não grava; registro individual devolve cheio e
+  grava. `GET /contacts` devolve `ContatoNaLista` (documento `***.***.777-35`,
+  telefone `+*********0000`, e-mail `f***@gmail.com`, sem `birth_date` e sem
+  `notes`); os filtros `q`, `phone` e `doc_number` seguem comparando o valor cheio
+  no servidor. Foram junto três portas vizinhas: `PATCH /contacts/{id}` com corpo
+  vazio devolvia a ficha cheia sem rastro (agora grava `detail`); e-mail com `*`
+  é `422`, para a máscara nunca ser gravada por cima do endereço; o telefone do
+  lead sai sempre mascarado. **O painel não acompanhou** — o "Editar" da lista
+  monta o formulário com a linha mascarada e salva por `PUT`: é a dívida **D11** do
+  roadmap, primeiro item do `next-frontend` na próxima rodada.
 
 ---
 
@@ -1011,7 +1135,7 @@ Nada aqui desaparece: o que é recusado vira linha no `roadmap.md`, com efeito e
 | Pedido | Decisão | Motivo |
 |---|---|---|
 | **Chat WhatsApp / uazapi (1g)** | Fora. Não entra no backlog, não é proposto, não é estimado | **Decisão explícita do dono do produto.** Continua sem fase marcada no roadmap: volta quando ele pedir. O painel já deixou de anunciar `/app/chat` como pronto, justamente para não prometer o que não existe |
-| **D1 e D4 — limitador no Redis e IP real atrás do BFF** | Ficam na Fase 6 | O roadmap diz, e está certo: contador distribuído com a chave errada distribui o mesmo erro; os dois passos vão juntos. O que a Fase 2 faz é **vigiar** — R4 acima transforma a dívida em teste que avisa antes do usuário |
+| **D1 e D4 — limitador no Redis e IP real atrás do BFF** | ~~Ficam na Fase 6~~ **Corrigido em 02/10/2026**: saem da Fase 6 e viram pré-requisito de qualquer rota `/public/*` em produção (passo B0 de `unificacao-site-crm.md`) | Continua certo que contador distribuído com a chave errada distribui o mesmo erro, e que os dois passos vão juntos. O que mudou é o prazo: a decisão de 02/10 abriu a reserva ao público, e numa porta aberta à internet o mapa por processo é limite nenhum. Não entram como item **desta** fase porque a ordem entre o financeiro e a unificação é decisão do dono (decisão 1 do roadmap); o R4 continua valendo como vigia do painel — e a sonda de 429 que ele prometia na fumaça **ainda não existe** (conferido em 02/10) |
 | **Portal do corretor, contrato em PDF, BI e KPIs** | Fase 3 | O corretor desta fase ganha **a comissão dele na tela** (F2-13, F2-17), que é o §11 da spec. Operar sozinho no próprio escopo é outra fase, e depende de coisas que ainda não existem |
 | **Repasse ao proprietário (`owner_payouts`)** | Schema sim, apuração não | `docs/db.md §10` prevê a tabela e o F2-10 a cria com o resto do modelo, para não abrir migration de novo depois. A **apuração por competência com snapshot da regra** fica para quando houver mais de um mês de dados reais para conferir contra — apurar contra base vazia é escrever um relatório que ninguém consegue verificar |
 | **Inventário operacional, ordem de manutenção, checklist de limpeza** | Fase 5 | A spec §12 liga a avaria à retenção de caução, e é o único fio que puxa para cá. A Fase 2 fecha esse fio com o laudo **anexado ao pagável de devolução** (F2-15), sem trazer o módulo inteiro |

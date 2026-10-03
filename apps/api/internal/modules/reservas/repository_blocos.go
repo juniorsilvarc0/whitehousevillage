@@ -356,7 +356,7 @@ func (r *Repository) Realocar(ctx context.Context, e Estado, de, para uuid.UUID,
 	if _, errRB := exec.Exec(ctx, `ROLLBACK TO SAVEPOINT realocacao`); errRB != nil {
 		return db.MapError(err)
 	}
-	return UnidadeIndisponivel.WithDetails(map[string]any{
+	return apperr.UnitNotAvailable.WithDetails(map[string]any{
 		"unit_code": codigoDestino,
 		"period":    periodo(e.CheckIn, e.CheckOut),
 	}).WithCause(err)
@@ -554,7 +554,7 @@ func (r *Repository) LiberarBloqueio(ctx context.Context, propriedade, id uuid.U
 		return Bloqueio{}, db.MapError(err)
 	}
 	if antes.ReservaID != nil {
-		return antes, EstadoInvalido.WithDetails(map[string]any{
+		return antes, apperr.InvalidStateTransition.WithMessage(mensagemTransicaoDaReserva).WithDetails(map[string]any{
 			"reservation_id": antes.ReservaID.String(),
 			"hint":           "bloqueio de reserva se solta por /cancel, /check-out ou pelo job de expiração.",
 		})
@@ -562,7 +562,7 @@ func (r *Repository) LiberarBloqueio(ctx context.Context, propriedade, id uuid.U
 	// Bloco terminal não se libera duas vezes. `completed` em especial: liberá-lo
 	// seria dizer que a estadia não aconteceu.
 	if BlocoTerminal(antes.Status) {
-		return antes, EstadoInvalido.
+		return antes, apperr.InvalidStateTransition.
 			WithMessage("Este bloqueio já está encerrado.").
 			WithDetails(map[string]any{
 				"status":  antes.Status,

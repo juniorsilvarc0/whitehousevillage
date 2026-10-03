@@ -254,7 +254,8 @@ type Pedido struct {
 	OportunidadeID *uuid.UUID `json:"opportunity_id"`
 
 	// ValidoAte é até quando este preço fica de pé. Ausente vale
-	// `validadePadraoEmDias` a partir da emissão.
+	// `quote_validity_days` dias da política que precificou o orçamento, a
+	// partir da emissão (booking.QuoteValidUntil).
 	ValidoAte *string `json:"valid_until"`
 }
 

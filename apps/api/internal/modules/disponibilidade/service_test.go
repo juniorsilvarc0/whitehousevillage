@@ -523,7 +523,7 @@ func TestTraduzirRegraPreservaCodigoStatusEDetalhes(t *testing.T) {
 		{"CAPACITY_EXCEEDED", 422},
 		{"MIN_STAY_NOT_MET", 422},
 		{"DISCOUNT_ABOVE_LIMIT", 422},
-		// Emitido hoje por booking.Build e ainda sem constante em apperr.
+		// Emitido por booking.Build; o status vem de apperr.RateNotFound.
 		{"RATE_NOT_FOUND", 422},
 	}
 	for _, c := range casos {

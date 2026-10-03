@@ -202,12 +202,13 @@ func (r *Repository) Vinculos(ctx context.Context, id uuid.UUID) (Vinculos, erro
 		       (SELECT count(*) FROM crm_activities     WHERE contact_id = $1),
 		       (SELECT count(*) FROM crm_notes          WHERE contact_id = $1),
 		       (SELECT count(*) FROM reservation_guests WHERE contact_id = $1),
-		       (SELECT count(*) FROM quotes             WHERE contact_id = $1)`
+		       (SELECT count(*) FROM quotes             WHERE contact_id = $1),
+		       (SELECT count(*) FROM brokers            WHERE contact_id = $1)`
 
 	var v Vinculos
 	if err := r.exec(ctx).QueryRow(ctx, q, id).Scan(
 		&v.Reservas, &v.Leads, &v.Oportunidades, &v.Atividades,
-		&v.Notas, &v.Hospedes, &v.Orcamentos); err != nil {
+		&v.Notas, &v.Hospedes, &v.Orcamentos, &v.Corretores); err != nil {
 		return v, db.MapError(err)
 	}
 	return v, nil

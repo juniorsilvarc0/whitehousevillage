@@ -87,12 +87,7 @@ func TestRemarcacaoNaoFazSinalExcedenteSumir(t *testing.T) {
 	if r.Status != http.StatusOK {
 		t.Fatalf("POST /cancel = %d (%s)", r.Status, r.Corpo)
 	}
-	var fim struct {
-		Devolucao int64 `json:"refund_cents"`
-		Retido    int64 `json:"retained_cents"`
-		Credito   int64 `json:"credit_cents"`
-	}
-	fim = dado[struct {
+	fim := dado[struct {
 		Devolucao int64 `json:"refund_cents"`
 		Retido    int64 `json:"retained_cents"`
 		Credito   int64 `json:"credit_cents"`

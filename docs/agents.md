@@ -25,7 +25,9 @@ O que desacopla o time é o **contrato**: `apps/api/openapi/openapi.yaml` + `doc
 
 O squad lead decide **quais fatias existem e em que ordem**; o tech lead decide **como uma fatia é desenhada**. A fronteira importa porque os dois revisam, e revisão em duas camadas só não vira burocracia se cada uma olhar coisa diferente: o tech lead cobra o desenho (o domínio está puro? o contrato veio antes?), o squad lead cobra o que entra (isso funciona servindo? a garantia está no banco? existe teste que possa falhar? a dívida tem efeito, motivo e fase escritos?).
 
-Os dois compartilham `docs/`, e por isso a divisão é nominal: `roadmap.md` e `backlog/**` são do squad lead; `spec.md`, `db.md`, `api.md` e o resto são do tech lead.
+Os dois compartilham `docs/`, e por isso a divisão é nominal: `roadmap.md` e `backlog/**` são do squad lead; `spec.md`, `api.md`, `prd.md`, `infra.md`, `ui.md`, `unificacao-site-crm.md` e o `README.md` da raiz são do tech lead. Três documentos de `docs/` têm dono **fora** dos dois, pela tabela acima: `db.md` (`db-migrations`), `integracao.md` (`integracoes`) e `testing.md` (`qa-testes`). Até 02/10/2026 esta frase dava `db.md` ao tech lead e contradizia a tabela; o `README.md` não tinha dono e prometia River, Traefik e `/metrics` que não existem.
+
+Quem decide **o que** vira fatia, e em que ordem, é o squad lead; quem aciona os agentes de uma fatia já decidida é o tech lead; tarefa transversal o squad lead aciona direto. Nenhum dos dois é "o único que aciona os demais".
 
 ### Por que `internal/domain` é do tech-lead
 
