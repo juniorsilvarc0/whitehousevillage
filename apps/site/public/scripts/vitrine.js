@@ -107,8 +107,25 @@ window.WH = (function () {
       method: 'POST',
       headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify(pedido)
+    }),
+    /* Pré-reserva: grava de verdade e segura a data. A chave de idempotência é
+       de quem chama, uma por tentativa — repetir o envio (rede caiu, clique
+       duplo) com a MESMA chave devolve a mesma pré-reserva, nunca uma segunda. */
+    preReservar: (pedido, chave) => pedir('/holds', {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'Idempotency-Key': chave },
+      body: JSON.stringify(pedido)
     })
   };
+
+  /* Chave de idempotência: aleatória e longa o bastante para não colidir entre
+     visitantes. randomUUID só existe em contexto seguro (https/localhost). */
+  function novaChave() {
+    if (window.crypto && crypto.randomUUID) return 'site-' + crypto.randomUUID();
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    return 'site-' + Array.from(b, x => x.toString(16).padStart(2, '0')).join('');
+  }
 
   /* ─── Formatação ─── */
 
@@ -148,5 +165,5 @@ window.WH = (function () {
   /* Escapa texto antes de ir para innerHTML — nomes vêm do banco. */
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  return { api, textoDe, agrupar, CATEGORIAS, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
+  return { api, novaChave, textoDe, agrupar, CATEGORIAS, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
 })();

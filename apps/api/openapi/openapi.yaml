@@ -5653,6 +5653,67 @@ paths:
         "422": { $ref: "#/components/responses/Erro" }
         "429": { $ref: "#/components/responses/Erro" }
 
+  /public/holds:
+    post:
+      tags: [Vitrine]
+      summary: Pré-reserva feita pelo próprio cliente no site (B1)
+      description: |
+        Segura a data pelo prazo de pré-reserva da política (`hold_hours`) sem
+        pagamento. Passa pelo MESMO serviço de `POST /reservations` — orçamento
+        recalculado no servidor, snapshot por noite, `EXCLUDE` contra
+        overbooking —, assinado pela conta de serviço do site, com `source`
+        `site`. O contato é criado com o consentimento registrado; telefone já
+        cadastrado reaproveita a ficha existente sem alterá-la.
+
+        Travas de porta anônima: `consent` precisa ser `true`; no máximo 2
+        pré-reservas do site em aberto por telefone (`409 HOLD_LIMIT_REACHED`);
+        limite próprio por IP além do da vitrine (`429 RATE_LIMITED`). Data
+        ocupada entre o calendário e o envio é `409 DATE_CONFLICT`. A resposta
+        não carrega id interno, dono, corretor, tabela nem versão de política.
+      security: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 8, maxLength: 255 }
+          description: |
+            Obrigatório. O site gera uma chave por tentativa de pré-reserva; a
+            repetição com o mesmo corpo devolve a resposta original (mesmo
+            `201`, mesmo código), com corpo diferente `409 IDEMPOTENCY_MISMATCH`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [unit_type_id, check_in, check_out, guests_count, name, phone, consent]
+              properties:
+                unit_type_id: { type: string, format: uuid }
+                check_in: { type: string, format: date }
+                check_out: { type: string, format: date }
+                guests_count: { type: integer, minimum: 1 }
+                name: { type: string, minLength: 2, maxLength: 120 }
+                phone: { type: string, description: "Com DDD; normalizado para E.164." }
+                email: { type: string, format: email, nullable: true }
+                consent:
+                  type: boolean
+                  description: Aceite do uso dos dados para a reserva (LGPD). Precisa ser `true`.
+                notes: { type: string, maxLength: 1000, nullable: true }
+      responses:
+        "201":
+          description: Pré-reserva criada (ou a original, na repetição da chave)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PreReservaPublica" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+        "429": { $ref: "#/components/responses/Erro" }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -6694,6 +6755,21 @@ components:
         price_cents: { type: integer, format: int64, nullable: true, description: "Só em dia livre" }
         min_nights: { type: integer }
         on_request: { type: boolean, description: "Indisponível por não ter tarifa publicada (sob consulta), não por ocupação" }
+    PreReservaPublica:
+      type: object
+      description: O que o hóspede precisa para pagar o sinal e falar com a casa. Sem id interno.
+      properties:
+        code: { type: string, example: "WH-2026-0042" }
+        status: { type: string, enum: [hold] }
+        product_name: { type: string, example: "Duplex Aurora" }
+        check_in: { type: string, format: date }
+        check_out: { type: string, format: date }
+        night_count: { type: integer }
+        guests_count: { type: integer }
+        total_cents: { type: integer, format: int64 }
+        deposit_cents: { type: integer, format: int64 }
+        balance_cents: { type: integer, format: int64 }
+        hold_expires_at: { type: string, format: date-time }
     OrcamentoPublico:
       type: object
       properties:

@@ -77,6 +77,8 @@ func etapas() []etapa {
 		{"catalogo_de_recursos", catalogoDeRecursos},
 		{"perfis", perfis},
 		{"permissoes", permissoes},
+		{"perfil_da_vitrine", perfilDaVitrine},
+		{"conta_da_vitrine", contaDaVitrine},
 		{"usuarios_de_desenvolvimento", usuariosDeDesenvolvimento},
 		{"corretores_de_desenvolvimento", corretoresDeDesenvolvimento},
 		{"funil_padrao", funilPadrao},

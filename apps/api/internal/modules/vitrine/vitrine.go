@@ -13,7 +13,9 @@
 //  1. Resposta pública nunca carrega dado de terceiro nem de operação: dia
 //     ocupado é só `available: false` — nem quem, nem quanto, nem por quê, nem
 //     quantas unidades sobram (a contagem revelaria a ocupação da casa).
-//  2. A defesa contra overbooking continua sendo o banco: nada aqui grava.
+//  2. A defesa contra overbooking continua sendo o banco: a única rota que
+//     grava (pré-reserva, prereserva.go) passa pelo serviço de reservas do
+//     painel, e quem recusa a data tomada é a constraint EXCLUDE.
 //  3. Toda rota é limitada por taxa (montagem em internal/router).
 //
 // E uma regra comercial: o público não negocia. O pedido de orçamento não tem
@@ -32,8 +34,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/httpx"
@@ -90,15 +95,30 @@ func (c *casas) resolver(ctx context.Context) (uuid.UUID, error) {
 
 // Handler serve as rotas /public/*.
 type Handler struct {
+	pool  *pgxpool.Pool
 	casas *casas
 	disp  *disponibilidade.Servico
+
+	// Pré-reserva (prereserva.go): os MESMOS serviços do painel, assinados
+	// pela conta de serviço do site.
+	conta        *contaDoSite
+	reservas     *reservas.Servico
+	contatos     *contatos.Servico
+	contatosRepo *contatos.Repository
 }
 
 // NovoHandler segue o construtor combinado dos módulos: (pool, tx).
 func NovoHandler(pool *pgxpool.Pool, tx *db.TxManager) *Handler {
+	disp := disponibilidade.NovoServico(disponibilidade.NewRepository(pool), tx)
+	contatosRepo := contatos.NewRepository(pool)
 	return &Handler{
-		casas: &casas{pool: pool},
-		disp:  disponibilidade.NovoServico(disponibilidade.NewRepository(pool), tx),
+		pool:         pool,
+		casas:        &casas{pool: pool},
+		disp:         disp,
+		conta:        &contaDoSite{pool: pool, auth: auth.NewRepository(pool)},
+		reservas:     reservas.NovoServico(reservas.NewRepository(pool), disp, tx),
+		contatos:     contatos.NovoServico(contatosRepo, tx),
+		contatosRepo: contatosRepo,
 	}
 }
 
@@ -342,8 +362,8 @@ type OrcamentoPublico struct {
 
 // Orcar — POST /public/quotes
 //
-// 200, não 201: nada é gravado. Orçamento público não segura data — a
-// pré-reserva pública (B1 do plano) depende de decisão do dono do negócio.
+// 200, não 201: nada é gravado. Orçamento público não segura data — quem
+// segura é POST /public/holds (prereserva.go).
 func (h *Handler) Orcar(w http.ResponseWriter, r *http.Request) {
 	ctx, err := h.contexto(r)
 	if err != nil {

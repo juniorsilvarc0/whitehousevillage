@@ -135,7 +135,7 @@ DATABASE_URL="$URL" go test -tags=integration ./... -race -count=1
 >
 > Isso passou a valer para mais do que ele: **a jornada da Fase 1 e os invariantes de `internal/router` também exigem seed** e fazem `t.Skip` com a instrução no texto quando não o encontram. Um `skip` ali é a jornada inteira do produto saindo da execução sem ninguém reparar — é por isso que a etapa do seed é obrigatória, e não uma conveniência.
 
-O seed é **idempotente por contrato** e a suíte depende disso. Medido em 02/10/2026 (schema `20261002180000`): num banco novo, `previstas 301, criadas 300, atualizadas 1` — o `1` é o vínculo `users.broker_id` do corretor de desenvolvimento, que é `UPDATE` por natureza —; rodá-lo de novo deixa `criadas=0, atualizadas=0, inalteradas=301` e *"nada mudou"*, e a contagem de linhas idêntica em `units`, `unit_types`, `resources`, `roles`, `role_permissions`, `users` e `rates`. Um seed que duplicasse na segunda execução quebraria toda fixture que resolve por chave natural.
+O seed é **idempotente por contrato** e a suíte depende disso. Medido em 03/10/2026 (schema `20261003100000`, catálogo `teste`): num banco novo, `previstas 305, criadas 304, atualizadas 1` — o `1` é o vínculo `users.broker_id` do corretor de desenvolvimento, que é `UPDATE` por natureza —; rodá-lo de novo deixa `criadas=0, atualizadas=0, inalteradas=305` e *"nada mudou"*, e a contagem de linhas idêntica em `units`, `unit_types`, `resources`, `roles`, `role_permissions`, `users` e `rates`. Um seed que duplicasse na segunda execução quebraria toda fixture que resolve por chave natural.
 
 ## 2. O que cada suíte protege
 
@@ -482,7 +482,7 @@ seção).
 | `go test ./... -race -count=1` | ✅ 24 pacotes, 0 FAIL |
 | Integração: banco recriado + `make it-suite` (`-p 1 -race`) | ✅ 24 pacotes, `exit=0` |
 | A mesma suíte com `-v` (sem `-race`), para contar | ✅ **701 testes de topo, 978 com subtestes, 0 FAIL, 0 SKIP** |
-| Seed 1ª / 2ª | ✅ `previstas 301, criadas 300, atualizadas 1` / `criadas 0, atualizadas 0, inalteradas 301` — *"nada mudou"* |
+| Seed 1ª / 2ª | ✅ `previstas 305, criadas 304, atualizadas 1` / `criadas 0, atualizadas 0, inalteradas 305` — *"nada mudou"* |
 | `pnpm lint`, `pnpm exec tsc --noEmit` | ✅ zero |
 | `pnpm test --run` | ✅ **40 arquivos, 340 testes** (eram 334 em 27/08) |
 | Fumaça do site, `node apps/site/e2e/fumaca-site.mjs` contra nginx 1.24 local com o `nginx.conf` do repositório | ✅ APROVADO, 17 recursos internos; `/admin`, `/admin/`, `/scripts/admin.js` e caminho inventado = 404 |
