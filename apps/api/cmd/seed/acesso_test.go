@@ -68,6 +68,7 @@ func TestCorretorNaoAlcancaFinanceiroGlobalNemConfiguracoes(t *testing.T) {
 		"finance.receivables", "finance.payables",
 		"inventory", "channels",
 		auth.RecursoUsuarios, auth.RecursoPerfis, "settings", "integrations", "audit",
+		"site", // o conteúdo do site fala em nome da casa (docs/site-cms.md)
 	}
 
 	linhas, err := montarMatriz()
@@ -110,6 +111,54 @@ func TestCorretorOperaSobreOProprioDado(t *testing.T) {
 			if catalogo[l.recurso].suportaOwn {
 				t.Errorf("corretor com escopo all em %s, que tem dono", l.recurso)
 			}
+		}
+	}
+}
+
+// docs/site-cms.md §1: recurso `site` com ver+editar, sem `own`, concedido à
+// gestão (e ao admin, pelo catálogo inteiro) — e a ninguém mais.
+func TestSiteEhDaGestao(t *testing.T) {
+	var r *recurso
+	for i := range catalogoSeed {
+		if catalogoSeed[i].codigo == "site" {
+			r = &catalogoSeed[i]
+		}
+	}
+	if r == nil {
+		t.Fatal("recurso site fora do catálogo")
+	}
+	if strings.Join(r.acoes, ",") != "ver,editar" || r.suportaOwn {
+		t.Fatalf("site com ações %v e own=%v; o contrato é ver+editar, sem own", r.acoes, r.suportaOwn)
+	}
+
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vitrine, err := matrizDaVitrine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	concedido := map[string]bool{}
+	for _, l := range append(linhas, vitrine...) {
+		if l.recurso != "site" {
+			continue
+		}
+		if l.escopo != escopoAll {
+			t.Errorf("%s com escopo %q em site:%s", l.perfil, l.escopo, l.acao)
+		}
+		concedido[l.perfil+":"+l.acao] = true
+	}
+	for _, perfil := range []string{"admin", "usuario"} {
+		for _, a := range []string{ver, editar} {
+			if !concedido[perfil+":"+a] {
+				t.Errorf("%s sem site:%s", perfil, a)
+			}
+		}
+	}
+	for chave := range concedido {
+		if p := strings.SplitN(chave, ":", 2)[0]; p != "admin" && p != "usuario" {
+			t.Errorf("%s recebeu site — só a gestão edita o site", chave)
 		}
 	}
 }

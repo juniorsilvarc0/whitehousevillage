@@ -9,6 +9,9 @@
 #   - --proxy-proprio foi pedido e 80 ou 443 já estão ocupadas.
 # E nunca usa `down`, `prune`, `--remove-orphans` nem toca em container fora do
 # projeto `whv-gestao`.
+# Volumes (`pgdata`, `midia`) atravessam todo redeploy: `up -d` recria
+# containers, nunca volumes. `down -v` apagaria o banco e as fotos/vídeos do
+# site, que não têm outra cópia além do backup — por isso não existe aqui.
 #
 # Ordem: build → postgres saudável → migrate → seed → resto → fumaça local.
 set -euo pipefail
@@ -23,8 +26,10 @@ PROXY_PROPRIO=0
 if grep -q 'TROQUE' "$ENV_FILE"; then
   echo "$ENV_FILE ainda tem valor TROQUE: gere os segredos (openssl rand -base64 48)." >&2; exit 1
 fi
-# shellcheck disable=SC1090
-set -a; source "$ENV_FILE"; set +a
+set -a
+# shellcheck disable=SC1090  # caminho em variável, de propósito
+source "$ENV_FILE"
+set +a
 ADMIN_PORT=${WHV_ADMIN_PORT:-3110}
 SITE_PORT=${WHV_SITE_PORT:-3210}
 
@@ -60,6 +65,16 @@ echo "==> seed";      dc run --rm seed
 servicos=(api worker admin site)
 [[ $PROXY_PROPRIO == 1 ]] && servicos+=(traefik)
 echo "==> stack";     dc up -d --wait "${servicos[@]}"
+
+# Fotos e vídeos do site moram no volume `whv-gestao_midia`, montado na API. Se
+# o mount sumir (compose editado errado), a API sobe, aceita upload e grava na
+# camada descartável do container — que o próximo deploy apaga. Melhor parar aqui.
+echo "==> volume de mídia"
+api_id=$(dc ps -q api)
+if ! docker inspect -f '{{range .Mounts}}{{.Name}}={{.Destination}} {{end}}' "$api_id" | grep -q "${PROJETO}_midia=/data/midia"; then
+  echo "a API subiu SEM o volume ${PROJETO}_midia em /data/midia — uploads se perderiam no próximo deploy." >&2; exit 1
+fi
+echo "   ${PROJETO}_midia em /data/midia"
 
 echo "==> fumaça local (sem depender do proxy)"
 falhou=0

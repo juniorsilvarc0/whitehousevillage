@@ -6,12 +6,12 @@
     <meta name="theme-color" content="#16302B" />
     <meta name="robots" content="noindex" />
 
-    <title>Página não encontrada | White House · Praia do Coqueiro</title>
+    <title data-cms="seo.erro.titulo">Página não encontrada | White House · Praia do Coqueiro</title>
 
     <!-- Servida pelo nginx (error_page 404) em QUALQUER profundidade de caminho:
          por isso todo href/src aqui é absoluto. O número do WhatsApp vem por SSI
          de uma única linha (whv_whatsapp em apps/site/nginx.conf). -->
-    <link rel="icon" href="/assets/logo.png" />
+    <link rel="icon" href="/assets/logo.png" data-cms-img="marca.icone" />
 
     <link rel="stylesheet" href="/styles/fonts.css" />
     <link rel="stylesheet" href="/styles/tokens.css" />
@@ -22,25 +22,25 @@
     <script>document.documentElement.classList.remove('no-js');</script>
 </head>
 <body>
-    <a href="#main" class="skip-link">Pular para o conteúdo</a>
+    <a href="#main" class="skip-link" data-cms="menu.pular">Pular para o conteúdo</a>
 
     <header class="site-header site-header--over-hero" id="site-header">
         <div class="site-header__inner">
             <a class="site-header__logo" href="/" aria-label="White House — página inicial">
-                <img src="/assets/logo.png" alt="" width="78" height="42" />
+                <img src="/assets/logo.png" alt="" width="78" height="42" data-cms-img="marca.logo" data-cms-decorativa />
                 <span class="site-header__wordmark">
-                    <b>WHITE HOUSE</b>
-                    <span>Village</span>
+                    <b data-cms="marca.nome">WHITE HOUSE</b>
+                    <span data-cms="marca.subtitulo">Village</span>
                 </span>
             </a>
             <nav class="site-header__nav" aria-label="Principal">
-                <a href="/">Início</a>
-                <a href="/#acomodacoes">Acomodações</a>
-                <a href="/#eventos">Eventos</a>
-                <a href="/#estrutura">Estrutura</a>
-                <a href="/disponibilidade.html">Disponibilidade</a>
+                <a href="/" data-cms="menu.inicio">Início</a>
+                <a href="/#acomodacoes" data-cms="menu.acomodacoes">Acomodações</a>
+                <a href="/#eventos" data-cms="menu.eventos">Eventos</a>
+                <a href="/#estrutura" data-cms="menu.estrutura">Estrutura</a>
+                <a href="/disponibilidade.html" data-cms="menu.disponibilidade">Disponibilidade</a>
             </nav>
-            <a href="/disponibilidade.html" class="btn btn--primary site-header__cta">Reservar</a>
+            <a href="/disponibilidade.html" class="btn btn--primary site-header__cta" data-cms="menu.reservar">Reservar</a>
             <button class="menu-toggle" aria-label="Abrir menu" aria-expanded="false" aria-controls="mobile-nav">
                 <span class="menu-toggle__bar"></span>
                 <span class="menu-toggle__bar"></span>
@@ -50,11 +50,11 @@
     </header>
 
     <nav class="mobile-nav" id="mobile-nav" aria-label="Menu">
-        <a href="/">Início</a>
-        <a href="/#acomodacoes">Acomodações</a>
-        <a href="/#eventos">Eventos</a>
-        <a href="/#estrutura">Estrutura</a>
-        <a href="/disponibilidade.html">Disponibilidade</a>
+        <a href="/" data-cms="menu.inicio">Início</a>
+        <a href="/#acomodacoes" data-cms="menu.acomodacoes">Acomodações</a>
+        <a href="/#eventos" data-cms="menu.eventos">Eventos</a>
+        <a href="/#estrutura" data-cms="menu.estrutura">Estrutura</a>
+        <a href="/disponibilidade.html" data-cms="menu.disponibilidade">Disponibilidade</a>
     </nav>
 
     <main id="main">
@@ -62,13 +62,13 @@
             <div class="container">
                 <div class="cta-banner__inner">
                     <div>
-                        <p class="eyebrow erro__codigo">Erro 404</p>
-                        <h1 class="cta-banner__title">Esta página não <em>existe</em></h1>
-                        <p class="cta-banner__lead">O endereço pode ter mudado ou ter sido digitado com algum erro. As acomodações e o calendário continuam a um clique.</p>
+                        <p class="eyebrow erro__codigo" data-cms="erro.rotulo">Erro 404</p>
+                        <h1 class="cta-banner__title" data-cms-titulo="erro.titulo">Esta página não <em>existe</em></h1>
+                        <p class="cta-banner__lead" data-cms-paragrafos="erro.texto">O endereço pode ter mudado ou ter sido digitado com algum erro. As acomodações e o calendário continuam a um clique.</p>
                     </div>
                     <div class="cta-banner__actions">
-                        <a href="/disponibilidade.html" class="btn btn--primary">Ver disponibilidade</a>
-                        <a href="/" class="btn btn--light">Voltar ao início</a>
+                        <a href="/disponibilidade.html" class="btn btn--primary" data-cms="erro.botao-disponibilidade">Ver disponibilidade</a>
+                        <a href="/" class="btn btn--light" data-cms="erro.botao-inicio">Voltar ao início</a>
                     </div>
                 </div>
             </div>
@@ -79,40 +79,41 @@
         <div class="container">
             <div class="site-footer__grid">
                 <div class="site-footer__brand">
-                    <img class="site-footer__logo" src="/assets/logo.png" alt="White House" width="190" height="123" />
-                    <p>Condomínio de temporada e eventos na Praia do Coqueiro — Luís Correia, Piauí.</p>
+                    <img class="site-footer__logo" src="/assets/logo.png" alt="White House" data-cms-img="marca.logo" width="190" height="123" />
+                    <p data-cms-paragrafos="rodape.texto">Condomínio de temporada e eventos na Praia do Coqueiro — Luís Correia, Piauí.</p>
                 </div>
                 <div>
-                    <h4>Navegue</h4>
+                    <h4 data-cms="rodape.titulo-navegue">Navegue</h4>
                     <ul>
-                        <li><a href="/#acomodacoes">Acomodações</a></li>
-                        <li><a href="/#eventos">Eventos</a></li>
-                        <li><a href="/#estrutura">Estrutura</a></li>
-                        <li><a href="/disponibilidade.html">Disponibilidade</a></li>
+                        <li><a href="/#acomodacoes" data-cms="menu.acomodacoes">Acomodações</a></li>
+                        <li><a href="/#eventos" data-cms="menu.eventos">Eventos</a></li>
+                        <li><a href="/#estrutura" data-cms="menu.estrutura">Estrutura</a></li>
+                        <li><a href="/disponibilidade.html" data-cms="menu.disponibilidade">Disponibilidade</a></li>
                     </ul>
                 </div>
                 <div>
-                    <h4>Reservas</h4>
+                    <h4 data-cms="rodape.titulo-reservas">Reservas</h4>
                     <ul>
-                        <li><a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener">WhatsApp oficial</a></li>
-                        <li><a href="mailto:reservas@whitehouse.com.br">reservas@whitehouse.com.br</a></li>
-                        <li>Atendimento 8h — 20h</li>
+                        <li><a href="https://wa.me/<!--# echo var='whv_whatsapp' -->" target="_blank" rel="noopener" data-cms="rodape.whatsapp">WhatsApp oficial</a></li>
+                        <li><a href="mailto:reservas@whitehouse.com.br" data-cms-email="rodape.email">reservas@whitehouse.com.br</a></li>
+                        <li data-cms="rodape.horario">Atendimento 8h — 20h</li>
                     </ul>
                 </div>
                 <div>
-                    <h4>Endereço</h4>
-                    <ul>
+                    <h4 data-cms="rodape.titulo-endereco">Endereço</h4>
+                    <ul data-cms-linhas="rodape.endereco">
                         <li>Praia do Coqueiro</li>
                         <li>Luís Correia — PI</li>
                     </ul>
                 </div>
             </div>
             <div class="site-footer__bottom">
-                <span>© 2026 White House — Todos os direitos reservados</span>
+                <span data-cms="rodape.copyright">© 2026 White House — Todos os direitos reservados</span>
             </div>
         </div>
     </footer>
 
+    <script src="/scripts/conteudo.js"></script>
     <script src="/scripts/main.js"></script>
 </body>
 </html>

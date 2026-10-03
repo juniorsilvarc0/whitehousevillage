@@ -374,10 +374,20 @@ psql: ## Console do banco
 # - grava em `.parcial` e só renomeia depois de verificado: arquivo com nome de
 #   backup é backup completo, e uma falha nunca apaga nem ocupa o nome de outro
 #   (duas execuções no mesmo segundo geram o mesmo nome).
-backup: ## Dump manual comprimido em infra/backups/ (reprova se o dump falhar ou vier incompleto)
+#
+# Fotos e vídeos do site (volume `midia`, docs/site-cms.md §8) vão no MESMO
+# backup, com o MESMO carimbo de hora do dump: o banco aponta para ids de
+# arquivo, e um dump sem os arquivos daquele momento restaura links quebrados.
+# O tar sai por um container descartável com o volume montado SÓ LEITURA (a
+# imagem da API é distroless, sem tar); a imagem é a do Postgres, que o stack já
+# baixou. Mesmo critério do dump: `.parcial` até `tar -t` ler o arquivo inteiro.
+# Volume ainda inexistente (nunca subiu com mídia) não é erro: avisa e segue.
+MIDIA_VOLUME := whitehousevillage_midia
+backup: ## Dump do banco + tar das fotos/vídeos em infra/backups/ (reprova se algo vier incompleto)
 	@set -uo pipefail; \
 	mkdir -p infra/backups; \
-	arquivo="infra/backups/manual-$$(date +%Y%m%d-%H%M%S).sql.gz"; \
+	carimbo="$$(date +%Y%m%d-%H%M%S)"; \
+	arquivo="infra/backups/manual-$$carimbo.sql.gz"; \
 	parcial="$$arquivo.$$$$.parcial"; \
 	if ! $(COMPOSE) exec -T postgres sh -c 'pg_dump -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' | gzip > "$$parcial"; then \
 		rm -f "$$parcial"; echo "backup FALHOU: o pg_dump não terminou (nada gravado)"; exit 1; \
@@ -389,7 +399,20 @@ backup: ## Dump manual comprimido em infra/backups/ (reprova se o dump falhar ou
 		echo "backup FALHOU: $$arquivo já existe (outro backup no mesmo segundo); este dump, completo, ficou em $$parcial"; exit 1; \
 	fi; \
 	mv "$$parcial" "$$arquivo"; \
-	echo "==> backup em $$arquivo ($$(du -h "$$arquivo" | cut -f1), dump completo)"
+	echo "==> backup em $$arquivo ($$(du -h "$$arquivo" | cut -f1), dump completo)"; \
+	if ! docker volume inspect $(MIDIA_VOLUME) >/dev/null 2>&1; then \
+		echo "==> sem volume $(MIDIA_VOLUME) (nenhuma foto/vídeo enviado ainda): só o banco"; exit 0; \
+	fi; \
+	midia="infra/backups/manual-$$carimbo-midia.tar.gz"; \
+	parcial="$$midia.$$$$.parcial"; \
+	if ! docker run --rm --network none -v $(MIDIA_VOLUME):/midia:ro postgres:16-alpine tar -C /midia -czf - . > "$$parcial"; then \
+		rm -f "$$parcial"; echo "backup da MÍDIA FALHOU: o tar não terminou (o dump do banco ficou em $$arquivo)"; exit 1; \
+	fi; \
+	if ! tar -tzf "$$parcial" >/dev/null; then \
+		echo "backup da MÍDIA ILEGÍVEL: mantido para inspeção em $$parcial"; exit 1; \
+	fi; \
+	mv "$$parcial" "$$midia"; \
+	echo "==> mídia em $$midia ($$(du -h "$$midia" | cut -f1), $$(tar -tzf "$$midia" | grep -vc '/$$') arquivo(s))"
 
 # `restore` constava do .PHONY sem receita: `make restore` respondia "Nothing to
 # be done" e saía 0 — o comando de desastre fingindo que restaurou. Até existir

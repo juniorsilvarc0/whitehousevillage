@@ -13,6 +13,10 @@
   'use strict';
   if (!window.WH) return;
 
+  /* Textos editáveis no painel (menu "Site"): T devolve HTML escapado, C o
+     texto puro (mensagens do WhatsApp, avisos). O texto daqui é o de fábrica. */
+  const T = WH.t, C = WH.cru;
+
   const params = new URLSearchParams(location.search);
   const $ = s => document.querySelector(s);
   const el = {
@@ -57,9 +61,9 @@
      caminho é a conversa, com as datas já escritas. */
   function linkConsulta(u, de, ate) {
     if (!WHATSAPP) return '';
-    const linhas = ['Olá! Quero consultar valores na White House:', '', `*${u.name}*`];
-    if (de) linhas.push(`Check-in: ${WH.dataBR(de)}`);
-    if (ate) linhas.push(`Check-out: ${WH.dataBR(ate)}`);
+    const linhas = [C('whatsapp.mensagem-consulta', 'Olá! Quero consultar valores na White House:'), '', `*${u.name}*`];
+    if (de) linhas.push(`${C('orcamento.check-in', 'Check-in')}: ${WH.dataBR(de)}`);
+    if (ate) linhas.push(`${C('orcamento.check-out', 'Check-out')}: ${WH.dataBR(ate)}`);
     linhas.push(`Hóspedes: ${state.hospedes}`);
     return `https://wa.me/${WHATSAPP}?text=` + encodeURIComponent(linhas.join('\n'));
   }
@@ -79,8 +83,10 @@
   }
 
   function falhaGeral() {
-    const wa = WHATSAPP ? ` <a class="btn btn--secondary" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}">Falar no WhatsApp</a>` : '';
-    el.cals.innerHTML = `<p class="quote__empty">A central de reservas está indisponível agora. Tente em instantes${WHATSAPP ? ' ou fale com a gente pelo WhatsApp' : ''}.</p>${wa}`;
+    const wa = WHATSAPP ? ` <a class="btn btn--secondary" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}">${T('calendario.botao-whatsapp', 'Falar no WhatsApp')}</a>` : '';
+    el.cals.innerHTML = `<p class="quote__empty">${WHATSAPP
+      ? T('calendario.falha', 'A central de reservas está indisponível agora. Tente em instantes ou fale com a gente pelo WhatsApp.')
+      : 'A central de reservas está indisponível agora. Tente em instantes.'}</p>${wa}`;
     el.quote.innerHTML = '';
     el.kpis.innerHTML = '';
   }
@@ -172,7 +178,7 @@
       await carregarVisivel();
     } catch (e) {
       state.carregando = false;
-      toast(e.message || 'Não foi possível carregar o calendário.');
+      toast(e.message || C('calendario.falha-mes', 'Não foi possível carregar o calendário.'));
       render();
       return;
     }
@@ -219,8 +225,8 @@
       else if (state.checkin && state.checkout && s > state.checkin && s < state.checkout) cls.push('day--in-range');
 
       const titulo = !dia ? 'Carregando…'
-        : dia.available ? `${WH.rotulo(dia.date_type)} · ${WH.brl(dia.price_cents)}${dia.min_nights > 1 ? ' · mínimo ' + dia.min_nights + ' noites' : ''}`
-        : dia.on_request ? `${WH.rotulo(dia.date_type)} · sob consulta` : 'Indisponível';
+        : dia.available ? `${WH.rotulo(dia.date_type)} · ${WH.brl(dia.price_cents)}${dia.min_nights > 1 ? ' · ' + C('calendario.dia-minimo', 'mínimo {noites} noites', { noites: dia.min_nights }) : ''}`
+        : dia.on_request ? `${WH.rotulo(dia.date_type)} · ${C('calendario.dia-consulta', 'sob consulta')}` : C('calendario.dia-indisponivel', 'Indisponível');
 
       cells += `<button type="button" class="${cls.join(' ')}" data-d="${s}" title="${WH.esc(titulo)}">
           <span class="day__n">${d}</span>
@@ -230,14 +236,16 @@
 
     return `<div class="calendar">
         <h3 class="calendar__title">${WH.MESES[m]} ${ano}</h3>
-        <p class="calendar__sub">${state.carregando ? 'consultando a central…' : `${livres} ${livres === 1 ? 'noite livre' : 'noites livres'} para ${WH.esc(u.name)}`}</p>
+        <p class="calendar__sub">${state.carregando ? T('calendario.carregando', 'consultando a central…')
+          : livres === 1 ? T('calendario.noite-livre', '{n} noite livre para {acomodacao}', { n: livres, acomodacao: u.name })
+          : T('calendario.noites-livres', '{n} noites livres para {acomodacao}', { n: livres, acomodacao: u.name })}</p>
         <div class="calendar__weekdays"><span>dom</span><span>seg</span><span>ter</span><span>qua</span><span>qui</span><span>sex</span><span>sáb</span></div>
         <div class="calendar__grid">${cells}</div>
       </div>`;
   }
 
   async function onPick(s) {
-    if (s < state.hoje) { toast('Data já passou.'); return; }
+    if (s < state.hoje) { toast(C('calendario.aviso-passou', 'Data já passou.')); return; }
     const dia = diaDe(s);
     if (!dia) return;
 
@@ -245,13 +253,14 @@
        chega nesse dia (a estadia é half-open, [check-in, check-out)). */
     const escolhendoSaida = state.checkin && !state.checkout && s > state.checkin;
     if (!escolhendoSaida && !dia.available && dia.on_request) {
-      toast(`${WH.dataBR(s)} é sob consulta${WHATSAPP ? ' — fale com a gente pelo WhatsApp' : ''}.`);
+      toast(WHATSAPP ? C('calendario.aviso-consulta', '{data} é sob consulta — fale com a gente pelo WhatsApp.', { data: WH.dataBR(s) })
+        : `${WH.dataBR(s)} é sob consulta.`);
       state.consulta = s;
       renderQuote();
       return;
     }
     if (!escolhendoSaida && !dia.available) {
-      toast(`${WH.dataBR(s)} indisponível.`);
+      toast(C('calendario.aviso-indisponivel', '{data} indisponível.', { data: WH.dataBR(s) }));
       return;
     }
     if (!escolhendoSaida) {
@@ -264,7 +273,7 @@
     /* Todas as noites entre check-in e check-out precisam estar livres. As que
        estiverem fora dos meses visíveis são pedidas agora. */
     if (WH.parse(s) - WH.parse(state.checkin) > 92 * 864e5) {
-      toast('Para estadias acima de 90 noites, fale com a gente pelo WhatsApp.');
+      toast(C('calendario.aviso-longa', 'Para estadias acima de 90 noites, fale com a gente pelo WhatsApp.'));
       return;
     }
     try {
@@ -276,7 +285,7 @@
     for (let cur = state.checkin; cur < s; cur = WH.addDays(cur, 1)) {
       const noite = diaDe(cur);
       if (!noite || !noite.available) {
-        toast('Há datas ocupadas no intervalo. Escolha um novo check-in.');
+        toast(C('calendario.aviso-intervalo', 'Há datas ocupadas no intervalo. Escolha um novo check-in.'));
         state.checkin = null; state.checkout = null; state.orcamento = null;
         render();
         return;
@@ -314,19 +323,19 @@
   function cabecalho(u) {
     return `
       <div class="quote__head">
-        <span class="quote__title">Seu orçamento</span>
-        <span class="pill">Tabela vigente</span>
+        <span class="quote__title">${T('orcamento.titulo', 'Seu orçamento')}</span>
+        <span class="pill">${T('orcamento.selo', 'Tabela vigente')}</span>
       </div>
-      <div class="quote__unit"><b>${WH.esc(u.name)}</b>até ${u.capacity} hóspedes · check-in 14h · check-out 11h</div>`;
+      <div class="quote__unit"><b>${WH.esc(u.name)}</b>${T('orcamento.detalhes', 'até {hospedes} hóspedes · check-in 14h · check-out 11h', { hospedes: u.capacity })}</div>`;
   }
 
   function blocoPolitica() {
     const P = state.politica;
     return `
       <div class="quote__signal">
-        <div class="row"><span>Sinal para confirmar</span><b>${P.deposit_pct}%</b></div>
-        <div class="row"><span>Saldo</span><b>até ${P.balance_due_days} dias antes</b></div>
-        <div class="row"><span>Pré-reserva</span><b>segura ${P.hold_hours}h</b></div>
+        <div class="row"><span>${T('orcamento.sinal', 'Sinal para confirmar')}</span><b>${P.deposit_pct}%</b></div>
+        <div class="row"><span>${T('orcamento.saldo', 'Saldo')}</span><b>${T('orcamento.saldo-prazo', 'até {dias} dias antes', { dias: P.balance_due_days })}</b></div>
+        <div class="row"><span>${T('orcamento.pre-reserva', 'Pré-reserva')}</span><b>${T('orcamento.pre-reserva-prazo', 'segura {horas}h', { horas: P.hold_hours })}</b></div>
       </div>`;
   }
 
@@ -344,9 +353,9 @@
       const link = linkConsulta(u, state.consulta, null);
       el.quote.innerHTML = head + `
         <div class="quote__hint quote__hint--warn">${u.on_request
-          ? `${WH.esc(u.name)} tem valores sob consulta: cada pedido é montado com a nossa equipe.`
-          : `${WH.dataBR(state.consulta)} tem valores sob consulta para ${WH.esc(u.name)}.`}</div>
-        ${link ? `<div class="quote__actions"><a class="btn btn--dark" target="_blank" rel="noopener" href="${link}">Consultar no WhatsApp</a></div>` : ''}
+          ? T('orcamento.consulta-produto', '{acomodacao} tem valores sob consulta: cada pedido é montado com a nossa equipe.', { acomodacao: u.name })
+          : T('orcamento.consulta-data', '{data} tem valores sob consulta para {acomodacao}.', { data: WH.dataBR(state.consulta), acomodacao: u.name })}</div>
+        ${link ? `<div class="quote__actions"><a class="btn btn--dark" target="_blank" rel="noopener" href="${link}">${T('orcamento.botao-consultar', 'Consultar no WhatsApp')}</a></div>` : ''}
         ${blocoPolitica()}`;
       return;
     }
@@ -354,39 +363,39 @@
     if (!state.checkin || !state.checkout) {
       el.quote.innerHTML = head + `
         <div class="quote__dates">
-          <div class="quote__date"><div class="l">Check-in</div><div class="v">${state.checkin ? WH.dataCurta(state.checkin) : '—'}</div></div>
+          <div class="quote__date"><div class="l">${T('orcamento.check-in', 'Check-in')}</div><div class="v">${state.checkin ? WH.dataCurta(state.checkin) : '—'}</div></div>
           <div class="quote__arrow">→</div>
-          <div class="quote__date"><div class="l">Check-out</div><div class="v">—</div></div>
+          <div class="quote__date"><div class="l">${T('orcamento.check-out', 'Check-out')}</div><div class="v">—</div></div>
         </div>
         <p class="quote__empty">${state.checkin
-          ? 'Agora selecione a data de check-out no calendário.'
-          : 'Selecione a data de check-in no calendário para ver o valor da estadia.'}</p>
+          ? T('orcamento.escolha-saida', 'Agora selecione a data de check-out no calendário.')
+          : T('orcamento.escolha-entrada', 'Selecione a data de check-in no calendário para ver o valor da estadia.')}</p>
         ${blocoPolitica()}`;
       return;
     }
 
     const datas = `
       <div class="quote__dates">
-        <div class="quote__date"><div class="l">Check-in</div><div class="v">${WH.dataCurta(state.checkin)}</div></div>
+        <div class="quote__date"><div class="l">${T('orcamento.check-in', 'Check-in')}</div><div class="v">${WH.dataCurta(state.checkin)}</div></div>
         <div class="quote__arrow">→</div>
-        <div class="quote__date"><div class="l">Check-out</div><div class="v">${WH.dataCurta(state.checkout)}</div></div>
+        <div class="quote__date"><div class="l">${T('orcamento.check-out', 'Check-out')}</div><div class="v">${WH.dataCurta(state.checkout)}</div></div>
       </div>`;
 
     const o = state.orcamento;
     if (!o || o.carregando) {
-      el.quote.innerHTML = head + datas + `<p class="quote__empty">Calculando com a tabela vigente…</p>`;
+      el.quote.innerHTML = head + datas + `<p class="quote__empty">${T('orcamento.calculando', 'Calculando com a tabela vigente…')}</p>`;
       return;
     }
     if (o.erro) {
       /* A mensagem é a da API (mínimo de noites, lotação etc.): é ela quem sabe a regra. */
       const consulta = o.erro.code === 'RATE_NOT_FOUND';
       const tipo = o.erro.code === 'MIN_STAY_NOT_MET' || consulta ? 'warn' : 'block';
-      const msg = consulta ? 'Essas datas têm valores sob consulta. Fale com a gente e montamos o seu pedido.' : o.erro.message;
+      const msg = consulta ? C('orcamento.consulta-datas', 'Essas datas têm valores sob consulta. Fale com a gente e montamos o seu pedido.') : o.erro.message;
       const link = linkConsulta(u, state.checkin, state.checkout);
       el.quote.innerHTML = head + datas + `
         <div class="quote__hint quote__hint--${tipo}">${WH.esc(msg)}</div>
         ${blocoPolitica()}
-        ${link ? `<div class="quote__actions"><a class="btn btn--secondary" target="_blank" rel="noopener" href="${link}">${consulta ? 'Consultar no WhatsApp' : 'Falar no WhatsApp'}</a></div>` : ''}`;
+        ${link ? `<div class="quote__actions"><a class="btn btn--secondary" target="_blank" rel="noopener" href="${link}">${consulta ? T('orcamento.botao-consultar', 'Consultar no WhatsApp') : T('calendario.botao-whatsapp', 'Falar no WhatsApp')}</a></div>` : ''}`;
       return;
     }
 
@@ -398,35 +407,35 @@
             <span><span class="tarifa-tag">${WH.esc(l.label || WH.rotulo(l.date_type))}</span> ${l.nights}×</span>
             <b>${WH.brl(l.subtotal_cents)}</b>
           </div>`).join('')}
-        <div class="quote__line"><span>Taxa de limpeza</span><b>${WH.brl(c.cleaning_cents)}</b></div>
+        <div class="quote__line"><span>${T('orcamento.limpeza', 'Taxa de limpeza')}</span><b>${WH.brl(c.cleaning_cents)}</b></div>
       </div>
 
       <div class="quote__sep"></div>
 
       <div class="quote__total">
-        <span class="l">Total · ${c.night_count} ${c.night_count === 1 ? 'noite' : 'noites'}</span>
+        <span class="l">${T('orcamento.total', 'Total')} · ${c.night_count} ${c.night_count === 1 ? 'noite' : 'noites'}</span>
         <span class="v">${WH.brl(c.total_cents)}</span>
       </div>
 
       <div class="quote__signal">
-        <div class="row"><span>Sinal (${P.deposit_pct}%) para confirmar</span><b>${WH.brl(c.deposit_cents)}</b></div>
-        <div class="row"><span>Saldo até ${P.balance_due_days} dias antes</span><b>${WH.brl(c.balance_cents)}</b></div>
-        <div class="row"><span>Diária média</span><b>${WH.brl(c.avg_nightly_cents)}</b></div>
+        <div class="row"><span>${T('orcamento.sinal-valor', 'Sinal ({sinal}%) para confirmar', { sinal: P.deposit_pct })}</span><b>${WH.brl(c.deposit_cents)}</b></div>
+        <div class="row"><span>${T('orcamento.saldo-valor', 'Saldo até {dias} dias antes', { dias: P.balance_due_days })}</span><b>${WH.brl(c.balance_cents)}</b></div>
+        <div class="row"><span>${T('orcamento.diaria-media', 'Diária média')}</span><b>${WH.brl(c.avg_nightly_cents)}</b></div>
       </div>
 
       ${formularioDePreReserva(P)}
-      ${WHATSAPP ? `<a class="btn btn--secondary" data-wa target="_blank" rel="noopener" href="#">Prefiro falar no WhatsApp</a>` : ''}
-      <p class="quote__note">Valores da tabela vigente. A pré-reserva segura a data por ${P.hold_hours}h; sem o sinal, a data é liberada automaticamente.</p>`;
+      ${WHATSAPP ? `<a class="btn btn--secondary" data-wa target="_blank" rel="noopener" href="#">${T('orcamento.botao-whatsapp', 'Prefiro falar no WhatsApp')}</a>` : ''}
+      <p class="quote__note">${T('orcamento.nota', 'Valores da tabela vigente. A pré-reserva segura a data por {horas}h; sem o sinal, a data é liberada automaticamente.', { horas: P.hold_hours })}</p>`;
 
     ligarFormulario();
 
     const wa = el.quote.querySelector('[data-wa]');
     if (wa) {
       const linhas = [
-        'Olá! Quero pré-reservar na White House:', '',
+        C('whatsapp.mensagem-orcamento', 'Olá! Quero pré-reservar na White House:'), '',
         `*${u.name}*`,
-        `Check-in: ${WH.dataBR(state.checkin)}`,
-        `Check-out: ${WH.dataBR(state.checkout)}`,
+        `${C('orcamento.check-in', 'Check-in')}: ${WH.dataBR(state.checkin)}`,
+        `${C('orcamento.check-out', 'Check-out')}: ${WH.dataBR(state.checkout)}`,
         `Hóspedes: ${state.hospedes}`,
         `Noites: ${c.night_count}`, '',
         `Total: ${WH.brl(c.total_cents)}`,
@@ -449,29 +458,29 @@
       ? `<div class="quote__hint quote__hint--${e.erro.code === 'DATE_CONFLICT' ? 'block' : 'warn'}">${WH.esc(mensagemDoEnvio(e.erro))}</div>` : '';
     return `
       <form class="hold" data-hold novalidate>
-        <p class="hold__title">Garanta a data agora</p>
-        <label class="hold__field"><span>Nome completo</span>
+        <p class="hold__title">${T('pre-reserva.titulo', 'Garanta a data agora')}</p>
+        <label class="hold__field"><span>${T('pre-reserva.nome', 'Nome completo')}</span>
           <input name="name" autocomplete="name" required minlength="2" maxlength="120" value="${WH.esc(c.name)}">${erroDe('name')}</label>
-        <label class="hold__field"><span>WhatsApp com DDD</span>
-          <input name="phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="(86) 99999-9999" value="${WH.esc(c.phone)}">${erroDe('phone')}</label>
-        <label class="hold__field"><span>E-mail <small>(opcional)</small></span>
+        <label class="hold__field"><span>${T('pre-reserva.whatsapp', 'WhatsApp com DDD')}</span>
+          <input name="phone" type="tel" autocomplete="tel" inputmode="tel" required placeholder="${T('pre-reserva.whatsapp-exemplo', '(86) 99999-9999')}" value="${WH.esc(c.phone)}">${erroDe('phone')}</label>
+        <label class="hold__field"><span>${T('pre-reserva.email', 'E-mail')} <small>${T('pre-reserva.opcional', '(opcional)')}</small></span>
           <input name="email" type="email" autocomplete="email" value="${WH.esc(c.email)}">${erroDe('email')}</label>
         <label class="hold__consent"><input name="consent" type="checkbox"${c.consent ? ' checked' : ''}>
-          <span>Autorizo a White House a usar meus dados para esta reserva e para falar comigo sobre ela.</span></label>
+          <span>${T('pre-reserva.consentimento', 'Autorizo a White House a usar meus dados para esta reserva e para falar comigo sobre ela.')}</span></label>
         ${erroDe('consent')}
         ${geral}
-        <button class="btn btn--dark" type="submit"${e.enviando ? ' disabled' : ''}>${e.enviando ? 'Reservando…' : 'Fazer pré-reserva'}</button>
-        <p class="quote__note">Sem pagamento agora. A data fica segura por ${P.hold_hours}h; para confirmar, paga-se o sinal de ${P.deposit_pct}%.</p>
+        <button class="btn btn--dark" type="submit"${e.enviando ? ' disabled' : ''}>${e.enviando ? T('pre-reserva.enviando', 'Reservando…') : T('pre-reserva.botao', 'Fazer pré-reserva')}</button>
+        <p class="quote__note">${T('pre-reserva.nota', 'Sem pagamento agora. A data fica segura por {horas}h; para confirmar, paga-se o sinal de {sinal}%.', { horas: P.hold_hours, sinal: P.deposit_pct })}</p>
       </form>`;
   }
 
   function mensagemDoEnvio(erro) {
     switch (erro.code) {
-      case 'DATE_CONFLICT': return 'Essas datas acabaram de ser reservadas por outra pessoa. Escolha outras no calendário.';
+      case 'DATE_CONFLICT': return C('pre-reserva.erro-conflito', 'Essas datas acabaram de ser reservadas por outra pessoa. Escolha outras no calendário.');
       case 'HOLD_LIMIT_REACHED': return erro.message;
-      case 'RATE_LIMITED': return 'Muitas tentativas seguidas. Tente de novo mais tarde ou fale com a gente pelo WhatsApp.';
-      case 'NETWORK': return 'Sem conexão. Tente de novo — se a primeira tentativa chegou, a mesma pré-reserva é devolvida, sem duplicar.';
-      default: return erro.message || 'Não foi possível concluir agora.';
+      case 'RATE_LIMITED': return C('pre-reserva.erro-tentativas', 'Muitas tentativas seguidas. Tente de novo mais tarde ou fale com a gente pelo WhatsApp.');
+      case 'NETWORK': return C('pre-reserva.erro-conexao', 'Sem conexão. Tente de novo — se a primeira tentativa chegou, a mesma pré-reserva é devolvida, sem duplicar.');
+      default: return erro.message || C('pre-reserva.erro-geral', 'Não foi possível concluir agora.');
     }
   }
 
@@ -495,7 +504,7 @@
     };
     if (c.email.trim()) pedido.email = c.email.trim();
     if (!pedido.consent) {
-      state.envio = { erro: { code: 'VALIDATION_ERROR', details: { consent: 'é preciso aceitar para reservar.' } } };
+      state.envio = { erro: { code: 'VALIDATION_ERROR', details: { consent: C('pre-reserva.consentimento-falta', 'é preciso aceitar para reservar.') } } };
       renderQuote();
       return;
     }
@@ -535,28 +544,28 @@
     let wa = '';
     if (WHATSAPP) {
       const texto = [
-        `Olá! Fiz a pré-reserva *${r.code}* no site da White House.`, '',
+        C('whatsapp.mensagem-pre-reserva', 'Olá! Fiz a pré-reserva *{codigo}* no site da White House.', { codigo: r.code }), '',
         `*${r.product_name}*`,
         `Check-in: ${WH.dataBR(r.check_in)} · Check-out: ${WH.dataBR(r.check_out)}`,
         `Hóspedes: ${r.guests_count}`,
         `Total: ${WH.brl(r.total_cents)} · Sinal: ${WH.brl(r.deposit_cents)}`, '',
-        'Como faço o pagamento do sinal?'
+        C('whatsapp.pergunta-sinal', 'Como faço o pagamento do sinal?')
       ].join('\n');
-      wa = `<a class="btn btn--dark" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}?text=${encodeURIComponent(texto)}">Enviar o código no WhatsApp</a>`;
+      wa = `<a class="btn btn--dark" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}?text=${encodeURIComponent(texto)}">${T('pre-reserva.ok-botao-whatsapp', 'Enviar o código no WhatsApp')}</a>`;
     }
     return `
       <div class="hold-ok" data-hold-ok>
-        <p class="hold-ok__eyebrow">Pré-reserva feita</p>
+        <p class="hold-ok__eyebrow">${T('pre-reserva.ok-rotulo', 'Pré-reserva feita')}</p>
         <p class="hold-ok__code">${WH.esc(r.code)}</p>
-        <p class="hold-ok__lead">${WH.esc(r.product_name)} está segura para você até <b>${WH.esc(quando)}</b>.</p>
+        <p class="hold-ok__lead">${T('pre-reserva.ok-texto', '{acomodacao} está segura para você até {prazo}.', { acomodacao: r.product_name, prazo: { html: '<b>' + WH.esc(quando) + '</b>' } })}</p>
         <div class="quote__signal">
           <div class="row"><span>${WH.dataCurta(r.check_in)} → ${WH.dataCurta(r.check_out)} · ${r.night_count} ${r.night_count === 1 ? 'noite' : 'noites'}</span><b>${WH.brl(r.total_cents)}</b></div>
-          <div class="row"><span>Sinal (${P.deposit_pct}%) para confirmar</span><b>${WH.brl(r.deposit_cents)}</b></div>
-          <div class="row"><span>Saldo até ${P.balance_due_days} dias antes</span><b>${WH.brl(r.balance_cents)}</b></div>
+          <div class="row"><span>${T('orcamento.sinal-valor', 'Sinal ({sinal}%) para confirmar', { sinal: P.deposit_pct })}</span><b>${WH.brl(r.deposit_cents)}</b></div>
+          <div class="row"><span>${T('orcamento.saldo-valor', 'Saldo até {dias} dias antes', { dias: P.balance_due_days })}</span><b>${WH.brl(r.balance_cents)}</b></div>
         </div>
-        <p class="hold-ok__next">Próximo passo: pagar o sinal até o prazo. Envie o código pelo WhatsApp e a nossa equipe passa os dados do pagamento. Sem o sinal, a data é liberada automaticamente.</p>
+        <p class="hold-ok__next">${T('pre-reserva.ok-proximo', 'Próximo passo: pagar o sinal até o prazo. Envie o código pelo WhatsApp e a nossa equipe passa os dados do pagamento. Sem o sinal, a data é liberada automaticamente.')}</p>
         ${wa}
-        <button class="btn btn--secondary" type="button" data-hold-nova>Fazer outra consulta</button>
+        <button class="btn btn--secondary" type="button" data-hold-nova>${T('pre-reserva.ok-botao-nova', 'Fazer outra consulta')}</button>
       </div>`;
   }
 
@@ -575,13 +584,14 @@
       }
     }
     const cards = [
-      { v: livres, l: 'Noites livres em ' + WH.MESES[state.mes], d: unit().name },
-      { v: menor === null ? '—' : WH.brl(menor), l: 'Diária a partir de', d: 'no mês selecionado' },
-      { v: P.deposit_pct + '%', l: 'Sinal para confirmar', d: 'saldo até ' + P.balance_due_days + ' dias antes' },
-      { v: P.hold_hours + 'h', l: 'Pré-reserva sem pagamento', d: 'a data fica segura' }
+      { v: livres, l: T('calendario.kpi-livres', 'Noites livres em {mes}', { mes: WH.MESES[state.mes] }), d: WH.esc(unit().name) },
+      { v: menor === null ? '—' : WH.brl(menor), l: T('calendario.kpi-diaria', 'Diária a partir de'), d: T('calendario.kpi-diaria-nota', 'no mês selecionado') },
+      { v: P.deposit_pct + '%', l: T('calendario.kpi-sinal', 'Sinal para confirmar'), d: T('calendario.kpi-sinal-nota', 'saldo até {dias} dias antes', { dias: P.balance_due_days }) },
+      { v: P.hold_hours + 'h', l: T('calendario.kpi-pre-reserva', 'Pré-reserva sem pagamento'), d: T('calendario.kpi-pre-reserva-nota', 'a data fica segura') }
     ];
+    /* `l` e `d` já saem escapados de T/esc. */
     el.kpis.innerHTML = cards.map(c => `
-      <div class="kpi"><div class="kpi__v">${c.v}</div><div class="kpi__l">${c.l}</div><div class="kpi__d">${WH.esc(c.d)}</div></div>`).join('');
+      <div class="kpi"><div class="kpi__v">${c.v}</div><div class="kpi__l">${c.l}</div><div class="kpi__d">${c.d}</div></div>`).join('');
   }
 
   /* ─────────── Tabela de tarifas (da tabela vigente) ─────────── */
@@ -593,9 +603,9 @@
         `${k.nights} diárias (${k.date_types.map(t => WH.rotulo(t).toLowerCase()).join(' / ')}): ${WH.brl(k.total_cents)}`);
       return `
       <tr>
-        <td>${WH.esc(p.name)}${pacotes.length ? `<small class="rates__pacotes">Pacotes: ${WH.esc(pacotes.join(' · '))}</small>` : ''}</td>
+        <td>${WH.esc(p.name)}${pacotes.length ? `<small class="rates__pacotes">${T('disp.tabela-pacotes', 'Pacotes:')} ${WH.esc(pacotes.join(' · '))}</small>` : ''}</td>
         <td>${p.capacity} hóspedes</td>
-        ${WH.TIPOS.map(t => `<td${t === 'reveillon' || t === 'carnaval' ? ' class="hi"' : ''}>${por[t] != null ? WH.brl(por[t]) : 'consulta'}</td>`).join('')}
+        ${WH.TIPOS.map(t => `<td${t === 'reveillon' || t === 'carnaval' ? ' class="hi"' : ''}>${por[t] != null ? WH.brl(por[t]) : T('disp.tabela-consulta', 'consulta')}</td>`).join('')}
       </tr>`;
     }).join('');
 
@@ -604,7 +614,7 @@
        mínimo" mentiria para metade da tabela. A do produto escolhido sai da
        API e aparece no calendário (título de cada dia) e na recusa do orçamento. */
     if (el.minimos && state.produtos.length) {
-      el.minimos.textContent = 'A estadia mínima varia por acomodação e tipo de data — passe o mouse sobre o dia no calendário para ver a de cada data.';
+      el.minimos.textContent = C('disp.tarifas.minimos', 'A estadia mínima varia por acomodação e tipo de data — passe o mouse sobre o dia no calendário para ver a de cada data.');
     }
   }
 
@@ -617,11 +627,14 @@
   /* ─────────── Início ─────────── */
   async function iniciar() {
     try {
-      const [produtos, politica] = await Promise.all([WH.api.produtos(), WH.api.politica()]);
+      /* Os textos editados chegam junto (ou desistem em 3 s): o orçamento e o
+         formulário já nascem com eles. */
+      const [produtos, politica] = await Promise.all([WH.api.produtos(), WH.api.politica(), window.WH_CONTEUDO]);
       state.produtos = produtos;
       state.politica = politica;
       state.hoje = politica.today;
     } catch (e) {
+      await window.WH_CONTEUDO;
       falhaGeral();
       return;
     }

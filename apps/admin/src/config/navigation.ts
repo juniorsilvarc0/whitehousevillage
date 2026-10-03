@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import {
   CalendarRange, LayoutGrid, ClipboardList, Columns3, ContactRound, MessageCircle,
-  CalendarDays, Wallet, Users, Package, Share2, ChartLine, SlidersHorizontal, Calculator, BookUser,
+  CalendarDays, Wallet, Users, Package, Share2, ChartLine, SlidersHorizontal, Calculator, BookUser, Globe,
 } from "lucide-react";
 
 import type { RecursoCodigo } from "@/lib/auth/recursos";
@@ -189,6 +189,9 @@ export const CATALOGO: NavItem[] = [
     emConstrucao: true, quando: "Em breve — reservas do Airbnb e do Booking direto no calendário." },
   { title: "Relatórios",    href: "/app/relatorios",    icon: ChartLine,         group: "Análise",       recurso: "reports",
     emConstrucao: true, quando: "Em breve — relatórios de ocupação, diária média e vendas." },
+
+  // Textos, fotos e vídeos do site de vendas (docs/site-cms.md).
+  { title: "Site",          href: "/app/site",          icon: Globe,             group: "Administração", recurso: "site" },
 
   { title: "Configurações", href: "/app/configuracoes", icon: SlidersHorizontal, group: "Administração", recurso: "settings" },
 ];

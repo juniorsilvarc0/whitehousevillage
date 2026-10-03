@@ -22,6 +22,7 @@ const (
 
 var (
 	somenteLeitura = []string{ver}
+	verEditar      = []string{ver, editar}
 	leituraEscrita = []string{ver, criar}
 	semExcluir     = []string{ver, criar, editar}
 	tudo           = []string{ver, criar, editar, excluir}
@@ -80,6 +81,11 @@ var catalogoSeed = []recurso{
 	{"settings", "Parâmetros do sistema", "Configurações", tudo, false, 62},
 	{"integrations", "Integrações e tokens", "Configurações", tudo, false, 63},
 	{"audit", "Auditoria", "Configurações", somenteLeitura, false, 64},
+
+	// Conteúdo do site de vendas (docs/site-cms.md). Só `ver` e `editar`: os
+	// campos são um catálogo fixo em código — não se cria nem se apaga campo,
+	// e "restaurar o original" é editar. Sem dono: o site é um só.
+	{"site", "Site (textos, fotos e vídeos)", "Site", verEditar, false, 70},
 }
 
 func catalogoDeRecursos(ctx context.Context, tx pgx.Tx, _ *estado) (contagem, error) {
@@ -194,6 +200,11 @@ var matrizSeed = map[string][]concessao{
 		{"finance.receivables", leituraEscrita, escopoAll},
 		{"finance.payables", leituraEscrita, escopoAll},
 		{"finance.commissions", leituraEscrita, escopoAll},
+
+		// O conteúdo do site é da gestão (docs/site-cms.md §1). Corretor e a
+		// conta de serviço da vitrine não recebem: quem edita o site fala em
+		// nome da casa.
+		{"site", nil, escopoAll},
 	},
 
 	// Tudo que o corretor toca é `own` — o filtro vira `AND owner_id = $user`

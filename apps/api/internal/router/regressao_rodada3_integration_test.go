@@ -1063,8 +1063,18 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 		if !comCorpo[rota.Path][rota.Metodo] {
 			continue
 		}
+		// O envio de arquivo do site é multipart/form-data, não JSON: não há
+		// "campo desconhecido" a recusar, só a parte `file`. A cobertura dele
+		// (tipo pelos bytes, 422 com details.file) mora em
+		// site_integration_test.go.
+		if rota.Path == RotaDeEnvioDeMidia {
+			continue
+		}
 
 		caminho := rota.Path
+		// Campo do site: chave real do catálogo, para a recusa vir do decoder
+		// e não de um 404 de chave inexistente.
+		caminho = strings.ReplaceAll(caminho, "{key}", "inicio.local")
 		if strings.Contains(caminho, "{id}") {
 			// A chave é o primeiro segmento, MAS o CRM agrupa seis coleções sob
 			// `/crm` — cada uma com o seu alvo. Por isso tenta-se primeiro o

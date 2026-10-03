@@ -135,7 +135,7 @@ DATABASE_URL="$URL" go test -tags=integration ./... -race -count=1
 >
 > Isso passou a valer para mais do que ele: **a jornada da Fase 1 e os invariantes de `internal/router` também exigem seed** e fazem `t.Skip` com a instrução no texto quando não o encontram. Um `skip` ali é a jornada inteira do produto saindo da execução sem ninguém reparar — é por isso que a etapa do seed é obrigatória, e não uma conveniência.
 
-O seed é **idempotente por contrato** e a suíte depende disso. Medido em 03/10/2026 (schema `20261003100000`, catálogo `teste`): num banco novo, `previstas 305, criadas 304, atualizadas 1` — o `1` é o vínculo `users.broker_id` do corretor de desenvolvimento, que é `UPDATE` por natureza —; rodá-lo de novo deixa `criadas=0, atualizadas=0, inalteradas=305` e *"nada mudou"*, e a contagem de linhas idêntica em `units`, `unit_types`, `resources`, `roles`, `role_permissions`, `users` e `rates`. Um seed que duplicasse na segunda execução quebraria toda fixture que resolve por chave natural.
+O seed é **idempotente por contrato** e a suíte depende disso. Medido em 03/10/2026 (schema `20261003120000`, catálogo `teste`): num banco novo, `previstas 310, criadas 309, atualizadas 1` — o `1` é o vínculo `users.broker_id` do corretor de desenvolvimento, que é `UPDATE` por natureza —; rodá-lo de novo deixa `criadas=0, atualizadas=0, inalteradas=310` e *"nada mudou"*, e a contagem de linhas idêntica em `units`, `unit_types`, `resources`, `roles`, `role_permissions`, `users` e `rates`. Um seed que duplicasse na segunda execução quebraria toda fixture que resolve por chave natural.
 
 ## 2. O que cada suíte protege
 

@@ -57,7 +57,32 @@ window.WH = (function () {
     return CATEGORIAS[codigo] ? codigo : null;
   }
   const conteudoGenerico = { titulo: '', tag: 'Hospedagem', scene: 'scene--house', specs: [], desc: '' };
-  const textoDe = codigo => CATEGORIAS[categoriaDe(codigo)] || conteudoGenerico;
+
+  /* Textos da categoria com o que o gestor editou no painel (menu "Site"), lidos
+     de window.WH_CONTEUDO (scripts/conteudo.js). Campo não editado fica com o
+     texto acima. `editados` traz os valores já carregados; sem ele, só o original. */
+  function categoriaEditada(chave, editados) {
+    const base = CATEGORIAS[chave] || conteudoGenerico;
+    const v = editados || {};
+    const k = campo => v['categoria.' + chave + '.' + campo];
+    const texto = x => (typeof x === 'string' ? x : null);
+    const itens = Array.isArray(k('itens'))
+      ? k('itens').map(i => (i && typeof i.texto === 'string' ? i.texto : '')).filter(Boolean)
+      : null;
+    const foto = k('foto');
+    return Object.assign({}, base, {
+      titulo: texto(k('titulo')) != null ? k('titulo') : base.titulo,
+      tituloEditado: texto(k('titulo')) != null,
+      tag: texto(k('selo')) != null ? k('selo') : base.tag,
+      desc: texto(k('descricao')) != null ? k('descricao') : base.desc,
+      specs: itens || base.specs,
+      foto: foto && typeof foto === 'object' ? foto : null
+    });
+  }
+  const textoDe = (codigo, editados) => {
+    const c = categoriaDe(codigo);
+    return c ? categoriaEditada(c, editados) : conteudoGenerico;
+  };
 
   /* Agrupa a lista da API por categoria, na ordem da vitrine. Produto sem
      categoria conhecida vai para um grupo próprio no fim. */
@@ -165,5 +190,16 @@ window.WH = (function () {
   /* Escapa texto antes de ir para innerHTML — nomes vêm do banco. */
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  return { api, novaChave, textoDe, agrupar, CATEGORIAS, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
+  /* Textos editáveis no painel (menu "Site"), com o texto de fábrica como
+     reserva. `t` devolve HTML já escapado; `cru`, o texto puro. Os dois trocam
+     {marcadores} pelos valores passados — números que vêm da API. */
+  const semCms = {
+    t: (chave, padrao, vars) => esc(padrao).replace(/\{([a-z][a-z0-9-]*)\}/g, (m, n) =>
+      vars && n in vars ? (vars[n] && typeof vars[n] === 'object' ? vars[n].html : esc(vars[n])) : m),
+    cru: (chave, padrao, vars) => padrao.replace(/\{([a-z][a-z0-9-]*)\}/g, (m, n) => vars && n in vars ? String(vars[n]) : m)
+  };
+  const t = (chave, padrao, vars) => (window.WH_CMS || semCms).t(chave, padrao, vars);
+  const cru = (chave, padrao, vars) => (window.WH_CMS || semCms).cru(chave, padrao, vars);
+
+  return { t, cru, api, novaChave, textoDe, categoriaEditada, agrupar, CATEGORIAS, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
 })();

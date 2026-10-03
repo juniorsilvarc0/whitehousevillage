@@ -101,6 +101,7 @@ const NOME_DA_AREA: Record<string, string> = {
   quotes: "Orçamentos",
   reservations: "Reservas",
   settings: "Configurações",
+  site: "Site",
 };
 
 const NOME_DA_ACAO: Record<string, string> = {
