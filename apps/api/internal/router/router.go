@@ -4,6 +4,7 @@ package router
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -20,6 +21,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/stream"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/tarifario"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/users"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/vitrine"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/config"
@@ -83,6 +85,9 @@ func New(o Opcoes) (http.Handler, error) {
 		// vez de estourarem panic, o que é bom para não derrubar o processo e
 		// péssimo como estado permanente — a agenda simplesmente não existiria.
 		Contatos: contatos.NovoHandler(o.Pool, tx),
+
+		// Vitrine: as rotas /public/* do site de vendas.
+		Vitrine: vitrine.NovoHandler(o.Pool, tx),
 	}
 
 	tabela := Rotas(deps)
@@ -130,6 +135,7 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 	})
 
 	limitadorDeLogin := auth.LimitadorDeLogin()
+	limitadorDaVitrine := LimitadorDaVitrine()
 
 	// As sondas primeiro, na RAIZ e fora do prefixo — ver Rota.NaRaiz.
 	for _, rota := range tabela {
@@ -150,6 +156,9 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 					// Freio por IP na porta de entrada; o bloqueio por e-mail
 					// (5 erros em 15 min) fica no service.
 					h = limitadorDeLogin.Middleware(h)
+				}
+				if EhDaVitrine(rota) {
+					h = limitadorDaVitrine.Middleware(h)
 				}
 				pub.Method(rota.Metodo, rota.Path, h)
 			}
@@ -173,4 +182,20 @@ func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) h
 	})
 
 	return r
+}
+
+// LimitadorDaVitrine freia as rotas /public/* por IP: 120 pedidos por minuto.
+//
+// O site faz poucos pedidos por visita (catálogo, política, dois meses de
+// calendário e um orçamento por par de datas); 120 por minuto não alcança um
+// visitante de verdade e corta quem varre o calendário inteiro em laço.
+//
+// Vive na memória do processo — a dívida D1 do roadmap. Com UMA réplica da API
+// ele faz o que promete; com duas, o limite multiplica. O limitador
+// distribuído (B0 do plano) é pré-requisito antes de subir a segunda réplica.
+func LimitadorDaVitrine() *httpx.Limitador { return httpx.NovoLimitador(120, time.Minute) }
+
+// EhDaVitrine diz se a rota é da superfície pública do site.
+func EhDaVitrine(r Rota) bool {
+	return r.Acesso == AcessoPublico && strings.HasPrefix(r.Path, "/public/")
 }

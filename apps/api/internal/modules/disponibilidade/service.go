@@ -69,11 +69,73 @@ func NovoServico(repo repositorio, tx *db.TxManager) *Servico {
 // escopada por ela — sem isso, uma segunda propriedade no futuro veria o
 // calendário da primeira.
 func propriedade(ctx context.Context) (uuid.UUID, error) {
-	u, ok := auth.UserFrom(ctx)
-	if !ok {
-		return uuid.Nil, apperr.Unauthorized
+	if u, ok := auth.UserFrom(ctx); ok {
+		return u.PropertyID, nil
 	}
-	return u.PropertyID, nil
+	// Requisição da vitrine pública (módulo vitrine): sem usuário, a casa vem
+	// do contexto, posta lá pelo handler público e por ninguém mais. Sem as
+	// duas coisas o pedido não tem dono, e a resposta continua sendo 401 — a
+	// ausência de sessão nunca vira "qualquer casa".
+	if casa, ok := ctx.Value(chaveCasaPublica{}).(uuid.UUID); ok && casa != uuid.Nil {
+		return casa, nil
+	}
+	return uuid.Nil, apperr.Unauthorized
+}
+
+// chaveCasaPublica é a chave de contexto da casa da vitrine. Tipo não
+// exportado: só ComCasaPublica escreve nela.
+type chaveCasaPublica struct{}
+
+// ComCasaPublica marca o contexto de uma requisição SEM sessão com a casa que
+// ela consulta. Existe para a vitrine pública (site de vendas) reusar o MESMO
+// motor e as MESMAS consultas do painel — o site pergunta, não calcula
+// (docs/unificacao-site-crm.md §3). Um segundo cálculo, só para o público, é
+// exatamente o defeito que a unificação existe para acabar.
+func ComCasaPublica(ctx context.Context, casa uuid.UUID) context.Context {
+	return context.WithValue(ctx, chaveCasaPublica{}, casa)
+}
+
+// ─────────────────────────── Catálogo ───────────────────────────────────────
+
+// ProdutoDoCatalogo é um produto vendável com o tarifário vigente: a tarifa e
+// o mínimo de noites por tipo de data. É o que a tabela de tarifas e os cards
+// do site mostram — lido do banco, nunca escrito à mão no HTML.
+type ProdutoDoCatalogo struct {
+	Produto
+	Tarifas   map[calendar.DateType]money.Cents
+	MinNoites map[calendar.DateType]int
+}
+
+// Catalogo devolve os produtos ativos da casa com a tabela e a política
+// VIGENTES (as mesmas que POST /quotes usaria agora).
+func (s *Servico) Catalogo(ctx context.Context) ([]ProdutoDoCatalogo, booking.Policy, error) {
+	casa, err := propriedade(ctx)
+	if err != nil {
+		return nil, booking.Policy{}, err
+	}
+	produtos, err := s.repo.Produtos(ctx, casa, nil)
+	if err != nil {
+		return nil, booking.Policy{}, err
+	}
+	comercial, err := s.repo.Contexto(ctx, casa, nil, nil)
+	if err != nil {
+		return nil, booking.Policy{}, err
+	}
+	tarifas, err := s.repo.Tarifas(ctx, comercial.RateTableID, nil)
+	if err != nil {
+		return nil, booking.Policy{}, err
+	}
+	minimos, err := s.repo.EstadiaMinima(ctx, comercial.RateTableID)
+	if err != nil {
+		return nil, booking.Policy{}, err
+	}
+	out := make([]ProdutoDoCatalogo, 0, len(produtos))
+	for _, p := range produtos {
+		out = append(out, ProdutoDoCatalogo{Produto: p, Tarifas: tarifas[p.ID], MinNoites: minimos})
+	}
+	politica := comercial.Politica
+	politica.MinNights = minimos
+	return out, politica, nil
 }
 
 // ─────────────────────────── GET /availability ──────────────────────────────
@@ -487,4 +549,19 @@ func traduzirRegra(err error) error {
 		return apperr.Internal.WithCause(err)
 	}
 	return base.WithMessage(regra.Message).WithDetails(regra.Details).WithCause(err)
+}
+
+// Hoje é a data comercial de hoje, no fuso da casa, segundo o banco — a mesma
+// que o orçamento usa. A vitrine a usa para recortar a janela pública, e o
+// site para saber o que já passou sem confiar no relógio do visitante.
+func (s *Servico) Hoje(ctx context.Context) (calendar.Date, error) {
+	casa, err := propriedade(ctx)
+	if err != nil {
+		return calendar.Date{}, err
+	}
+	comercial, err := s.repo.Contexto(ctx, casa, nil, nil)
+	if err != nil {
+		return calendar.Date{}, err
+	}
+	return comercial.Hoje, nil
 }

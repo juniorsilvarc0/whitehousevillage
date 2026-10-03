@@ -52,6 +52,15 @@
 //       real tem de ser editar uma linha. Antes eram oito cópias.
 //    Aviso, sem reprovar: número com cara de fictício (o mesmo dígito repetido
 //    no fim) — o real está pendente do dono do negócio.
+//
+// 7. A API pelo site: só a vitrine passa.
+//    O nginx do site encaminha /api/v1/public/* para a API (passo A2) e mais
+//    nada: /api/v1/auth/me e /api/v1/reservations pelo site respondem 404 — se
+//    o proxy for alargado por engano, a API interna inteira ficaria publicada
+//    no nome do site. Com SITE_EXIGE_API=1 (a fumaça do stack, onde a API está
+//    de pé), confere também que /api/v1/public/products e /policy respondem 200
+//    com dados: o site sem API não tem calendário nem preço. Sem a variável (a
+//    imagem do site rodando sozinha, no CI), essa metade é pulada.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, dirname } from 'node:path';
@@ -228,6 +237,23 @@ if (numero) {
 }
 
 // ── Resultado ──────────────────────────────────────────────────────────────
+// ── 7. API pelo site ──
+for (const caminho of ['/api/v1/auth/me', '/api/v1/reservations', '/api/v1/users']) {
+  const r = await pedir(caminho);
+  if (r.status === 404) ok(`${caminho} → 404 pelo site (só a vitrine passa)`);
+  else reprova(`${caminho} → ${r.status || r.erro} pelo site, esperado 404: o proxy deixa passar a API interna`);
+}
+if (process.env.SITE_EXIGE_API === '1') {
+  for (const caminho of ['/api/v1/public/products', '/api/v1/public/policy']) {
+    const r = await pedir(caminho);
+    let dados = null;
+    try { dados = JSON.parse(r.corpo).data; } catch { /* reprova abaixo */ }
+    const temDados = Array.isArray(dados) ? dados.length > 0 : !!dados;
+    if (r.status === 200 && temDados) ok(`${caminho} → 200 com dados, pela mesma origem do site`);
+    else reprova(`${caminho} → ${r.status || r.erro} pelo site: sem a API o site não tem calendário nem preço`);
+  }
+}
+
 for (const a of avisos) console.log(`\n  AVISO  ${a}`);
 if (falhas.length) {
   console.log(`\nREPROVADO: ${falhas.length} falha(s).`);

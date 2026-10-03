@@ -166,9 +166,10 @@ services:
     restart: unless-stopped
 
   # Site público (apps/site): HTML/CSS/JS servido por nginx, SEM build de front.
-  # Sem `depends_on: api` e sem variável de API: hoje ele não chama a API nenhuma
-  # — tarifa, calendário e orçamento saem de public/scripts/data.js, no navegador.
-  # Inventar API_BASE_URL aqui só criaria a ilusão de integração que não existe.
+  # Catálogo, calendário e orçamento vêm da API (passo A2): o nginx do site
+  # encaminha /api/v1/public/* para `api:8080`, nesta mesma rede. Sem
+  # `depends_on: api` de propósito: o nginx resolve o nome por pedido, então o
+  # site sobe mesmo com a API fora — e diz isso na página, sem inventar preço.
   site:
     build:
       context: ..

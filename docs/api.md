@@ -91,6 +91,9 @@ type Opt[T any] struct{ Set, Valid bool; Value T }  // Set && !Valid  ⇒  limpa
 **Tarifário e política**
 `/rate-tables` · `/rates` CRUD + `POST /rates/bulk` · `/holidays` · `/special-periods` · `/min-nights` · `/policies/commercial` · `/policies/cancellation` + `/tiers`
 
+**Vitrine — pública, sem token** (site de vendas; tag Vitrine na OpenAPI)
+`GET /public/products` · `GET /public/policy` · `GET /public/availability?unit_type_id&from&to` · `POST /public/quotes` — mesmo motor do painel, recortado: sem dado de terceiro, sem desconto, sem gravar, 120 pedidos/min por IP. Toda rota `AcessoPublico` declara `Motivo`.
+
 **Disponibilidade e reservas**
 ```
 GET  /availability?from&to&unit_type_id        disponibilidade por produto

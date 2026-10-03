@@ -105,6 +105,7 @@
 /* Um só estado de indisponível: o público vê livre ou ocupado, nunca o motivo. */
 .day--busy { background: var(--c-busy-bg); border-color: rgba(164,65,60,0.25); color: var(--c-busy); cursor: not-allowed; }
 .day--busy .day__p { color: inherit; opacity: 0.75; }
+.day--loading { opacity: 0.45; cursor: progress; }
 .day--past { opacity: 0.35; cursor: not-allowed; }
 .day--special::after {
     content: ''; position: absolute; top: 4px; right: 4px;

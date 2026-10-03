@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
@@ -41,6 +42,11 @@ func TestNenhumaRotaFicaSemClassificacao(t *testing.T) {
 				"POST /auth/refresh":         true,
 				"POST /auth/password/forgot": true,
 				"POST /auth/password/reset":  true,
+				// Vitrine do site de vendas (rotas_vitrine.go).
+				"GET /public/products":     true,
+				"GET /public/policy":       true,
+				"GET /public/availability": true,
+				"POST /public/quotes":      true,
 			}
 			if !publicasPermitidas[chave] {
 				t.Errorf("%s ficou pública sem estar na lista fechada", chave)
@@ -103,6 +109,9 @@ func TestValidarTabelaPegaRotaSemPermissao(t *testing.T) {
 		"pública com recurso": {
 			{Metodo: http.MethodGet, Path: "/finance", Acesso: AcessoPublico, Recurso: "finance", Acao: auth.AcaoVer},
 		},
+		"pública sem motivo": {
+			{Metodo: http.MethodGet, Path: "/public/finance", Acesso: AcessoPublico},
+		},
 		"sem classificação": {
 			{Metodo: http.MethodGet, Path: "/finance"},
 		},
@@ -118,5 +127,31 @@ func TestValidarTabelaPegaRotaSemPermissao(t *testing.T) {
 				t.Fatal("ValidarTabela deveria ter recusado a tabela")
 			}
 		})
+	}
+}
+
+// Toda rota da vitrine passa pelo limitador por IP — é a terceira invariante
+// do §5 de docs/unificacao-site-crm.md. O teste olha a TABELA real: uma rota
+// pública nova sob /public/ entra no freio sem ninguém lembrar, e uma rota
+// pública FORA de /public/ que não seja sonda nem /auth acende aqui.
+func TestTodaRotaPublicaDeNegocioFicaAtrasDoLimitador(t *testing.T) {
+	vitrine := 0
+	for _, r := range tabela(t) {
+		if r.Acesso != AcessoPublico {
+			continue
+		}
+		if strings.HasPrefix(r.Path, "/public/") {
+			vitrine++
+			if !EhDaVitrine(r) {
+				t.Errorf("%s %s é da vitrine e não passa pelo limitador", r.Metodo, r.Path)
+			}
+			continue
+		}
+		if !r.NaRaiz && !strings.HasPrefix(r.Path, "/auth/") {
+			t.Errorf("%s %s é pública fora de /public/: sem limitador e sem dono", r.Metodo, r.Path)
+		}
+	}
+	if vitrine == 0 {
+		t.Fatal("nenhuma rota /public/ na tabela: a vitrine sumiu do router")
 	}
 }

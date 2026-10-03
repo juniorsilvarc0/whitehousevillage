@@ -4,15 +4,14 @@ Site público do White House Village: é por aqui que o hóspede conhece a casa,
 consulta datas e — quando a unificação terminar — **faz a reserva**. O painel
 administrativo é o `apps/admin`; a regra de negócio é a `apps/api`.
 
-> **Estado atual: dados mocados.** Veio do MVP de apresentação
-> (`/Users/junior/DEV/spincode/whitehouse`, importado em 02/10/2026) e **ainda
-> não fala com a API**. Tarifa, disponibilidade, estadia mínima e sinal são
-> calculados em JavaScript, no navegador, a partir de `public/scripts/data.js`.
-> Isso contraria as regras 1, 4 e 7 do `CLAUDE.md` e é exatamente o que a
-> unificação desfaz — o plano, a ordem e o critério de pronto de cada passo estão
-> em [`docs/unificacao-site-crm.md`](../../docs/unificacao-site-crm.md).
->
-> Enquanto o passo A2 não entrar, **nenhum número desta pasta vale como preço**.
+> **Desde 03/10/2026 o site pergunta, não calcula** (passo A2 de
+> [`docs/unificacao-site-crm.md`](../../docs/unificacao-site-crm.md)). Catálogo,
+> calendário, orçamento, estadias mínimas, sinal e prazos vêm de
+> `/api/v1/public/*` — a MESMA API e o MESMO motor do painel. Trocar uma tarifa
+> ou a taxa de limpeza no painel muda o que o visitante vê, sem editar arquivo
+> nenhum (medido no navegador: R$ 9.150 → R$ 9.273,45 depois de um PATCH). O
+> `data.js` morreu. Se a API não responde, a página diz isso e oferece o
+> WhatsApp — ela nunca inventa preço.
 
 ## Subir
 
@@ -62,14 +61,14 @@ public/
     fonts.css             @font-face das fontes locais
     tokens.css, base.css, components.css, home.css, disponibilidade.css, erro.css
   scripts/
-    data.js               MOCK: produtos, tarifas, calendário, política exibida
-    main.js               header, menu, reveals, cards da home
-    disponibilidade.js    calendário, orçamento, indicadores
+    vitrine.js            cliente da API pública + texto editorial das acomodações
+    main.js               header, menu, reveals, cards da home (catálogo da API)
+    disponibilidade.js    calendário, orçamento, indicadores (tudo da API)
   fonts/                  Cormorant Garamond e Jost (woff2) + licenças OFL
   assets/                 logo
   videos/hero.mp4         vídeo da home (12 MB — destino em aberto, passo D5)
 e2e/fumaca-site.mjs       fumaça HTTP do site (Node 22, sem dependência)
-nginx.conf                404 real, trava em /admin, SSI do WhatsApp, cache e gzip
+nginx.conf                404 real, trava em /admin, SSI do WhatsApp, proxy SÓ de /api/v1/public/
 Dockerfile                nginx:1.27-alpine, sem build
 ```
 
@@ -80,12 +79,12 @@ A resposta pública **nunca** carrega dado de terceiro nem regra comercial inter
 
 - **Sem negociação de preço.** Não há controle de desconto, nem aviso de quem
   aprovaria um (passo D2). O preço é o da tabela.
-- **Dia indisponível é só "indisponível".** Nem o nome de quem ocupa (o
-  calendário mostrava, no `title` e no toast), nem se é reserva, pré-reserva ou
-  bloqueio. O mock `data.js` guarda só produto e período.
-- **`data.js` é público** — qualquer um baixa `/scripts/data.js`. Por isso ele
-  não tem mais reservas com nome e valor, leads com telefone, funil nem regra
-  interna de negociação: saíram com o back-office (passo D3, parcial).
+- **Dia indisponível é só "indisponível".** A API pública manda `available:
+  false` e mais nada: nem quem ocupa, nem por quê, nem quantas unidades sobram
+  (a contagem somada no ano seria a taxa de ocupação da casa).
+- **O orçamento público não negocia.** `POST /api/v1/public/quotes` não tem
+  campo de desconto — mandar `discount_pct` é 422 — e a resposta não traz
+  alçada, versão de política nem tabela.
 
 ## WhatsApp: um número, uma linha
 
@@ -132,8 +131,23 @@ o WhatsApp — sem SSI cru, o mesmo número em todos os links e **uma** ocorrên
 dele no código-fonte de `apps/site`. O porquê de cada critério está no topo do
 script.
 
+## A API pelo site
+
+O nginx encaminha **só** `/api/v1/public/*` para `api:8080`, pela mesma origem
+(sem CORS e sem a API ganhar nome no DNS). Qualquer outro `/api/...` pelo site é
+404 — a fumaça confere `/api/v1/auth/me`, `/reservations` e `/users`. O nome
+`api` é resolvido por pedido (`resolver` do Docker), para o site subir mesmo com
+a API fora do ar. O IP do visitante segue em `X-Forwarded-For`: é por ele que a
+API limita a vitrine (120 pedidos por minuto por IP).
+
+As quatro rotas: `GET /public/products`, `GET /public/policy`,
+`GET /public/availability` (janela de até 93 dias, entre 31 dias atrás e 548 à
+frente) e `POST /public/quotes`. Contrato em `apps/api/openapi/openapi.yaml`, tag
+Vitrine.
+
 ## Regra que não se negocia aqui
 
 Esta pasta **não decide preço, não decide disponibilidade e não decide política**.
-Ela pergunta. Enquanto `data.js` existir, cada número que ele devolve é uma
-segunda fonte da verdade competindo com o banco — e a que o cliente vê.
+Ela pergunta. O único texto daqui é editorial (selo, diferenciais e descrição de
+cada acomodação, em `vitrine.js`); número de preço, prazo ou regra escrito nesta
+pasta é uma segunda fonte da verdade competindo com o banco — e a que o cliente vê.

@@ -364,8 +364,21 @@ func (a *ambiente) tarifasDaTabela(t *testing.T, tabela uuid.UUID) map[string]in
 	return out
 }
 
+// hojeMais conta a partir de HOJE NO FUSO DA CASA, que é o "hoje" que o banco
+// usa para decidir a política vigente (`now() AT TIME ZONE properties.timezone`).
+//
+// Com o relógio do processo (UTC no CI e nos containers), das 21h à meia-noite
+// de Fortaleza o processo já está no dia seguinte: a versão publicada "para
+// hoje" nascia com valid_from = amanhã e não ficava vigente. Medido em
+// 02/10/2026 às 21h35: TestPutDaPoliticaComercialCriaVersaoNovaSemEditarAAnterior
+// reprovava em UTC ("vigente = versão 1, esperado 2") e passava com
+// TZ=America/Fortaleza — o mesmo teste, a mesma árvore.
 func hojeMais(dias int) string {
-	return time.Now().AddDate(0, 0, dias).Format("2006-01-02")
+	fuso, err := time.LoadLocation("America/Fortaleza")
+	if err != nil {
+		panic("fuso da casa indisponível: " + err.Error())
+	}
+	return time.Now().In(fuso).AddDate(0, 0, dias).Format("2006-01-02")
 }
 
 func texto(s string) *string { return &s }
