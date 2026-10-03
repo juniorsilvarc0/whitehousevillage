@@ -44,7 +44,7 @@ export function lerSLA(faixa: FaixaDeSLA): LeituraDeSLA {
   if (faixa.sla_days === null) {
     return {
       tom: "sem_sla",
-      rotulo: "Etapa sem SLA",
+      rotulo: "Etapa sem prazo",
       detalhe: `${naEtapa}. Esta etapa não cobra prazo.`,
       alarme: false,
     };
@@ -56,7 +56,7 @@ export function lerSLA(faixa: FaixaDeSLA): LeituraDeSLA {
     const atraso = faixa.days_left === null ? null : Math.abs(faixa.days_left);
     return {
       tom: "estourado",
-      rotulo: atraso === null || atraso === 0 ? "SLA estourou hoje" : `Estourou há ${plural(atraso, "dia", "dias")}`,
+      rotulo: atraso === null || atraso === 0 ? "Prazo venceu hoje" : `Estourou há ${plural(atraso, "dia", "dias")}`,
       detalhe: prazo,
       alarme: true,
     };
@@ -86,7 +86,7 @@ export function faixaDoCard(card: Pick<CardDaOportunidade, "sla_breached" | "sla
   if (!card.sla_breached) return null;
   return {
     tom: "estourado",
-    rotulo: "SLA estourado",
+    rotulo: "Prazo vencido",
     detalhe: "O prazo desta etapa passou.",
     alarme: true,
   };

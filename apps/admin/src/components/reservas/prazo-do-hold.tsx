@@ -71,20 +71,20 @@ export function FaixaDePrazo({ expiraEm }: { expiraEm: string }) {
       <AlarmClock className="size-4 shrink-0" aria-hidden="true" />
       {vencido ? (
         <span>
-          O prazo venceu em <strong className="tabular-nums">{formatarInstante(expiraEm)}</strong>. As unidades
-          já podem ter sido liberadas pelo job que varre as pré-reservas — confirmar agora responde recusa, e a
-          saída é criar outra pré-reserva.
+          O prazo venceu em <strong className="tabular-nums">{formatarInstante(expiraEm)}</strong>. As datas
+          já podem ter sido liberadas automaticamente, então não dá mais para confirmar esta pré-reserva — crie
+          outra.
         </span>
       ) : (
         <span>
-          A data está segura até <strong className="tabular-nums">{formatarInstante(expiraEm)}</strong>
+          As datas estão guardadas até <strong className="tabular-nums">{formatarInstante(expiraEm)}</strong>
           {expiracao ? (
             <>
               {" "}
               (<span className="tabular-nums">{expiracao.texto}</span>)
             </>
           ) : null}
-          . Sem o sinal, ela volta a ser vendável sozinha.
+          . Se o sinal não for pago até lá, elas voltam a ficar livres automaticamente.
         </span>
       )}
     </div>

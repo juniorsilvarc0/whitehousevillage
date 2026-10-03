@@ -89,7 +89,7 @@ func montarAlertas(c OportunidadeCompleta, agora time.Time) []AlertaDaOportunida
 		alertas = append(alertas, AlertaDaOportunidade{
 			Codigo:     AlertaSLAEstourado,
 			Severidade: SeveridadeCritico,
-			Mensagem: fmt.Sprintf("SLA da etapa %s estourou há %s.",
+			Mensagem: fmt.Sprintf("O prazo da etapa %s venceu há %s.",
 				c.Oportunidade.EtapaNome, emDias(dias)),
 			VenceEm:    c.Oportunidade.SLAVenceEm,
 			EntidadeID: &c.Oportunidade.EtapaID,

@@ -45,15 +45,14 @@ export default async function CalendarioPage({
       <CabecalhoDeTela
         voltar={{ href: "/app/configuracoes", rotulo: "Configurações" }}
         titulo="Calendário comercial"
-        descricao="Cada noite recebe um único tipo de data. Feriados e períodos especiais são o que a decide — e é do tipo que sai a tarifa."
+        descricao="Aqui você marca feriados e temporadas. É isso que define o tipo de cada noite e, portanto, o preço da diária."
       />
 
       <Nota variante="atencao">
-        <strong>Períodos se sobrepõem de propósito.</strong> O Réveillon mora dentro da alta temporada, e
-        a tabela não tem constraint de exclusão justamente por isso: quem desempata é a precedência
-        (réveillon e carnaval 100 &gt; feriado 80 &gt; alta 60 &gt; fim de semana 40 &gt; normal 0).
-        Encolher a alta temporada para &ldquo;não encostar&rdquo; no réveillon não corrige nada — só muda o preço de
-        todas as noites entre os dois.
+        <strong>Pode haver períodos um dentro do outro.</strong> O Réveillon fica dentro da alta temporada,
+        e tudo bem: quando dois períodos caem na mesma noite, vale o mais importante (réveillon e carnaval
+        &gt; feriado &gt; alta temporada &gt; fim de semana &gt; dia normal). Não encurte a alta temporada
+        para &ldquo;não encostar&rdquo; no réveillon — isso só mudaria o preço das noites entre os dois.
       </Nota>
 
       {/* `useSearchParams` obriga a fronteira de Suspense; sem ela a rota
@@ -64,7 +63,7 @@ export default async function CalendarioPage({
 
       <Secao
         titulo="Feriados"
-        descricao="Uma data, um feriado. Classifica a noite como feriado — precedência 80, perde só para réveillon e carnaval."
+        descricao="Cada feriado ocupa uma data. Nessa noite vale o preço de feriado, a não ser que seja réveillon ou carnaval."
       >
         {feriados.ok ? (
           <ListaDeFeriados feriados={feriados.data} permissoes={permissoes} />
@@ -75,7 +74,7 @@ export default async function CalendarioPage({
 
       <Secao
         titulo="Períodos especiais"
-        descricao="Faixas inclusivas nas duas pontas — 28/12 a 02/01 classifica as seis datas, inclusive 02/01."
+        descricao="Temporadas com data de início e de fim. As duas datas entram: 28/12 a 02/01 conta os seis dias, inclusive 02/01."
       >
         {periodos.ok ? (
           <ListaDePeriodos periodos={periodos.data} permissoes={permissoes} />

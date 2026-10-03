@@ -64,7 +64,7 @@ export default async function FunilPage({
         titulo="Funil"
         descricao={
           escopoProprio
-            ? "O seu funil: o quadro mostra apenas os negócios de que você é dono. Quem recorta isso é o servidor, na consulta."
+            ? "O seu funil: o quadro mostra apenas os negócios que são seus."
             : "Onde cada negócio está, quanto ele vale e há quanto tempo não anda."
         }
         acoes={
@@ -103,15 +103,15 @@ export default async function FunilPage({
 
           {!motivos.ok ? (
             <Nota variante="atencao">
-              O catálogo de motivos de perda não carregou ({motivos.code}). Marcar um negócio como perdido
-              exige um motivo do catálogo — enquanto ele não vier, a perda vai ser recusada pelo servidor.
+              A lista de motivos de perda não carregou. Para marcar um negócio como perdido é preciso
+              escolher um motivo — tente recarregar a página antes de fazer isso.
             </Nota>
           ) : null}
 
           <Nota>
-            Arrastar não é o único caminho: cada card tem <strong>Mover para</strong>, que funciona com
-            teclado e no celular. Soltar em <strong>Ganho</strong> ou <strong>Perdido</strong> não move o
-            card sozinho — ganhar cria reserva e perder exige motivo, então os dois abrem um diálogo.
+            Além de arrastar, cada card tem o botão <strong>Mover para</strong>, que funciona no teclado e
+            no celular. Ao soltar em <strong>Ganho</strong> ou <strong>Perdido</strong>, abre uma janela
+            antes: ganhar cria a reserva e perder pede o motivo.
           </Nota>
         </>
       ) : (

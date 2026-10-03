@@ -183,8 +183,8 @@ export function MapaDeOcupacao({
         <div className="min-w-0">
           <h1 className="font-display text-2xl leading-tight sm:text-3xl">Mapa de ocupação</h1>
           <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-            As oito unidades e a leitura da casa inteira, noite a noite. O fundo é o tipo de data (e a
-            tarifa que ele manda); a barra é quem está na casa. Arraste sobre um dia livre para bloquear.
+            Os apartamentos e a casa inteira, noite a noite. A cor de fundo mostra o tipo de data (que define
+            o preço); a barra mostra quem está na casa. Arraste sobre dias livres para bloquear.
           </p>
         </div>
       </header>
@@ -210,8 +210,8 @@ export function MapaDeOcupacao({
           role="status"
           className="rounded-lg border border-alcada-atencao/40 bg-alcada-atencao/10 px-3 py-2 text-xs text-foreground"
         >
-          A última atualização automática falhou ({mensagemDoErro(aoVivo.falha)}) — o mapa mostra o
-          desenho anterior. Use o botão de recarregar da barra.
+          A última atualização automática falhou ({mensagemDoErro(aoVivo.falha)}) — o mapa pode estar
+          desatualizado. Use o botão de recarregar da barra.
         </p>
       ) : null}
 
@@ -221,7 +221,7 @@ export function MapaDeOcupacao({
           descricao={
             filtros.somenteOcupadas
               ? "Nenhuma unidade tem ocupação nesta faixa. Desmarque “só linhas com ocupação” para ver o calendário inteiro."
-              : "Não há unidades ativas nesta propriedade, ou o produto escolhido não tem composição. Confira o Inventário."
+              : "Não há apartamentos ativos, ou o produto escolhido não tem apartamentos definidos. Confira o Inventário."
           }
         />
       ) : (

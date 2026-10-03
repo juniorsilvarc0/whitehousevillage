@@ -271,7 +271,7 @@ export function PipelineKanban({
     return (
       <EstadoVazio
         titulo="Este funil não tem etapas"
-        descricao="Um funil sem etapa não desenha quadro nenhum. Cadastre as etapas em Configurações para o kanban existir."
+        descricao="Cadastre as etapas do funil em Configurações para o quadro aparecer."
       />
     );
   }
@@ -309,8 +309,8 @@ export function PipelineKanban({
           role="status"
           className="rounded-lg border border-alcada-atencao/40 bg-alcada-atencao/10 px-3 py-2 text-xs text-foreground"
         >
-          A última atualização automática falhou ({mensagemCrm(aoVivo.falha)}) — o quadro mostra o
-          desenho anterior. Recarregue a página para ver o funil de agora.
+          A última atualização automática falhou ({mensagemCrm(aoVivo.falha)}) — o quadro pode estar
+          desatualizado. Recarregue a página para ver o funil de agora.
         </p>
       ) : null}
 

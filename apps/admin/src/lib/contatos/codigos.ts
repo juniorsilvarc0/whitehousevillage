@@ -65,7 +65,7 @@ export function mensagemDeContato(code: CodigoContato, padrao?: string): string 
     case "CONTACT_DUPLICATE":
       return "Esta pessoa já está cadastrada.";
     case "CONTACT_ANONYMIZED":
-      return "Ficha anonimizada não volta a receber dado pessoal. Cadastre um contato novo.";
+      return "Os dados desta ficha foram apagados a pedido da pessoa e não podem voltar. Cadastre um contato novo.";
     case "RESOURCE_IN_USE":
       // O texto geral fala em "desativar", que não é o gesto daqui: contato com
       // vínculo não se apaga, se anonimiza — e a ficha explica a diferença.

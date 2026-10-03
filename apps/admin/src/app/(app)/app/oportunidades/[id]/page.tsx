@@ -47,7 +47,7 @@ export default async function OportunidadePage({ params }: { params: Promise<{ i
           titulo="Não foi possível abrir a oportunidade"
           detalhe={
             completo.code === "NOT_FOUND"
-              ? "Ou ela não existe mais, ou é de outro corretor — a API responde 404 nos dois casos, de propósito: 403 confirmaria que ela existe."
+              ? "Ela pode não existir mais, ou pode ser de outro corretor e não estar liberada para você."
               : undefined
           }
         />

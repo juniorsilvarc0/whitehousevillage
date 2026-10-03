@@ -76,7 +76,7 @@ export function unidadeParaEntrada(valores: UnidadeFormulario): UnidadeEntrada {
  * comparar. O `422` do contrato diz a mesma coisa.
  */
 export const ComposicaoFormulario = z.object({
-  unit_ids: z.array(z.string().uuid()).min(1, "Escolha ao menos uma unidade — produto sem composição não pode ser vendido."),
+  unit_ids: z.array(z.string().uuid()).min(1, "Escolha ao menos uma unidade — sem apartamento o produto não pode ser vendido."),
 });
 
 export type ComposicaoFormulario = z.infer<typeof ComposicaoFormulario>;

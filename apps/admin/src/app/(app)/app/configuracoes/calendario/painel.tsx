@@ -54,7 +54,7 @@ export function ListaDeFeriados({
       {feriados.length === 0 ? (
         <EstadoVazio
           titulo="Nenhum feriado no período"
-          descricao="Sem feriado cadastrado, a data cai em fim de semana ou normal — e é cobrada como tal."
+          descricao="Sem feriado cadastrado, cada data é cobrada como fim de semana ou dia normal."
           icone={CalendarDays}
         />
       ) : (
@@ -98,8 +98,8 @@ export function ListaDeFeriados({
         rotuloConfirmar="Remover feriado"
         descricao={
           <>
-            A data volta a ser classificada como fim de semana ou normal <strong>nos próximos
-            cálculos</strong>. Reservas já emitidas mantêm o tipo e o preço que gravaram noite a noite.
+            A data volta a ser cobrada como fim de semana ou dia normal <strong>nos próximos
+            orçamentos</strong>. Reservas já feitas continuam com o preço combinado.
           </>
         }
         aoConfirmar={() => removerFeriado(aRemover!.id)}
@@ -158,7 +158,7 @@ function ModalDeFeriado({ controle }: { controle: React.RefObject<ControleDeModa
       open={aberto}
       onOpenChange={aoMudar}
       title={feriado ? `Editar ${feriado.name}` : "Novo feriado"}
-      description="Data em feriados classifica a noite como feriado — precedência 80."
+      description="Nessa data vale o preço de feriado."
       footer={
         <>
           <Button variant="ghost" onClick={() => aoMudar(false)} disabled={isSubmitting}>
@@ -183,7 +183,7 @@ function ModalDeFeriado({ controle }: { controle: React.RefObject<ControleDeModa
           label="Data"
           obrigatorio
           erro={errors.date?.message}
-          hint="Uma data, um feriado: a chave natural é a própria data dentro da propriedade."
+          hint="Só pode haver um feriado por data."
         >
           {(p) => <Input {...p} type="date" {...form.register("date")} className="tabular-nums" />}
         </Campo>
@@ -195,7 +195,7 @@ function ModalDeFeriado({ controle }: { controle: React.RefObject<ControleDeModa
         <CheckboxCampo
           id="feriado-active"
           label="Ativo"
-          hint="Feriado inativo deixa de classificar a noite nos cálculos seguintes, sem sumir do histórico."
+          hint="Desmarcado, o feriado deixa de valer nos próximos orçamentos, mas continua no histórico."
           {...form.register("active")}
         />
       </form>
@@ -278,7 +278,7 @@ export function ListaDePeriodos({
                         <strong className="text-foreground">{outro.name}</strong>
                       </span>
                     ))}
-                    . Nas noites em comum vence o de maior precedência — é assim que deve ser.
+                    . Nas noites em comum vale o período mais importante — isso é normal.
                   </p>
                 ) : null}
 
@@ -312,9 +312,9 @@ export function ListaDePeriodos({
         rotuloConfirmar="Remover período"
         descricao={
           <>
-            As noites cobertas voltam a ser classificadas pelo que sobrar (outro período, feriado, fim de
-            semana ou normal) <strong>nos próximos cálculos</strong> — e podem mudar de preço. Reservas
-            emitidas não mudam.
+            Essas noites passam a seguir o que sobrar (outro período, feriado, fim de semana ou dia
+            normal) <strong>nos próximos orçamentos</strong> — e podem mudar de preço. Reservas já
+            feitas não mudam.
           </>
         }
         aoConfirmar={() => removerPeriodo(aRemover!.id)}
@@ -381,7 +381,7 @@ function ModalDePeriodo({ controle }: { controle: React.RefObject<ControleDeModa
       open={aberto}
       onOpenChange={aoMudar}
       title={periodo ? `Editar ${periodo.name}` : "Novo período especial"}
-      description="Faixa do calendário comercial, inclusiva nas duas pontas."
+      description="Uma temporada com início e fim. As duas datas entram no período."
       footer={
         <>
           <Button variant="ghost" onClick={() => aoMudar(false)} disabled={isSubmitting}>
@@ -406,7 +406,7 @@ function ModalDePeriodo({ controle }: { controle: React.RefObject<ControleDeModa
           label="Nome"
           obrigatorio
           erro={errors.name?.message}
-          hint="Carregue o ano no nome — o Réveillon 2027/2028 é linha nova, não edição desta."
+          hint="Coloque o ano no nome. O Réveillon do ano seguinte é um período novo, não uma edição deste."
         >
           {(p) => <Input {...p} {...form.register("name")} placeholder="Réveillon 2026/2027" />}
         </Campo>
@@ -416,7 +416,7 @@ function ModalDePeriodo({ controle }: { controle: React.RefObject<ControleDeModa
           label="Tipo"
           obrigatorio
           erro={errors.kind?.message}
-          hint="É o tipo que as noites deste período recebem — e é ele que decide a precedência."
+          hint="Define o preço das noites deste período e qual período vale quando dois se cruzam."
         >
           {(p) => (
             <Select {...p} {...form.register("kind")}>
@@ -439,7 +439,7 @@ function ModalDePeriodo({ controle }: { controle: React.RefObject<ControleDeModa
             label="Termina em"
             obrigatorio
             erro={errors.ends_on?.message}
-            hint="Inclusivo: esta data também é classificada."
+            hint="Esta data também entra no período."
           >
             {(p) => <Input {...p} type="date" {...form.register("ends_on")} className="tabular-nums" />}
           </Campo>
@@ -448,15 +448,14 @@ function ModalDePeriodo({ controle }: { controle: React.RefObject<ControleDeModa
         {dias !== null ? (
           <p className="rounded-lg bg-card/70 px-3 py-2 text-xs text-muted-foreground">
             <span className="tabular-nums text-foreground">{dias}</span> dia{dias === 1 ? "" : "s"}{" "}
-            classificados — as duas pontas entram. Ao contrário da estadia, que é meia-aberta e não
-            cobra a noite do check-out.
+            no período, contando o primeiro e o último.
           </p>
         ) : null}
 
         <CheckboxCampo
           id="periodo-active"
           label="Ativo"
-          hint="Período inativo deixa de classificar as noites nos cálculos seguintes."
+          hint="Desmarcado, o período deixa de valer nos próximos orçamentos."
           {...form.register("active")}
         />
       </form>

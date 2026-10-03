@@ -47,7 +47,7 @@ describe("FaixaDeSla", () => {
 
   it("estouro no mesmo dia não vira 'há 0 dias'", () => {
     render(<FaixaDeSla faixa={faixa({ breached: true, days_left: 0 })} />);
-    expect(screen.getByText("SLA estourou hoje")).toBeTruthy();
+    expect(screen.getByText("Prazo venceu hoje")).toBeTruthy();
   });
 
   it("separa 'vence hoje' de 'no prazo' — são decisões diferentes para quem vende", () => {
@@ -64,7 +64,7 @@ describe("FaixaDeSla", () => {
   it("etapa sem SLA diz que não cobra prazo, em vez de fingir um", () => {
     render(<FaixaDeSla faixa={faixa({ sla_days: null, due_at: null, days_left: null })} />);
     expect(screen.getByRole("status")).toHaveProperty("dataset.tom", "sem_sla");
-    expect(screen.getByText("Etapa sem SLA")).toBeTruthy();
+    expect(screen.getByText("Etapa sem prazo")).toBeTruthy();
   });
 
   it("obedece ao `breached` do servidor mesmo quando o prazo já passou no relógio local", () => {
@@ -98,6 +98,6 @@ describe("FaixaDeSlaDoCard", () => {
 
   it("desenha a faixa quando o servidor marcou o card como estourado", () => {
     render(<FaixaDeSlaDoCard card={{ sla_breached: true, sla_due_at: "2026-08-22T12:00:00Z" }} />);
-    expect(screen.getByText("SLA estourado")).toBeTruthy();
+    expect(screen.getByText("Prazo vencido")).toBeTruthy();
   });
 });

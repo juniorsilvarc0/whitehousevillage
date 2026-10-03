@@ -1,5 +1,5 @@
 import { ehDataISO } from "@/lib/datas";
-import { ehEstadoDeReserva, ESTADOS } from "@/lib/reservas/estados";
+import { ehEstadoDeReserva } from "@/lib/reservas/estados";
 import type { EstadoDaReserva } from "@/lib/reservas/tipos";
 
 /**
@@ -118,18 +118,18 @@ export function lerFiltros(params: ParametrosCrus): LeituraDeFiltros {
   }
   if (invalidos.length > 0) {
     avisos.push(
-      `Situação desconhecida ignorada: ${invalidos.join(", ")}. As situações válidas são ${Object.keys(ESTADOS).join(", ")}.`,
+      `Situação desconhecida ignorada: ${invalidos.join(", ")}. Use as opções do filtro de situação.`,
     );
   }
 
   let from = primeiro(params.from);
   let to = primeiro(params.to);
   if (from && !ehDataISO(from)) {
-    avisos.push(`Data inicial ignorada: "${from}" não é uma data no formato AAAA-MM-DD.`);
+    avisos.push(`Data inicial ignorada: "${from}" não é uma data válida.`);
     from = "";
   }
   if (to && !ehDataISO(to)) {
-    avisos.push(`Data final ignorada: "${to}" não é uma data no formato AAAA-MM-DD.`);
+    avisos.push(`Data final ignorada: "${to}" não é uma data válida.`);
     to = "";
   }
   if (from && to && to < from) {
@@ -137,14 +137,14 @@ export function lerFiltros(params: ParametrosCrus): LeituraDeFiltros {
     // a lista viria em branco sem explicação nenhuma. Melhor soltar a ponta
     // final e dizer isso do que mostrar "nenhuma reserva" para um recorte que
     // não existe.
-    avisos.push(`A data final (${to}) é anterior à inicial (${from}); o recorte ficou aberto no fim.`);
+    avisos.push(`A data final é anterior à inicial; a busca ficou sem data final.`);
     to = "";
   }
 
   const unitTypeId = primeiro(params.unit_type_id);
   let produto = unitTypeId;
   if (produto && !ehUUID(produto)) {
-    avisos.push("Produto ignorado: o identificador na URL não é um UUID.");
+    avisos.push("Filtro de produto ignorado: o produto do link não foi reconhecido. Escolha de novo na lista.");
     produto = "";
   }
 
@@ -158,7 +158,7 @@ export function lerFiltros(params: ParametrosCrus): LeituraDeFiltros {
   const sortCru = primeiro(params.sort);
   const sort = ORDENACOES.some((o) => o.valor === sortCru) ? (sortCru as Ordenacao) : ORDENACAO_PADRAO;
   if (sortCru && sort !== sortCru) {
-    avisos.push(`Ordenação "${sortCru}" não existe; usando a padrão.`);
+    avisos.push(`Ordem "${sortCru}" não reconhecida; usando a ordem padrão.`);
   }
 
   return {

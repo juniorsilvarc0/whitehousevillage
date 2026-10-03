@@ -46,21 +46,21 @@ export type DescricaoDaAlcada = {
 export const SEMAFORO: Record<Alcada, DescricaoDaAlcada> = {
   gestao: {
     rotulo: "Pode fechar",
-    explicacao: "Dentro da alçada da gestão. Fecha agora, sem consultar ninguém.",
+    explicacao: "Dentro do limite da gestão. Pode fechar agora, sem consultar ninguém.",
     podeFechar: true,
     classe: "bg-alcada-livre/12 text-alcada-livre border-alcada-livre/30",
     ponto: "bg-alcada-livre",
   },
   proprietario: {
     rotulo: "Exige aprovação do proprietário",
-    explicacao: "Acima da alçada da gestão. O orçamento sai, mas só vira reserva com o aval do proprietário.",
+    explicacao: "Acima do limite da gestão. O orçamento pode ser feito, mas só vira reserva com o aval do proprietário.",
     podeFechar: true,
     classe: "bg-alcada-atencao/14 text-alcada-atencao border-alcada-atencao/35",
     ponto: "bg-alcada-atencao",
   },
   negado: {
     rotulo: "Não autorizado",
-    explicacao: "Acima do teto da política. O servidor recusa com DISCOUNT_ABOVE_LIMIT — nem com aprovação.",
+    explicacao: "Acima do desconto máximo da política. O sistema não aceita — nem com aprovação do proprietário.",
     podeFechar: false,
     classe: "bg-destructive/12 text-destructive border-destructive/30",
     ponto: "bg-destructive",

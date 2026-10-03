@@ -126,7 +126,7 @@ export async function salvarComposicao(
 
   const analise = ComposicaoFormulario.safeParse({ unit_ids: ordenadas });
   if (!analise.success) {
-    return falha("VALIDATION_ERROR", "Confira a composição.", detalhesDoZod(analise.error));
+    return falha("VALIDATION_ERROR", "Confira os apartamentos escolhidos.", detalhesDoZod(analise.error));
   }
 
   const resultado = await tentar(() =>

@@ -85,7 +85,7 @@ export const ContatoFormulario = z
     }
 
     if (v.birth_date !== "" && !ehDataISO(v.birth_date)) {
-      ctx.addIssue({ code: "custom", path: ["birth_date"], message: "Use uma data no formato AAAA-MM-DD." });
+      ctx.addIssue({ code: "custom", path: ["birth_date"], message: "Data inválida." });
     }
 
     if (v.state !== "" && !/^[A-Za-z]{2}$/.test(v.state)) {
@@ -103,7 +103,7 @@ export const ContatoFormulario = z
       });
     }
     if (v.consent_at !== "" && !ehDataISO(v.consent_at)) {
-      ctx.addIssue({ code: "custom", path: ["consent_at"], message: "Use uma data no formato AAAA-MM-DD." });
+      ctx.addIssue({ code: "custom", path: ["consent_at"], message: "Data inválida." });
     }
   });
 

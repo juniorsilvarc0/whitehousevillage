@@ -18,7 +18,7 @@ export async function exigir(recurso: RecursoCodigo, acao: Acao): Promise<Falha 
   const sessao = await getSession();
   if (!sessao) return falha("UNAUTHORIZED", "Sessão ausente ou expirada.");
   if (!can(sessao.permissions, recurso, acao)) {
-    return falha("FORBIDDEN", "Seu perfil não alcança esta operação.", { resource: recurso, action: acao });
+    return falha("FORBIDDEN", "Seu perfil não tem permissão para fazer isso.", { resource: recurso, action: acao });
   }
   return null;
 }

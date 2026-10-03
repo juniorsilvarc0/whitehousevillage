@@ -151,7 +151,7 @@ export function BarraDoFunil({
         <CheckboxCampo
           id="funil-fechados"
           label="Trazer tudo que já fechou"
-          hint="Por padrão as colunas Ganho e Perdido mostram só os últimos 30 dias — um ano de perdas seria a coluna mais pesada do quadro."
+          hint="Normalmente as colunas Ganho e Perdido mostram só os últimos 30 dias, para o quadro não ficar pesado."
           checked={fechados}
           onChange={(evento) => aplicar({ include_closed: evento.target.checked ? "true" : "" })}
         />

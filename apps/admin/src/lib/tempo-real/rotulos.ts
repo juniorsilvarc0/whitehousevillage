@@ -47,14 +47,14 @@ export function descreverTempoReal(
     case "conectando":
       return {
         rotulo: "Conectando",
-        detalhe: "Abrindo o canal de eventos.",
+        detalhe: "Ligando a atualização automática.",
         tom: "atencao",
         ofereceReconectar: false,
       };
     case "reconectando":
       return {
         rotulo: "Reconectando",
-        detalhe: "O canal caiu e está voltando. Pode haver mudança ainda não mostrada.",
+        detalhe: "A atualização automática caiu e está voltando. Pode haver mudança ainda não mostrada.",
         tom: "atencao",
         ofereceReconectar: true,
       };
@@ -67,18 +67,18 @@ export function descreverTempoReal(
       };
     case "sem_rede":
       return {
-        rotulo: "Sem rede",
+        rotulo: "Sem internet",
         detalhe:
           assunto === "funil"
-            ? "O navegador está offline. O quadro volta a se atualizar sozinho quando a rede voltar."
-            : "O navegador está offline. O mapa volta a se atualizar sozinho quando a rede voltar.",
+            ? "Sem internet. O quadro volta a se atualizar sozinho quando a conexão voltar."
+            : "Sem internet. O mapa volta a se atualizar sozinho quando a conexão voltar.",
         tom: "falha",
         ofereceReconectar: false,
       };
     case "desligado":
       return {
         rotulo: "Sem atualização automática",
-        detalhe: "O que está na tela é o desenho da última carga. Reconecte ou recarregue a página.",
+        detalhe: "A tela pode estar desatualizada. Clique para reconectar ou recarregue a página.",
         tom: "falha",
         ofereceReconectar: true,
       };

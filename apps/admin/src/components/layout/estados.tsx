@@ -68,6 +68,8 @@ export function EstadoDeErro({
   return (
     <div
       role="alert"
+      data-codigo={code}
+      title={`Código para o suporte: ${code}`}
       className={cn("rounded-xl border border-destructive/30 bg-destructive/8 px-5 py-4", className)}
     >
       <div className="flex items-start gap-3">
@@ -76,9 +78,6 @@ export function EstadoDeErro({
           <h3 className="font-display text-base text-foreground">{titulo}</h3>
           <p className="mt-1 text-sm text-muted-foreground">{mensagemDoErro(code)}</p>
           {detalhe ? <p className="mt-2 text-sm text-muted-foreground">{detalhe}</p> : null}
-          <code className="mt-2 inline-block rounded-md bg-card px-2 py-0.5 font-mono text-xs text-muted-foreground">
-            {code}
-          </code>
         </div>
       </div>
     </div>
@@ -93,19 +92,39 @@ export function EstadoDeErro({
  * pedir a quem, em vez de encontrar uma página quebrada e concluir que o
  * sistema está com defeito.
  */
+const NOME_DA_AREA: Record<string, string> = {
+  calendar: "Mapa de ocupação",
+  contacts: "Contatos",
+  "crm.leads": "Leads",
+  "crm.opportunities": "Funil de vendas",
+  inventory: "Inventário",
+  quotes: "Orçamentos",
+  reservations: "Reservas",
+  settings: "Configurações",
+};
+
+const NOME_DA_ACAO: Record<string, string> = {
+  ver: "ver",
+  criar: "criar",
+  editar: "editar",
+  excluir: "excluir",
+};
+
 export function SemAcesso({ recurso, acao = "ver" }: { recurso: string; acao?: string }) {
+  const area = NOME_DA_AREA[recurso] ?? recurso;
+  const verbo = NOME_DA_ACAO[acao] ?? acao;
   return (
     <div className="flex flex-col gap-6 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-prose rounded-xl border border-border/60 bg-muted/25 px-6 py-8 text-center">
+      <div
+        data-permissao={`${recurso}:${acao}`}
+        className="mx-auto max-w-prose rounded-xl border border-border/60 bg-muted/25 px-6 py-8 text-center"
+      >
         <Lock className="mx-auto size-6 text-muted-foreground" aria-hidden="true" />
         <h1 className="font-display mt-3 text-xl">Esta tela não está liberada para o seu perfil</h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Ela exige <code className="font-mono text-xs text-foreground">{recurso}:{acao}</code> na matriz
-          do seu perfil. Peça à gestão em Configurações → Perfis; a mudança vale na requisição
-          seguinte, sem novo login.
-        </p>
-        <p className="mt-3 text-xs text-muted-foreground">
-          Esconder não é autorizar: quem recusa de verdade é a API, a cada requisição.
+          Para usar esta tela, seu perfil precisa da permissão de <strong>{verbo}</strong> em{" "}
+          <strong>{area}</strong>. Peça à gestão para liberar em Configurações → Perfis; a mudança vale
+          na hora, sem precisar entrar de novo.
         </p>
         <Link href="/app" className={cn(buttonVariants({ variant: "outline" }), "mt-5")}>
           Voltar ao painel

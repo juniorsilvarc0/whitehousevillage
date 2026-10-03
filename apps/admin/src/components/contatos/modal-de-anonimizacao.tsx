@@ -94,7 +94,7 @@ export function ModalDeAnonimizacao({
     notificarSucesso(
       "Ficha anonimizada",
       sobreviveram > 0
-        ? `${sobreviveram} ${sobreviveram === 1 ? "registro continua" : "registros continuam"} apontando para este id — nada financeiro foi apagado.`
+        ? `${sobreviveram} ${sobreviveram === 1 ? "registro continua" : "registros continuam"} no histórico — nada financeiro foi apagado.`
         : "Nenhum registro estava vinculado.",
     );
     setAberto(false);
@@ -106,7 +106,7 @@ export function ModalDeAnonimizacao({
       open={aberto}
       onOpenChange={setAberto}
       title={`Anonimizar ${contato.name}`}
-      description="Irreversível: o dado pessoal é eliminado e não fica guardado em lugar nenhum."
+      description="Não tem volta: os dados pessoais são apagados e não ficam guardados em lugar nenhum."
       footer={
         <>
           <Button variant="ghost" onClick={() => setAberto(false)} disabled={isSubmitting}>
@@ -140,21 +140,21 @@ export function ModalDeAnonimizacao({
 
           <p className="mt-3 font-medium text-foreground">O que continua existindo</p>
           <p className="mt-1 text-muted-foreground">
-            Reservas, noites congeladas, valores, recebíveis e o razão — todos apontando para o
-            <strong> mesmo id</strong>.{" "}
+            Reservas, noites, valores e pagamentos — tudo continua ligado a esta
+            <strong> mesma ficha</strong>.{" "}
             {preservados.length > 0 ? (
               <>
                 Hoje são <strong>{preservados.join(", ")}</strong>.
               </>
             ) : null}{" "}
-            Eliminar dado pessoal e destruir registro fiscal são coisas diferentes.
+            Apagar os dados pessoais não apaga o histórico de vendas.
           </p>
         </div>
 
         <Nota variante="atencao">
-          Reserva <strong>viva</strong> (pré-reserva, confirmada ou em casa) impede a anonimização:
-          a operação precisa do nome para entregar a chave, e enquanto o contrato corre a base legal
-          é a execução dele. A ficha fica elegível quando a estadia terminar.
+          Se houver reserva <strong>em andamento</strong> (pré-reserva, confirmada ou hospedado), não
+          dá para anonimizar: a equipe precisa do nome para entregar a chave. Será possível quando a
+          estadia terminar.
         </Nota>
 
         <form id={ID_DO_FORM} onSubmit={form.handleSubmit(enviar)} className="flex flex-col gap-4">
@@ -163,7 +163,7 @@ export function ModalDeAnonimizacao({
             label="Motivo"
             obrigatorio
             erro={errors.reason?.message}
-            hint="Vai para a trilha de auditoria. É o que responde “por que esta ficha está vazia?” daqui a seis meses — e é o registro do pedido do titular que a ANPD pede em fiscalização."
+            hint="Fica registrado no histórico. Responde “por que esta ficha está vazia?” no futuro e comprova o pedido da pessoa, caso a fiscalização da LGPD pergunte."
           >
             {(p) => (
               <Textarea

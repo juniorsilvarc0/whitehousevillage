@@ -111,8 +111,8 @@ export function DialogoDeGanho({
     notificarSucesso(
       resultado.data.reservation_created ? `Reserva ${reserva.code} criada` : `Oportunidade ganha`,
       resultado.data.reservation_created
-        ? "Nasceu como pré-reserva (hold): a data está segura, e o sinal continua entrando pela tela da reserva."
-        : `A pré-reserva ${reserva.code} que já existia foi vinculada — nenhuma segunda reserva foi criada.`,
+        ? "Foi criada como pré-reserva: as datas estão guardadas. O sinal é registrado na tela da reserva."
+        : `A pré-reserva ${reserva.code}, que já existia, foi ligada a este negócio — nenhuma reserva nova foi criada.`,
     );
     setAberto(false);
     aoGanhar?.();
@@ -153,26 +153,24 @@ export function DialogoDeGanho({
 
           {semOrcamento ? (
             <Nota variante="atencao">
-              Esta oportunidade não tem <strong>orçamento vigente</strong>, e sem preço congelado não há o
-              que virar reserva. Emita o orçamento primeiro — inventar o preço no fechamento é
-              exatamente o que a regra do tarifário proíbe.
+              Esta oportunidade não tem <strong>orçamento válido</strong>, e sem ele não há preço para a
+              reserva. Faça o orçamento primeiro.
             </Nota>
           ) : (
             <Nota>
-              A reserva nasce como <strong>pré-reserva (hold)</strong>, com o preço congelado do orçamento
-              vigente. Ganhar é o acordo; confirmar é o sinal, e continua sendo um passo separado na tela
+              A reserva é criada como <strong>pré-reserva</strong>, com o preço do orçamento atual. Ganhar
+              é fechar o acordo; confirmar é receber o sinal, que continua sendo um passo separado na tela
               da reserva.
               {orcamentoDesconhecido ? (
                 <>
                   {" "}
-                  O quadro não carrega o orçamento junto com o card — se não houver um vigente, o servidor
-                  recusa aqui mesmo, sem mudar nada.
+                  Se não houver orçamento válido, o sistema avisa aqui mesmo, sem mudar nada.
                 </>
               ) : null}
             </Nota>
           )}
 
-          <Campo id="ganho-note" label="Observação" hint="Vai para o histórico de etapa e para a linha do tempo.">
+          <Campo id="ganho-note" label="Observação" hint="Fica registrado no histórico do negócio.">
             {(props) => <Textarea {...props} {...form.register("note")} placeholder="Fechado por telefone com a Fernanda." />}
           </Campo>
 
@@ -195,6 +193,8 @@ function RecusaDoGanho({ falha, alvo }: { falha: FalhaCrm; alvo: AlvoDeGanho }) 
   return (
     <div
       role="alert"
+      data-codigo={falha.code}
+      title={`Código para o suporte: ${falha.code}`}
       className={cn(
         "rounded-xl border px-3.5 py-3",
         conflitoDeData ? "border-destructive/35 bg-destructive/10" : "border-destructive/25 bg-destructive/8",
@@ -215,7 +215,6 @@ function RecusaDoGanho({ falha, alvo }: { falha: FalhaCrm; alvo: AlvoDeGanho }) 
           Abrir o mapa nessas datas
         </Link>
       ) : null}
-      <p className="mt-2 font-mono text-[0.68rem] text-muted-foreground">{falha.code}</p>
     </div>
   );
 }

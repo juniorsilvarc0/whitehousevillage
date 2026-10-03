@@ -123,7 +123,7 @@ export function ModalDeProduto({ controle }: { controle: React.RefObject<Control
       open={aberto}
       onOpenChange={aoMudar}
       title={produto ? `Editar ${produto.name}` : "Novo produto"}
-      description="Produto é o que se vende. Quem se ocupa e se limpa é a unidade física."
+      description="Produto é o que você vende ao cliente. O apartamento que se ocupa e se limpa é a unidade."
       footer={<Rodape formulario="form-produto" enviando={isSubmitting} aoCancelar={() => aoMudar(false)} />}
     >
       <AvisoGeral mensagem={erroGeral} />
@@ -134,7 +134,7 @@ export function ModalDeProduto({ controle }: { controle: React.RefObject<Control
             label="Código"
             obrigatorio
             erro={errors.code?.message}
-            hint="Estável dentro da propriedade — AP2S, SP, COB, COMPLETA."
+            hint="Um código curto que não muda — AP2S, SP, COB, COMPLETA."
           >
             {(p) => <Input {...p} {...form.register("code")} autoCapitalize="characters" className="font-mono" />}
           </Campo>
@@ -150,7 +150,7 @@ export function ModalDeProduto({ controle }: { controle: React.RefObject<Control
             label="Capacidade (hóspedes)"
             obrigatorio
             erro={errors.capacity?.message}
-            hint="Limite declarado, não somado: a Completa acomoda 24 embora as unidades somem 40."
+            hint="Quantas pessoas o produto aceita. Não é a soma dos apartamentos: a Completa aceita 24, mesmo que os apartamentos somem 40."
           >
             {(p) => <Input {...p} {...form.register("capacity")} inputMode="numeric" className="tabular-nums" />}
           </Campo>
@@ -175,14 +175,14 @@ export function ModalDeProduto({ controle }: { controle: React.RefObject<Control
           erro={errors.consumes?.message}
           hint={
             consumo === "all_members"
-              ? "TODAS as unidades da composição. É daqui que sai a exclusividade da casa inteira — e é por isso que vender este produto fecha o calendário para todos os outros."
-              : "Uma unidade da composição, escolhida pelo alocador (a que menos fragmenta o calendário)."
+              ? "Uma venda ocupa TODOS os apartamentos do produto. É o caso da casa inteira: vendê-lo fecha o calendário para todos os outros produtos."
+              : "Uma venda ocupa UM dos apartamentos do produto. O sistema escolhe o que deixa o calendário menos picado."
           }
         >
           {(p) => (
             <Select {...p} {...form.register("consumes")}>
-              <option value="one_member">Uma unidade da composição</option>
-              <option value="all_members">Todas as unidades da composição</option>
+              <option value="one_member">Um dos apartamentos do produto</option>
+              <option value="all_members">Todos os apartamentos do produto</option>
             </Select>
           )}
         </Campo>
@@ -191,7 +191,7 @@ export function ModalDeProduto({ controle }: { controle: React.RefObject<Control
           id="produto-sort"
           label="Ordem no catálogo"
           erro={errors.sort_order?.message}
-          hint="A ordem comercial é dado, não alfabética."
+          hint="Define a ordem em que os produtos aparecem nas listas."
         >
           {(p) => <Input {...p} {...form.register("sort_order")} inputMode="numeric" className="tabular-nums" />}
         </Campo>
@@ -203,7 +203,7 @@ export function ModalDeProduto({ controle }: { controle: React.RefObject<Control
         <CheckboxCampo
           id="produto-active"
           label="Ativo"
-          hint="Produto inativo não aparece na disponibilidade nem aceita venda nova; as reservas antigas continuam legíveis."
+          hint="Desmarcado, o produto deixa de ser vendido; as reservas antigas continuam visíveis."
           {...form.register("active")}
         />
       </form>
@@ -263,8 +263,8 @@ export function ModalDeUnidade({ controle }: { controle: React.RefObject<Control
     <ModalShell
       open={aberto}
       onOpenChange={aoMudar}
-      title={unidade ? `Editar ${unidade.code}` : "Nova unidade física"}
-      description="É a unidade que a constraint do banco protege contra dupla venda."
+      title={unidade ? `Editar ${unidade.code}` : "Nova unidade"}
+      description="Um apartamento de verdade. O sistema nunca deixa a mesma unidade ser vendida duas vezes na mesma noite."
       footer={<Rodape formulario="form-unidade" enviando={isSubmitting} aoCancelar={() => aoMudar(false)} />}
     >
       <AvisoGeral mensagem={erroGeral} />
@@ -275,7 +275,7 @@ export function ModalDeUnidade({ controle }: { controle: React.RefObject<Control
             label="Código"
             obrigatorio
             erro={errors.code?.message}
-            hint="Identidade operacional e chave de ordenação — AP-01, SP-04, COB-01."
+            hint="Como a equipe chama o apartamento — AP-01, SP-04, COB-01. Também define a ordem nas listas."
           >
             {(p) => <Input {...p} {...form.register("code")} autoCapitalize="characters" className="font-mono" />}
           </Campo>
@@ -302,7 +302,7 @@ export function ModalDeUnidade({ controle }: { controle: React.RefObject<Control
         <CheckboxCampo
           id="unidade-active"
           label="Ativa"
-          hint="Unidade inativa sai da alocação automática e do mapa; o histórico permanece."
+          hint="Desmarcada, a unidade deixa de receber reservas e sai do mapa; o histórico continua."
           {...form.register("active")}
         />
       </form>
@@ -370,7 +370,7 @@ export function ModalDeComposicao({
   async function salvar() {
     if (!produto) return;
     if (selecionadas.size === 0) {
-      setErro("Escolha ao menos uma unidade — produto sem composição não pode ser vendido.");
+      setErro("Escolha ao menos uma unidade — sem apartamento o produto não pode ser vendido.");
       return;
     }
     setEnviando(true);
@@ -397,8 +397,8 @@ export function ModalDeComposicao({
     <ModalShell
       open={aberto}
       onOpenChange={aoMudar}
-      title={produto ? `Composição de ${produto.name}` : "Composição"}
-      description="Quais unidades físicas este produto consome."
+      title={produto ? `Apartamentos de ${produto.name}` : "Apartamentos do produto"}
+      description="Quais apartamentos formam este produto."
       footer={
         <>
           <Button variant="ghost" onClick={() => aoMudar(false)} disabled={enviando}>
@@ -406,7 +406,7 @@ export function ModalDeComposicao({
           </Button>
           <Button onClick={salvar} disabled={enviando}>
             {enviando ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
-            Substituir composição
+            Salvar apartamentos
           </Button>
         </>
       }
@@ -416,13 +416,12 @@ export function ModalDeComposicao({
       <Nota variante={consomeTodas ? "atencao" : "info"} className="mb-4">
         {consomeTodas ? (
           <>
-            Este produto consome <strong>todas</strong> as unidades marcadas. Uma venda insere uma linha
-            de bloqueio por unidade — com as {ordenadas.length} marcadas, vendê-lo fecha a casa inteira
-            e qualquer unidade já ocupada derruba a venda no banco.
+            Uma venda deste produto ocupa <strong>todas</strong> as unidades marcadas de uma vez. Se
+            alguma delas já estiver ocupada, a venda não é possível naquelas datas.
           </>
         ) : (
           <>
-            Uma venda ocupa <strong>uma</strong> das unidades marcadas, escolhida pelo alocador. Com{" "}
+            Uma venda ocupa <strong>uma</strong> das unidades marcadas, escolhida pelo sistema. Com{" "}
             {total} marcada{total === 1 ? "" : "s"}, dá para vender {total} estadia{total === 1 ? "" : "s"}{" "}
             simultânea{total === 1 ? "" : "s"} deste produto.
           </>
@@ -456,9 +455,8 @@ export function ModalDeComposicao({
       </ul>
 
       <p className="mt-3 text-xs text-muted-foreground">
-        <span className="tabular-nums">{total}</span> de {ordenadas.length} unidades marcadas. Ordenadas por
-        código: é a mesma ordem em que o servidor insere os bloqueios, e ordens divergentes entre duas
-        vendas simultâneas causariam deadlock.
+        <span className="tabular-nums">{total}</span> de {ordenadas.length} unidades marcadas, em ordem de
+        código.
       </p>
     </ModalShell>
   );

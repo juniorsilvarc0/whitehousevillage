@@ -89,7 +89,7 @@ export function DialogoDeConfirmacao({
   const invalido = centavos === null || centavos < 1 || acimaDoTotal;
   const erro =
     centavos === null || centavos < 1
-      ? "Informe o valor recebido — confirmar sem dinheiro é o que a pré-reserva já faz."
+      ? "Informe o valor recebido. Para guardar as datas sem pagamento, use a pré-reserva."
       : acimaDoTotal
         ? `O recebido não pode passar do total da reserva (${formatarBRL(alvo!.total_cents)}).`
         : undefined;
@@ -154,7 +154,7 @@ export function DialogoDeConfirmacao({
           erro={erro}
           hint={
             alvo
-              ? `De R$ 0,01 até o total da reserva (${formatarBRL(alvo.total_cents)}). É este valor que vira a base do reembolso se a reserva for cancelada depois — por isso ele não pode ser maior que o que existe para pagar.`
+              ? `De R$ 0,01 até o total da reserva (${formatarBRL(alvo.total_cents)}). Se a reserva for cancelada depois, a devolução é calculada sobre este valor.`
               : undefined
           }
         >
@@ -196,15 +196,15 @@ export function DialogoDeConfirmacao({
 
         {quitaTudo && !invalido ? (
           <Nota>
-            O valor cobre o total da estadia. Isso é legítimo e fica registrado: o saldo vai a zero e, num
-            cancelamento, a devolução é calculada sobre tudo o que entrou.
+            O valor cobre o total da estadia. Tudo bem: o saldo fica zerado e, num cancelamento, a devolução
+            é calculada sobre tudo o que foi pago.
           </Nota>
         ) : null}
 
         <Nota variante="atencao">
-          Confirmando, as unidades saem de <strong>pré-reserva</strong> e passam a <strong>confirmadas</strong>:
-          a data continua bloqueada e deixa de ter prazo. A partir daí, soltar a data passa pela política de
-          cancelamento congelada nesta reserva.
+          Ao confirmar, a reserva deixa de ser <strong>pré-reserva</strong> e passa a <strong>confirmada</strong>:
+          as datas ficam garantidas, sem prazo para vencer. A partir daí, liberar as datas só pelo cancelamento,
+          com as regras que valiam no dia da reserva.
         </Nota>
 
         {recusa ? <Recusa falha={recusa} /> : null}

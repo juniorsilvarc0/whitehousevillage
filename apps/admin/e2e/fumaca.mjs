@@ -191,7 +191,7 @@ for (const rota of TELAS) {
 
   // A tela pode responder 200 e ainda assim estar quebrada: o painel mostra o
   // erro num aviso, e é ele que o usuário vê.
-  const aviso = await pagina.locator("text=/Não foi possível|Erro no servidor/i").first()
+  const aviso = await pagina.locator("text=/Não foi possível|Algo deu errado/i").first()
     .textContent({ timeout: 500 }).catch(() => null);
   if (aviso) falhas.push(`${rota}: a tela abriu com aviso de erro — "${aviso.trim().slice(0, 80)}"`);
 

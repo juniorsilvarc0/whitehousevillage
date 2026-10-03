@@ -115,7 +115,7 @@ export function ModalDeBloqueio({
       onOpenChange={(aberto) => {
         if (!aberto) aoFechar();
       }}
-      title="Bloquear a unidade"
+      title="Bloquear o apartamento"
       description={pedido ? `${pedido.unitCode} · ${pedido.unitName}` : undefined}
       footer={
         <>
@@ -131,9 +131,8 @@ export function ModalDeBloqueio({
     >
       <div className="flex flex-col gap-4">
         <Nota>
-          O bloqueio vive na <strong>mesma tabela</strong> das reservas, e é por isso que uma manutenção
-          impede uma venda pela mesma constraint que impede duas vendas. A saída é{" "}
-          <strong>exclusiva</strong>:{" "}
+          Um bloqueio ocupa o apartamento <strong>como se fosse uma reserva</strong>: enquanto ele existir,
+          ninguém consegue vender essas noites. O dia da saída <strong>fica livre</strong>:{" "}
           {de && ate ? (
             <>
               de {formatarData(de)} a {formatarData(ate)} ocupa {noites} noite{noites > 1 ? "s" : ""} e deixa{" "}
@@ -150,7 +149,7 @@ export function ModalDeBloqueio({
               <Input {...props} type="date" value={de} onChange={(e) => setDe(e.target.value)} />
             )}
           </Campo>
-          <Campo id="bloqueio-ate" label="Saída (exclusiva)" erro={erros.to} obrigatorio>
+          <Campo id="bloqueio-ate" label="Saída (fica livre)" erro={erros.to} obrigatorio>
             {(props) => (
               <Input {...props} type="date" value={ate} onChange={(e) => setAte(e.target.value)} />
             )}
@@ -161,7 +160,7 @@ export function ModalDeBloqueio({
           id="bloqueio-origem"
           label="Motivo"
           erro={erros.source}
-          hint="Reserva de canal e reserva própria não se criam por aqui: uma vem do importador, a outra da venda."
+          hint="Aqui só se bloqueia para manutenção ou uso do proprietário. Reservas são criadas pela venda, e as de sites de reserva chegam sozinhas."
           obrigatorio
         >
           {(props) => (

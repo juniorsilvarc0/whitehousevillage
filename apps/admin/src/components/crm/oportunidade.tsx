@@ -33,6 +33,8 @@ import type {
 } from "@/lib/crm/tipos";
 import { formatarData, formatarInstante, noitesEntre } from "@/lib/datas";
 import { formatarBRL, reaisDeCentavos } from "@/lib/dinheiro";
+import { formatarTelefone } from "@/lib/contatos/telefone";
+import { ehEstadoDeReserva, ESTADOS } from "@/lib/reservas/estados";
 import { RailDaOportunidade } from "@/components/crm/rail-da-oportunidade";
 import { cn } from "@/lib/utils";
 
@@ -112,7 +114,7 @@ export function TelaDaOportunidade({
             {contact.phone_e164 ? (
               <a href={`tel:${contact.phone_e164}`} className="flex items-center gap-1.5 hover:text-foreground">
                 <Phone className="size-3.5" aria-hidden="true" />
-                {contact.phone_e164}
+                {formatarTelefone(contact.phone_e164)}
               </a>
             ) : null}
             {contact.email ? (
@@ -168,8 +170,8 @@ export function TelaDaOportunidade({
       {!aberta ? (
         <Nota variante="atencao">
           Esta oportunidade está <strong>{o.status === "ganha" ? "ganha" : "perdida"}</strong> e não volta a
-          ser editada. Negócio que renasce é oportunidade nova, com o mesmo contato — assim a conversão
-          do funil não conta a mesma venda duas vezes.
+          ser alterada. Se o cliente voltar, crie uma oportunidade nova para o mesmo contato — assim a
+          mesma venda não é contada duas vezes.
         </Nota>
       ) : null}
 
@@ -294,7 +296,7 @@ function VisaoGeral({
             sufixo="%"
             desabilitado={!podeEditar}
             aoSalvar={(v) => aoSalvar({ probability: Number(v) })}
-            hint="Herdada da etapa a cada movimento; pode ser ajustada à mão depois."
+            hint="Muda sozinha quando o negócio muda de etapa; pode ser ajustada à mão depois."
           />
           <CampoInline
             id="op-check-in"
@@ -304,7 +306,7 @@ function VisaoGeral({
             tipo="date"
             desabilitado={!podeEditar}
             aoSalvar={(v) => aoSalvar({ check_in: v || null })}
-            hint="Data pretendida — ainda não bloqueia nada no calendário."
+            hint="Data desejada — ainda não reserva nada no calendário."
           />
           <CampoInline
             id="op-check-out"
@@ -314,7 +316,7 @@ function VisaoGeral({
             tipo="date"
             desabilitado={!podeEditar}
             aoSalvar={(v) => aoSalvar({ check_out: v || null })}
-            hint="Exclusiva: a noite da saída não é cobrada e a data já fica livre."
+            hint="O dia da saída não conta como diária e já fica livre para outro hóspede."
           />
           <CampoInline
             id="op-fechamento"
@@ -333,7 +335,7 @@ function VisaoGeral({
         {completo.quote ? (
           <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-card px-3 py-2.5">
             <div className="min-w-0">
-              <p className="text-sm">Orçamento vigente</p>
+              <p className="text-sm">Orçamento atual</p>
               <p className="text-xs text-muted-foreground">
                 {completo.quote.nights.length} noites · limpeza {formatarBRL(completo.quote.cleaning_cents)}
               </p>
@@ -342,8 +344,8 @@ function VisaoGeral({
           </div>
         ) : (
           <p className="mt-2 text-xs text-muted-foreground">
-            Sem orçamento vigente. <strong>Ganhar exige um</strong>: a reserva nasce do preço congelado, e
-            inventar o preço no fechamento é o que a regra do tarifário proíbe.
+            Sem orçamento válido. <strong>Para marcar como ganha é preciso ter um</strong>: é dele que vem o
+            preço da reserva.
           </p>
         )}
 
@@ -354,7 +356,9 @@ function VisaoGeral({
                 {completo.reservation.code}
               </Link>
               <p className="text-xs text-muted-foreground">
-                {completo.reservation.status}
+                {ehEstadoDeReserva(completo.reservation.status)
+                  ? ESTADOS[completo.reservation.status].rotulo
+                  : completo.reservation.status}
                 {completo.reservation.hold_expires_at
                   ? ` · expira em ${formatarInstante(completo.reservation.hold_expires_at)}`
                   : ""}
@@ -420,7 +424,7 @@ function Atividades({
       {atividades.length === 0 ? (
         <EstadoVazio
           titulo="Nenhuma atividade ainda"
-          descricao="Tarefa, ligação, reunião, e-mail e WhatsApp aparecem aqui na ordem do prazo. A tarefa automática da etapa nasce sozinha quando o card entra nela."
+          descricao="Tarefas, ligações, reuniões, e-mails e WhatsApp aparecem aqui, na ordem do prazo. Algumas etapas criam uma tarefa sozinhas quando o negócio entra nelas."
         />
       ) : (
         <ul className="flex flex-col gap-2">
@@ -629,7 +633,7 @@ function ModalDeTarefa({
               />
             )}
           </Campo>
-          <Campo id="tarefa-hora" label="Hora" erro={erros.due_time} hint="Em branco assume 09:00, no fuso da casa.">
+          <Campo id="tarefa-hora" label="Hora" erro={erros.due_time} hint="Em branco, usa 09:00 (horário de Fortaleza).">
             {(props) => (
               <Input
                 {...props}
@@ -744,8 +748,8 @@ function Documentos() {
   return (
     <EstadoVazio
       icone={FileText}
-      titulo="Anexos ainda não estão ligados"
-      descricao="A aba já existe com o formato final de propósito: o módulo de anexos tem armazenamento próprio e guarda contra SSRF, e é de outra fase. Acrescentar a aba depois obrigaria a tela a tratar documentos como opcional para sempre."
+      titulo="Anexos ainda não estão disponíveis"
+      descricao="Em breve você poderá guardar aqui documentos e arquivos do negócio."
     />
   );
 }
@@ -758,8 +762,8 @@ function Historico({ completo }: { completo: OportunidadeCompleta }) {
       <section>
         <h3 className="font-display text-sm">Linha do tempo</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          Mudança de etapa, atividade, nota, orçamento e reserva na mesma ordem cronológica — é o registro
-          que responde &ldquo;o que já foi falado com essa pessoa&rdquo; sem trocar de tela.
+          Mudanças de etapa, atividades, notas, orçamentos e reservas, em ordem de data — para ver
+          &ldquo;o que já foi falado com essa pessoa&rdquo; sem trocar de tela.
         </p>
         {completo.timeline.length === 0 ? (
           <p className="mt-3 text-sm text-muted-foreground">Nada registrado ainda.</p>
@@ -786,8 +790,8 @@ function Historico({ completo }: { completo: OportunidadeCompleta }) {
       <section>
         <h3 className="font-display text-sm">Passagem por etapas</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          Registro insert-only: é a matéria-prima da conversão por etapa, e por isso nada aqui é editado
-          nem apagado.
+          Por onde o negócio passou. É daqui que saem os números de conversão do funil, por isso nada aqui
+          pode ser editado nem apagado.
         </p>
         {completo.stage_history.length === 0 ? (
           <p className="mt-3 text-sm text-muted-foreground">Sem movimentações registradas.</p>

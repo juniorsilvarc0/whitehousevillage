@@ -50,8 +50,8 @@ export async function salvarGrade(
   if (recusa) return recusa;
 
   if (escopo.length === 0) {
-    return falha("VALIDATION_ERROR", "Nenhum produto no escopo da gravação.", {
-      unit_type_ids: "A grade precisa dizer quais produtos ela reescreve.",
+    return falha("VALIDATION_ERROR", "Nenhum produto para salvar.", {
+      unit_type_ids: "Escolha ao menos um produto na tabela de preços.",
     });
   }
 
@@ -63,16 +63,16 @@ export async function salvarGrade(
   for (const celula of celulas) {
     const chave = `${celula.unit_type_id}:${celula.date_type}`;
     if (vistos.has(chave)) {
-      return falha("VALIDATION_ERROR", "Há duas tarifas para o mesmo produto e tipo de data.", { rates: chave });
+      return falha("VALIDATION_ERROR", "Há dois preços para o mesmo produto e tipo de data.", { rates: chave });
     }
     vistos.add(chave);
     if (!TIPOS.includes(celula.date_type) || !Number.isInteger(celula.amount_cents) || celula.amount_cents < 1) {
-      return falha("VALIDATION_ERROR", "Tarifa inválida na grade.", { rates: chave });
+      return falha("VALIDATION_ERROR", "Há um preço inválido na tabela.", { rates: chave });
     }
     // Célula de produto fora do escopo é `422` na API, e com razão: mandar
     // preço de quem não foi declarado não pode ampliar o escopo em silêncio.
     if (!noEscopo.has(celula.unit_type_id)) {
-      return falha("VALIDATION_ERROR", "Há tarifa de um produto fora do escopo da gravação.", { rates: chave });
+      return falha("VALIDATION_ERROR", "Há preço de um produto que não está nesta tabela.", { rates: chave });
     }
   }
 

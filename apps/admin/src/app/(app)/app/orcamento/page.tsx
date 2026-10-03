@@ -51,14 +51,14 @@ export default async function OrcamentoPage({
     <Tela>
       <CabecalhoDeTela
         titulo="Orçamento"
-        descricao="Produto, datas e hóspedes; o servidor devolve o cálculo aberto — noite a noite, agrupado por tipo de tarifa, com sinal e saldo."
+        descricao="Escolha produto, datas e hóspedes e veja o cálculo completo: noite a noite, por tipo de data, com sinal e saldo."
       />
 
       {!produtos.ok ? (
         <EstadoDeErro
           code={produtos.code}
           titulo="Não foi possível carregar os produtos"
-          detalhe="Sem a lista de produtos não há o que orçar: o motor precisa de um para achar tarifa, capacidade e limpeza."
+          detalhe="Sem a lista de produtos não dá para orçar. Tente recarregar a página."
         />
       ) : produtos.data.length === 0 ? (
         <EstadoVazio
@@ -75,10 +75,9 @@ export default async function OrcamentoPage({
       )}
 
       <Nota>
-        O painel não recalcula nada: cada número vem de <code>POST /quotes</code>, que roda o motor puro do
-        servidor sobre a tabela de tarifas e a política vigentes. A única conta feita aqui é a faixa da
-        alçada enquanto o controle é arrastado — e assim que o cálculo volta, quem vale é a alçada que ele
-        trouxe.
+        Os valores usam a tabela de preços e a política comercial que valem hoje — é o mesmo cálculo da
+        venda. A cor do desconto muda na hora enquanto você arrasta, mas a palavra final é a do cálculo que
+        aparece ao lado.
       </Nota>
     </Tela>
   );

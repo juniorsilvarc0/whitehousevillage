@@ -87,7 +87,7 @@ export function FormularioComercial({
           <>
             <Badge variant="accent">versão {politica.version}</Badge>
             <span>
-              vigente desde <span className="tabular-nums text-foreground">{formatarData(politica.valid_from)}</span>
+              valendo desde <span className="tabular-nums text-foreground">{formatarData(politica.valid_from)}</span>
             </span>
           </>
         ) : (
@@ -118,10 +118,10 @@ export function FormularioComercial({
 
         <Campo
           id="politica-hold"
-          label="Pré-reserva segura por (horas)"
+          label="Prazo da pré-reserva (horas)"
           obrigatorio
           erro={errors.hold_hours?.message}
-          hint="Sem sinal dentro desse prazo, um job expira a reserva e libera a data sozinho."
+          hint="Se o sinal não for pago nesse prazo, a pré-reserva vence e as datas voltam a ficar livres automaticamente."
         >
           {(p) => <Input {...p} {...form.register("hold_hours")} inputMode="numeric" className="text-right tabular-nums" disabled={!podeEditar} />}
         </Campo>
@@ -131,17 +131,17 @@ export function FormularioComercial({
           label="Caução de evento (R$)"
           obrigatorio
           erro={errors.event_deposit_cents?.message}
-          hint="Cobrada como recebível reembolsável. Não entra na base do desconto."
+          hint="Valor devolvido depois do evento. O desconto não se aplica a ela."
         >
           {(p) => <Input {...p} {...form.register("event_deposit_cents")} inputMode="decimal" className="text-right tabular-nums" disabled={!podeEditar} />}
         </Campo>
 
         <Campo
           id="politica-auto"
-          label="Alçada da gestão até (%)"
+          label="Desconto que a gestão dá sozinha, até (%)"
           obrigatorio
           erro={errors.discount_auto_pct?.message}
-          hint="Até aqui a gestão fecha sozinha."
+          hint="Até este percentual a gestão fecha sem pedir aprovação."
         >
           {(p) => <Input {...p} {...form.register("discount_auto_pct")} inputMode="decimal" className="text-right tabular-nums" disabled={!podeEditar} />}
         </Campo>
@@ -151,14 +151,14 @@ export function FormularioComercial({
           label="Com aprovação do proprietário até (%)"
           obrigatorio
           erro={errors.discount_approval_pct?.message}
-          hint="Acima disso o orçamento nem sai: o servidor recusa."
+          hint="Acima disso o sistema não deixa fazer o orçamento."
         >
           {(p) => <Input {...p} {...form.register("discount_approval_pct")} inputMode="decimal" className="text-right tabular-nums" disabled={!podeEditar} />}
         </Campo>
       </div>
 
       <div className="rounded-xl border border-border/60 bg-card/60 p-3.5">
-        <p className="mb-2 text-xs font-medium">Como estas duas faixas ficam na negociação</p>
+        <p className="mb-2 text-xs font-medium">Como estes dois limites aparecem na negociação</p>
         <SemaforoDeAlcada pct={limites.auto} limites={limites} />
       </div>
 
@@ -167,7 +167,7 @@ export function FormularioComercial({
         label="Esta versão vale a partir de"
         obrigatorio
         erro={errors.valid_from?.message}
-        hint="Não pode ser anterior ao início da vigente — versão publicada não se antedata."
+        hint="Não pode ser antes do início da versão atual — uma regra nova não vale para trás."
       >
         {(p) => <Input {...p} type="date" {...form.register("valid_from")} className="tabular-nums" disabled={!podeEditar} />}
       </Campo>
@@ -181,15 +181,14 @@ export function FormularioComercial({
       {versaoPublicada !== null ? (
         <p role="status" className="flex items-center gap-2 rounded-lg bg-alcada-livre/12 px-3 py-2 text-sm text-alcada-livre">
           <Check className="size-4" aria-hidden="true" />
-          Versão {versaoPublicada} publicada. As reservas anteriores continuam na versão que congelaram.
+          Versão {versaoPublicada} publicada. As reservas anteriores continuam com as regras da época.
         </p>
       ) : null}
 
       <Nota variante="atencao">
-        Salvar <strong>publica uma versão nova</strong> — não edita a atual. Toda reserva grava o número
-        da versão que valia quando foi criada, e continua sendo julgada por ela até o fim: sinal, prazo
-        de saldo, validade da pré-reserva e alçada de desconto. Nada do que já foi vendido muda por causa
-        deste botão.
+        Salvar <strong>publica uma versão nova</strong> — não edita a atual. Cada reserva segue até o fim
+        as regras que valiam quando foi feita: sinal, prazo do saldo, prazo da pré-reserva e limite de
+        desconto. Nada do que já foi vendido muda por causa deste botão.
       </Nota>
 
       {podeEditar ? (

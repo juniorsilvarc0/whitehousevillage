@@ -84,7 +84,7 @@ export function DialogoDePerda({
     notificarSucesso(
       "Oportunidade marcada como perdida",
       reserva
-        ? `A pré-reserva ${reserva.code} continua de pé: liberar a data é decisão separada, com política de cancelamento.`
+        ? `A pré-reserva ${reserva.code} continua valendo: para liberar as datas, cancele-a na tela da reserva.`
         : undefined,
     );
     setAberto(false);
@@ -128,8 +128,8 @@ export function DialogoDePerda({
 
         {ativos.length === 0 ? (
           <Nota variante="atencao">
-            Não há motivo de perda ativo cadastrado, e sem motivo o servidor recusa a perda. Peça à gestão
-            para cadastrar os motivos em Configurações antes de fechar este negócio.
+            Não há motivo de perda cadastrado, e sem motivo não é possível marcar como perdido. Peça à
+            gestão para cadastrar os motivos em Configurações.
           </Nota>
         ) : null}
 
@@ -138,7 +138,7 @@ export function DialogoDePerda({
           label="Motivo"
           obrigatorio
           erro={errors.lost_reason_id?.message}
-          hint="É deste campo que sai o relatório de por que a casa perde negócio."
+          hint="É com este campo que a casa entende por que perde negócios."
         >
           {(props) => (
             <Select {...props} {...form.register("lost_reason_id")} disabled={ativos.length === 0}>
@@ -156,7 +156,7 @@ export function DialogoDePerda({
           id="perda-note"
           label="Observação"
           erro={errors.note?.message}
-          hint="O detalhe, ao lado do motivo — nunca no lugar dele."
+          hint="Detalhes que completam o motivo escolhido."
         >
           {(props) => <Textarea {...props} {...form.register("note")} placeholder="Fechou com a pousada vizinha por R$ 400 a menos." />}
         </Campo>
@@ -164,8 +164,8 @@ export function DialogoDePerda({
         {alvo?.reservation_code ? (
           <Nota>
             A pré-reserva <strong>{alvo.reservation_code}</strong> <strong>não</strong> é cancelada aqui.
-            Perder o negócio e liberar a data são duas decisões — a segunda tem política congelada e
-            possível reembolso, e acontece na tela da reserva.
+            Perder o negócio e liberar as datas são duas decisões separadas — liberar as datas segue a
+            política de cancelamento, pode envolver reembolso e é feito na tela da reserva.
           </Nota>
         ) : null}
       </form>

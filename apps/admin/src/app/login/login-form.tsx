@@ -40,7 +40,7 @@ function mensagemDoErro(code: string | undefined): string {
     case "RATE_LIMITED":
       return "Tentativas demais. Espere alguns minutos e tente de novo.";
     case "NETWORK_ERROR":
-      return "Não foi possível falar com o servidor. Tente novamente em instantes.";
+      return "Sem conexão com o sistema agora. Verifique a internet e tente de novo em instantes.";
     case "VALIDATION_ERROR":
       return "Confira os dados informados.";
     default:

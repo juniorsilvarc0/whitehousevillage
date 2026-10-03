@@ -95,7 +95,7 @@ export function DialogoDeRealocacao({
     <ModalShell
       open={aberto}
       onOpenChange={setAberto}
-      title="Trocar a unidade"
+      title="Trocar o apartamento"
       description={alvo ? `${alvo.code} · ${alvo.contact_name}` : undefined}
       footer={
         <>
@@ -104,7 +104,7 @@ export function DialogoDeRealocacao({
           </Button>
           <Button onClick={() => void enviar()} disabled={enviando || destino === ""}>
             {enviando ? <Loader2 className="animate-spin" aria-hidden="true" /> : <ArrowLeftRight aria-hidden="true" />}
-            Trocar unidade
+            Trocar apartamento
           </Button>
         </>
       }
@@ -119,17 +119,17 @@ export function DialogoDeRealocacao({
 
         <Campo
           id="realocar-destino"
-          label="Nova unidade"
+          label="Novo apartamento"
           obrigatorio
-          hint="Só unidades da composição deste produto. Fora dela, o servidor recusa com erro de validação."
+          hint="Só aparecem os apartamentos que fazem parte deste produto."
         >
           {(props) => (
             <Select {...props} value={destino} onChange={(evento) => setDestino(evento.target.value)}>
-              <option value="">Escolha a unidade…</option>
+              <option value="">Escolha o apartamento…</option>
               {candidatas.map((unidade) => (
                 <option key={unidade.unit_id} value={unidade.unit_id}>
                   {unidade.unit_code} — {unidade.unit_name}
-                  {unidade.active ? "" : " (inativa)"}
+                  {unidade.active ? "" : " (desativado)"}
                 </option>
               ))}
             </Select>
@@ -138,27 +138,27 @@ export function DialogoDeRealocacao({
 
         {candidatas.length === 0 ? (
           <Nota variante="atencao">
-            Não há outra unidade na composição deste produto. Realocar exige um destino — se a unidade atual
-            precisa sair, o caminho é remarcar ou cancelar.
+            Este produto não tem outro apartamento para onde trocar. Se o apartamento atual não pode ser
+            usado, o caminho é remarcar ou cancelar.
           </Nota>
         ) : null}
 
         {inativaEscolhida ? (
           <Nota variante="atencao">
-            {inativaEscolhida.unit_code} está <strong>inativa</strong> no inventário. Mover a estadia para ela
-            deixa a reserva presa numa unidade que a casa declarou fora de operação.
+            {inativaEscolhida.unit_code} está <strong>desativado</strong> no inventário. Mover a estadia para
+            ele deixa a reserva num apartamento que a casa marcou como fora de uso.
           </Nota>
         ) : null}
 
         <CheckboxCampo
           id="realocar-travar"
-          label="Travar esta escolha"
-          hint="Tira a reserva da realocação automática — é o caso do hóspede que pediu aquele apartamento. Sem travar, uma otimização futura pode movê-lo de novo."
+          label="Fixar este apartamento"
+          hint="Use quando o hóspede pediu aquele apartamento. Sem fixar, o sistema pode trocá-lo sozinho mais tarde para organizar o calendário."
           checked={travar}
           onChange={(evento) => setTravar(evento.target.checked)}
         />
 
-        <Campo id="realocar-motivo" label="Motivo" hint="Vai para a linha do tempo com o seu nome.">
+        <Campo id="realocar-motivo" label="Motivo" hint="Fica registrado no histórico da reserva, com o seu nome.">
           {(props) => (
             <Input
               {...props}
@@ -170,13 +170,12 @@ export function DialogoDeRealocacao({
         </Campo>
 
         <Nota>
-          Se a unidade escolhida estiver ocupada no período, a troca é recusada e{" "}
-          <strong>nada muda</strong>: a reserva continua onde está. Quem decide é a constraint do banco, não
-          esta tela.
+          Se o apartamento escolhido estiver ocupado no período, a troca não acontece e{" "}
+          <strong>nada muda</strong>: a reserva continua onde está.
         </Nota>
 
         {recusa ? (
-          <Recusa falha={recusa} garantia="A reserva continua na unidade de sempre." />
+          <Recusa falha={recusa} garantia="A reserva continua no mesmo apartamento." />
         ) : null}
       </div>
     </ModalShell>

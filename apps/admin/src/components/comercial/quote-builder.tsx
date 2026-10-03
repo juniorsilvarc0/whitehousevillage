@@ -188,8 +188,8 @@ export function QuoteBuilder({
         {noites > 0 ? (
           <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <CalendarRange className="size-3.5" aria-hidden="true" />
-            <span className="tabular-nums text-foreground">{noites}</span> noite{noites === 1 ? "" : "s"} — a
-            noite do check-out não é cobrada, e a data fica livre para o próximo hóspede.
+            <span className="tabular-nums text-foreground">{noites}</span> noite{noites === 1 ? "" : "s"} — o dia
+            do check-out não conta como diária e já fica livre para o próximo hóspede.
           </p>
         ) : null}
 
@@ -237,9 +237,9 @@ export function QuoteBuilder({
 
           {!limitesConfirmados ? (
             <p className="text-[0.7rem] leading-snug text-muted-foreground">
-              Faixas assumidas do padrão ({formatarPct(limites.auto)} / {formatarPct(limites.aprovacao)}): seu
-              perfil não alcança a política vigente para conferi-las. Quem decide de verdade é o servidor,
-              no cálculo.
+              Limites de desconto estimados ({formatarPct(limites.auto)} / {formatarPct(limites.aprovacao)}): seu
+              perfil não tem acesso à política comercial para conferi-los. O cálculo ao lado confirma o valor
+              certo.
             </p>
           ) : null}
         </div>
@@ -247,7 +247,7 @@ export function QuoteBuilder({
         <CheckboxCampo
           id="orc-evento"
           label="É evento"
-          hint="Acrescenta a caução de evento da política ao total. Ela é reembolsável e nunca entra na base do desconto."
+          hint="Soma ao total a caução de evento. Ela é devolvida depois e o desconto não se aplica a ela."
           checked={valores.is_event}
           onChange={(e) => definir("is_event", e.target.checked)}
         />
@@ -260,9 +260,8 @@ export function QuoteBuilder({
               <TriangleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
               <span>
                 <strong>{formatarPct(pct)} está acima do teto da política ({formatarPct(limites.aprovacao)}).</strong>{" "}
-                O orçamento não é calculado: o servidor recusaria com DISCOUNT_ABOVE_LIMIT, e nem a aprovação
-                do proprietário libera acima desse limite. Mudar o teto é publicar uma versão nova da
-                política comercial.
+                Esse desconto não é permitido, nem com aprovação do proprietário. Para mudar o limite, é
+                preciso publicar uma nova versão da política comercial.
               </span>
             </p>
           </div>
@@ -278,8 +277,8 @@ export function QuoteBuilder({
               <>
                 <h3 className="font-display text-base">O cálculo aparece aqui</h3>
                 <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-                  Escolha o produto e as datas. Cada noite recebe um tipo, o tipo dá a diária, e o total sai
-                  do motor do servidor — o painel não recalcula nada.
+                  Escolha o produto e as datas. Cada noite tem um tipo (normal, fim de semana, feriado…), e
+                  cada tipo tem o seu preço de diária.
                 </p>
               </>
             )}
@@ -313,7 +312,7 @@ function FalhaDoOrcamento({ falha }: { falha: Falha }) {
           <>
             O período exige no mínimo <strong>{exigido} noites</strong>
             {pedido !== null ? <> e a estadia tem {pedido}</> : null}. Vale o maior mínimo entre as noites da
-            estadia — uma única noite de réveillon no meio puxa o mínimo dele para a estadia inteira.
+            estadia — uma única noite de réveillon no meio já exige o mínimo do réveillon.
           </>
         ) : null;
       break;
@@ -325,8 +324,7 @@ function FalhaDoOrcamento({ falha }: { falha: Falha }) {
         capacidade !== null ? (
           <>
             A capacidade do produto é <strong>{capacidade}</strong>
-            {pedido !== null ? <> e foram pedidos {pedido} hóspedes</> : null}. A capacidade é declarada
-            pelos proprietários, não somada das unidades.
+            {pedido !== null ? <> e foram pedidos {pedido} hóspedes</> : null}.
           </>
         ) : null;
       break;
@@ -336,15 +334,14 @@ function FalhaDoOrcamento({ falha }: { falha: Falha }) {
       const tipo = typeof d.date_type === "string" ? d.date_type : null;
       detalhe = (
         <>
-          A tabela vigente não tem tarifa
+          A tabela de preços atual não tem preço
           {tipo ? (
             <>
               {" "}
-              para o tipo <strong>{tipo}</strong>
+              para <strong>{rotuloDoTipo(tipo as Parameters<typeof rotuloDoTipo>[0])}</strong>
             </>
           ) : null}
-          {data ? <> (noite de {formatarDataCurta(data)})</> : null}. Cadastre a célula no tarifário — recusar
-          é melhor do que vender por um valor inventado.
+          {data ? <> (noite de {formatarDataCurta(data)})</> : null}. Preencha o preço em Configurações → Tarifário.
         </>
       );
       break;
@@ -357,25 +354,24 @@ function FalhaDoOrcamento({ falha }: { falha: Falha }) {
         : [];
       detalhe = (
         <>
-          A composição deste produto tem{" "}
-          {esperadas !== null ? <strong>{esperadas} unidades</strong> : "unidades"}
-          {ativas !== null ? <> e só {ativas} está{ativas === 1 ? "" : "ão"} ativa{ativas === 1 ? "" : "s"}</> : null}
+          Este produto é formado por{" "}
+          {esperadas !== null ? <strong>{esperadas} apartamentos</strong> : "apartamentos"}
+          {ativas !== null ? <> e só {ativas} está{ativas === 1 ? "" : "ão"} ativo{ativas === 1 ? "" : "s"}</> : null}
           {faltando.length > 0 ? (
             <>
               {" "}
               — falta{faltando.length === 1 ? "" : "m"} <strong>{faltando.join(", ")}</strong>
             </>
           ) : null}
-          . Não é a data: <strong>nenhuma data resolve</strong> enquanto o produto não puder ser
-          entregue inteiro. Reative a unidade no inventário — entregar 7 de 8 cobrando a casa cheia
-          põe um estranho dentro dela.
+          . O problema não é a data: <strong>nenhuma data funciona</strong> enquanto faltar apartamento.
+          Reative o apartamento em Configurações → Inventário.
         </>
       );
       break;
     }
     case "DISCOUNT_ABOVE_LIMIT": {
       const teto = numero("max_pct");
-      detalhe = teto !== null ? <>O teto da política vigente é {formatarPct(teto)}.</> : null;
+      detalhe = teto !== null ? <>O desconto máximo permitido pela política é {formatarPct(teto)}.</> : null;
       break;
     }
     default:
@@ -383,13 +379,15 @@ function FalhaDoOrcamento({ falha }: { falha: Falha }) {
   }
 
   return (
-    <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/8 px-4 py-4">
-      <h3 className="font-display text-base">Este orçamento não pode ser emitido</h3>
+    <div
+      role="alert"
+      data-codigo={falha.code}
+      title={`Código para o suporte: ${falha.code}`}
+      className="rounded-xl border border-destructive/30 bg-destructive/8 px-4 py-4"
+    >
+      <h3 className="font-display text-base">Este orçamento não pode ser feito</h3>
       <p className="mt-1 text-sm text-muted-foreground">{mensagemDoErro(falha.code)}</p>
       {detalhe ? <p className="mt-2 text-sm text-muted-foreground">{detalhe}</p> : null}
-      <code className="mt-2 inline-block rounded-md bg-card px-2 py-0.5 font-mono text-xs text-muted-foreground">
-        {falha.code}
-      </code>
     </div>
   );
 }
@@ -435,8 +433,8 @@ function ResultadoDoOrcamento({ orcamento, calculando }: { orcamento: Orcamento;
           {orcamento.night_count} noite{orcamento.night_count === 1 ? "" : "s"}
         </Badge>
         <Badge variant="outline">diária média {formatarBRL(orcamento.avg_nightly_cents)}</Badge>
-        <Badge variant="outline">mínimo do período: {orcamento.min_nights}n</Badge>
-        <Badge variant="outline">política v{orcamento.policy_version}</Badge>
+        <Badge variant="outline">mínimo do período: {orcamento.min_nights} {orcamento.min_nights === 1 ? "noite" : "noites"}</Badge>
+        <Badge variant="outline">política comercial versão {orcamento.policy_version}</Badge>
         {calculando ? <Loader2 className="size-4 animate-spin text-muted-foreground" aria-label="Recalculando" /> : null}
       </div>
 
@@ -470,7 +468,7 @@ function ResultadoDoOrcamento({ orcamento, calculando }: { orcamento: Orcamento;
 
       <details className="rounded-xl border border-border/60 bg-card/60">
         <summary className="cursor-pointer select-none px-3 py-2 text-sm text-muted-foreground">
-          Noite a noite ({orcamento.nights.length}) — é exatamente o que vira o snapshot da reserva
+          Noite a noite ({orcamento.nights.length}) — são estes os preços que ficam na reserva
         </summary>
         <div className="max-h-72 overflow-y-auto border-t border-border/60">
           <table className="w-full border-collapse text-sm">
@@ -499,19 +497,19 @@ function ResultadoDoOrcamento({ orcamento, calculando }: { orcamento: Orcamento;
             rotulo={`Desconto (${formatarPct(orcamento.discount_pct)})`}
             valor={orcamento.discount_cents}
             negativo
-            nota="Incide só sobre as diárias — nunca sobre a limpeza nem sobre a caução."
+            nota="Vale só para as diárias — nunca para a limpeza nem para a caução."
           />
         ) : null}
         <Linha
           rotulo="Taxa de limpeza"
           valor={orcamento.cleaning_cents}
-          nota="Uma vez por estadia, fora da base do desconto."
+          nota="Cobrada uma vez por estadia, sem desconto."
         />
         {orcamento.event_deposit_cents > 0 ? (
           <Linha
             rotulo="Caução de evento"
             valor={orcamento.event_deposit_cents}
-            nota="Reembolsável — entra no total como recebível, não como receita."
+            nota="Devolvida depois do evento — entra no total, mas não é receita."
           />
         ) : null}
         <Linha rotulo="Total" valor={orcamento.total_cents} destaque />
@@ -522,22 +520,21 @@ function ResultadoDoOrcamento({ orcamento, calculando }: { orcamento: Orcamento;
           <p className="text-xs text-muted-foreground">Sinal para confirmar</p>
           <p className="font-mono text-xl tabular-nums">{formatarBRL(orcamento.deposit_cents)}</p>
           <p className="mt-1 text-[0.7rem] leading-snug text-muted-foreground">
-            Enquanto não entrar, a pré-reserva expira sozinha e a data volta a ser vendável.
+            Se não for pago no prazo, a pré-reserva vence e as datas voltam a ficar livres.
           </p>
         </div>
         <div className="rounded-xl border border-border/60 bg-card/60 px-4 py-3">
           <p className="text-xs text-muted-foreground">Saldo</p>
           <p className="font-mono text-xl tabular-nums">{formatarBRL(orcamento.balance_cents)}</p>
           <p className="mt-1 text-[0.7rem] leading-snug text-muted-foreground">
-            Vence alguns dias antes do check-in, conforme a política v{orcamento.policy_version}.
+            Vence alguns dias antes do check-in, conforme a política comercial.
           </p>
         </div>
       </div>
 
       <Nota>
-        Este cálculo <strong>não segura a data</strong>. Só a pré-reserva insere o bloqueio no calendário —
-        até lá, a mesma noite pode ser vendida por outra pessoa, e quem impede a dupla venda é a constraint
-        do banco, não esta tela.
+        Este orçamento <strong>não guarda as datas</strong>. Só a pré-reserva reserva o calendário — até lá,
+        as mesmas noites podem ser vendidas para outra pessoa.
       </Nota>
     </div>
   );

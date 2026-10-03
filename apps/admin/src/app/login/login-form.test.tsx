@@ -161,7 +161,7 @@ describe("LoginForm", () => {
 
     const aviso = await screen.findByRole("alert");
     expect(aviso.textContent).toBe(
-      "Não foi possível falar com o servidor. Tente novamente em instantes.",
+      "Sem conexão com o sistema agora. Verifique a internet e tente de novo em instantes.",
     );
   });
 

@@ -167,16 +167,16 @@ function alertasDeConfiguracao(produtos: readonly DisponibilidadeDoProduto[]): A
 
 const TEXTO_DO_ALERTA: Record<Alerta["motivo"], { titulo: string; acao: string }> = {
   sem_tarifa: {
-    titulo: "sem tarifa na tabela vigente",
-    acao: "A venda recusa com RATE_NOT_FOUND. Preencha a célula em Configurações → Tarifário.",
+    titulo: "sem preço cadastrado",
+    acao: "Nesses dias não dá para vender: falta o preço. Preencha em Configurações → Tarifário.",
   },
   composicao_incompleta: {
-    titulo: "composição incompleta",
-    acao: "Falta unidade ativa: 7 de 8 não é a casa inteira. Reative a unidade em Configurações → Inventário.",
+    titulo: "faltando apartamento",
+    acao: "Um dos apartamentos que formam este item está desativado, então ele não pode ser vendido inteiro. Reative o apartamento em Configurações → Inventário.",
   },
   unidade_inativa: {
-    titulo: "sem unidade ativa",
-    acao: "Nenhuma unidade da composição está ativa — não há o que entregar.",
+    titulo: "sem apartamento ativo",
+    acao: "Todos os apartamentos deste item estão desativados. Reative pelo menos um em Configurações → Inventário.",
   },
 };
 
@@ -322,9 +322,8 @@ export default async function PainelPage() {
           titulo="Ocupação do mês"
           descricao={
             <>
-              Em <strong>noites-unidade</strong> — a mesma conta que o mapa mostra: cada apartamento,
-              cada dia. Contar reservas empataria uma Completa de três noites com um apartamento de
-              trinta.
+              Contamos <strong>diárias por apartamento</strong>: cada apartamento, em cada dia do mês.
+              Assim uma reserva de 3 noites pesa menos que uma de 30, como no mapa.
             </>
           }
           acao={
@@ -341,12 +340,12 @@ export default async function PainelPage() {
             <p className="font-display text-4xl tabular-nums leading-none">{percentual ?? "—"}%</p>
             <p className="text-sm text-muted-foreground">
               <span className="tabular-nums text-foreground">{ocupacao.vendidas}</span> de{" "}
-              <span className="tabular-nums">{ocupacao.total}</span> noites-unidade vendidas
+              <span className="tabular-nums">{ocupacao.total}</span> diárias vendidas
               {ocupacao.bloqueadas > 0 ? (
                 <>
                   {" "}
                   · <span className="tabular-nums">{ocupacao.bloqueadas}</span> bloqueadas
-                  (manutenção, proprietário ou OTA) — não estavam à venda
+                  (manutenção, uso do proprietário ou sites de reserva) — não estavam à venda
                 </>
               ) : null}
             </p>
@@ -387,7 +386,7 @@ export default async function PainelPage() {
         <div className="grid gap-4 lg:grid-cols-2">
           <Bloco
             titulo="Chegam hoje"
-            descricao="Check-ins do dia — quem recebe a chave."
+            descricao="Hóspedes que fazem check-in hoje e recebem a chave."
           >
             {movimento.entradas.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nenhuma entrada hoje.</p>
@@ -421,7 +420,7 @@ export default async function PainelPage() {
 
           <Bloco
             titulo="Saem hoje"
-            descricao="A noite do check-out não é cobrada e a data já fica livre para outro hóspede."
+            descricao="Hóspedes que fazem check-out hoje. O apartamento já fica livre para outra reserva a partir de hoje."
           >
             {movimento.saidas.length === 0 ? (
               <p className="text-sm text-muted-foreground">Nenhuma saída hoje.</p>
@@ -446,8 +445,9 @@ export default async function PainelPage() {
           titulo="Pré-reservas vencendo"
           descricao={
             <>
-              Data segurada <strong>sem dinheiro</strong>. Quando o prazo passa, o job libera as
-              unidades e a data volta ao estoque — o prazo é o que a API gravou, e a extensão o move.
+              Datas guardadas para o cliente, <strong>ainda sem pagamento</strong>. Se o prazo
+              acabar sem confirmação, as datas voltam a ficar livres para venda. Precisa de mais
+              tempo? Abra a reserva e estenda o prazo.
             </>
           }
         >
@@ -482,7 +482,7 @@ export default async function PainelPage() {
       {alertas && alertas.length > 0 ? (
         <Bloco
           titulo="Impedem uma venda nos próximos 30 dias"
-          descricao="Calculado pela API, não por esta tela: é o motivo de indisponibilidade que a disponibilidade já devolve por dia."
+          descricao="Problemas de cadastro que impedem vender esses dias. Corrija para não perder clientes."
         >
           <ul className="flex flex-col gap-2">
             {alertas.map((alerta) => (
@@ -531,7 +531,7 @@ export default async function PainelPage() {
                         {escopo === "own" ? (
                           <span
                             className="rounded-full bg-accent px-2 py-0.5 text-[0.62rem] font-medium uppercase tracking-wider text-accent-foreground"
-                            title="O escopo é aplicado no SQL da API: a lista já chega filtrada pelo dono."
+                            title="Você vê apenas os registros que são seus."
                           >
                             só os meus
                           </span>
@@ -550,8 +550,8 @@ export default async function PainelPage() {
           titulo="Nenhum acesso liberado ainda"
           descricao={
             <>
-              Peça à gestão para ajustar a matriz do perfil <strong>{user.role_name}</strong> em
-              Configurações → Perfis. A mudança vale na requisição seguinte, sem novo login.
+              Peça à gestão para liberar telas para o perfil <strong>{user.role_name}</strong> em
+              Configurações → Perfis. A mudança vale na hora, sem precisar entrar de novo.
             </>
           }
         />
@@ -568,9 +568,8 @@ export default async function PainelPage() {
             Ainda não existe
           </h2>
           <p className="mt-1 max-w-prose text-sm text-muted-foreground">
-            Estas telas saíram do menu porque o menu passou a dizer só a verdade — item que leva a
-            uma página de erro é pior que item ausente. Ficam aqui, <strong>sem link</strong>, para
-            quem apresenta o sistema não perder a noção do todo.
+            Estas telas ainda estão sendo feitas e por isso não aparecem no menu. Ficam listadas
+            aqui, <strong>sem link</strong>, só para você saber o que vem por aí.
           </p>
           <ul className="mt-3 flex flex-col gap-1.5">
             {EM_CONSTRUCAO.map((item) => (
@@ -589,9 +588,8 @@ export default async function PainelPage() {
       <p className="flex items-start gap-2 text-xs text-muted-foreground">
         <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span>
-          Esta tela <strong>esconde</strong> o que o seu perfil não alcança — e esconder não é
-          autorizar. Quem recusa é o middleware da API, a cada requisição, com 403. Se um botão
-          vazasse para cá por engano, ele falharia; nenhum dado atravessa por engano.
+          Você vê aqui só o que o seu perfil pode usar. Mesmo que algo apareça por engano, o
+          sistema confere a permissão a cada ação e não deixa ver nem mudar o que não é seu.
         </span>
       </p>
     </div>

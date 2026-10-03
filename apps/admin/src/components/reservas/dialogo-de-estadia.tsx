@@ -129,8 +129,8 @@ export function DialogoDeEstadia({
       <div className="flex flex-col gap-4">
         {alvo ? (
           <p className="text-sm text-muted-foreground">
-            Estadia vendida de {formatarData(alvo.check_in)} a {formatarData(alvo.check_out)} — a noite da
-            saída não é cobrada.
+            Estadia de {formatarData(alvo.check_in)} a {formatarData(alvo.check_out)} — o dia da saída não
+            conta como diária.
           </p>
         ) : null}
 
@@ -146,7 +146,7 @@ export function DialogoDeEstadia({
               />
             )}
           </Campo>
-          <Campo id="estadia-hora" label="Hora" hint="Em branco assume 09:00, no fuso da casa.">
+          <Campo id="estadia-hora" label="Hora" hint="Em branco, usa 09:00 (horário de Fortaleza).">
             {(props) => (
               <Input
                 {...props}
@@ -174,15 +174,15 @@ export function DialogoDeEstadia({
           <Nota variante="atencao">
             {tipo === "entrada" ? (
               <>
-                O servidor só aceita check-in entre {formatarData(alvo.check_in)} e a véspera de{" "}
-                {formatarData(alvo.check_out)}. Entrar antes é ocupar noite que ninguém vendeu; a noite da
-                saída já é da reserva seguinte. Com esta data, a resposta será recusa.
+                O check-in só pode ser registrado entre {formatarData(alvo.check_in)} e a véspera de{" "}
+                {formatarData(alvo.check_out)}. Antes disso a noite não foi vendida, e o dia da saída já pode
+                ser de outra reserva. Com esta data, o registro não será aceito.
               </>
             ) : (
               <>
-                O servidor só aceita check-out entre {formatarData(alvo.check_in)} e{" "}
-                {formatarData(alvo.check_out)}, e nunca antes do check-in registrado. Com esta data, a
-                resposta será recusa.
+                O check-out só pode ser registrado entre {formatarData(alvo.check_in)} e{" "}
+                {formatarData(alvo.check_out)}, e nunca antes do check-in. Com esta data, o registro não será
+                aceito.
               </>
             )}
           </Nota>
@@ -191,13 +191,13 @@ export function DialogoDeEstadia({
         <Nota>
           {tipo === "entrada" ? (
             <>
-              O check-in <strong>não libera</strong> o calendário: o hóspede está dentro e a data segue
-              bloqueada até a saída.
+              O check-in <strong>não libera</strong> o calendário: o hóspede está na casa e as datas continuam
+              ocupadas até a saída.
             </>
           ) : (
             <>
-              O check-out <strong>libera as unidades na hora</strong> e a estadia continua visível no mapa —
-              ela aconteceu, e é dela que saem ocupação e receita.
+              O check-out <strong>libera os apartamentos na hora</strong> e a estadia continua visível no mapa
+              como histórico — ela conta na ocupação e na receita.
             </>
           )}
         </Nota>

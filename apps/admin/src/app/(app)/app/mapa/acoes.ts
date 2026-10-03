@@ -34,7 +34,7 @@ export async function buscarOcupacao(from: string, dias: number): Promise<Result
   if (recusa) return recusa;
 
   const analise = JanelaFormulario.safeParse({ from, dias });
-  if (!analise.success) return falha("VALIDATION_ERROR", "Faixa inválida.", detalhesDoZod(analise.error));
+  if (!analise.success) return falha("VALIDATION_ERROR", "Período inválido.", detalhesDoZod(analise.error));
 
   return carregarOcupacao(janelaDe(analise.data.from, analise.data.dias));
 }

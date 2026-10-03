@@ -122,7 +122,7 @@ export function DialogoDeHold({
               {restantes === 0 ? (
                 <>
                   Esta foi a <strong>última</strong> extensão permitida ({sucesso.extensions_count} de{" "}
-                  {sucesso.max_extensions}). A próxima decisão é confirmar com sinal ou soltar a data.
+                  {sucesso.max_extensions}). Agora é preciso confirmar com o sinal ou liberar as datas.
                 </>
               ) : (
                 <>
@@ -138,7 +138,7 @@ export function DialogoDeHold({
               id="hold-horas"
               label="Horas a partir de agora"
               erro={horasInvalidas ? "Informe um número inteiro de horas, a partir de 1." : undefined}
-              hint="Em branco usa o prazo da política congelada nesta reserva. A contagem começa agora, não no vencimento antigo — hold vencido não se conserta para trás."
+              hint="Em branco, usa o prazo padrão da política desta reserva. A contagem começa agora, não no vencimento anterior."
             >
               {(props) => (
                 <Input
@@ -152,7 +152,7 @@ export function DialogoDeHold({
               )}
             </Campo>
 
-            <Campo id="hold-motivo" label="Motivo" hint="Vai para a linha do tempo com o seu nome.">
+            <Campo id="hold-motivo" label="Motivo" hint="Fica registrado no histórico da reserva, com o seu nome.">
               {(props) => (
                 <Input
                   {...props}
@@ -164,8 +164,8 @@ export function DialogoDeHold({
             </Campo>
 
             <Nota variante="atencao">
-              Estender mantém a data bloqueada sem dinheiro na mesa. Pré-reserva que se renova sozinha é data
-              morta no calendário — por isso cada extensão é registrada e o total é limitado.
+              Estender mantém as datas guardadas sem nenhum pagamento. Para não travar o calendário à toa, cada
+              extensão fica registrada e há um limite de extensões.
             </Nota>
           </>
         )}

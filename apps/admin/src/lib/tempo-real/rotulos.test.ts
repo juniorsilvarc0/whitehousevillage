@@ -8,7 +8,7 @@ describe("descreverTempoReal", () => {
     // mudança não mostrada" é sobre o que está desenhado, que é o que decide se
     // vale um F5.
     expect(descreverTempoReal("reconectando").detalhe).toContain("mudança ainda não mostrada");
-    expect(descreverTempoReal("desligado").detalhe).toContain("última carga");
+    expect(descreverTempoReal("desligado").detalhe).toContain("pode estar desatualizada");
   });
 
   it("nomeia a tela de que fala — o funil não é o mapa", () => {
