@@ -30,10 +30,11 @@
     produtos: [],
     politica: null,
     hoje: null,
-    produto: null,          // código, ex.: 'cobertura'
+    produto: null,          // código, ex.: 'grand-villa'
     hospedes: 2,
     ano: 0, mes: 0,
     checkin: null, checkout: null,
+    consulta: null,         // data sob consulta clicada (sem check-in)
     dias: {},               // `${produtoId}|${data}` → dia da API
     orcamento: null,        // { chave, dados } | { chave, erro }
     carregando: false
@@ -47,6 +48,18 @@
   const WHATSAPP = metaWa && /^\d{10,15}$/.test(metaWa.content) ? metaWa.content : null;
 
   const unit = () => state.produtos.find(p => p.code === state.produto);
+
+  /* "Sob consulta" não é "indisponível": a data pode estar livre, só não tem
+     preço de tabela (Réveillon da Grand Villa, a White House Completa). O
+     caminho é a conversa, com as datas já escritas. */
+  function linkConsulta(u, de, ate) {
+    if (!WHATSAPP) return '';
+    const linhas = ['Olá! Quero consultar valores na White House:', '', `*${u.name}*`];
+    if (de) linhas.push(`Check-in: ${WH.dataBR(de)}`);
+    if (ate) linhas.push(`Check-out: ${WH.dataBR(ate)}`);
+    linhas.push(`Hóspedes: ${state.hospedes}`);
+    return `https://wa.me/${WHATSAPP}?text=` + encodeURIComponent(linhas.join('\n'));
+  }
   const diaDe = (s) => state.dias[unit().unit_type_id + '|' + s];
   const curto = c => {
     const reais = Math.floor(c / 100);
@@ -97,15 +110,19 @@
 
   /* ─────────── Controles ─────────── */
   function initControls() {
-    el.produto.innerHTML = state.produtos
-      .map(p => `<option value="${WH.esc(p.code)}">${WH.esc(p.name)} · até ${p.capacity} hóspedes</option>`).join('');
+    /* Agrupado por categoria: o cliente escolhe exatamente qual duplex ou qual
+       Pool Suíte quer, não "um duplex qualquer". */
+    const opcao = p => `<option value="${WH.esc(p.code)}">${WH.esc(p.name)} · ${p.on_request ? 'sob consulta' : 'até ' + p.capacity + ' hóspedes'}</option>`;
+    el.produto.innerHTML = WH.agrupar(state.produtos).map(g => g.produtos.length > 1
+      ? `<optgroup label="${WH.esc(g.titulo)}">${g.produtos.map(opcao).join('')}</optgroup>`
+      : opcao(g.produtos[0])).join('');
     el.produto.value = state.produto;
     renderHospedes();
 
     el.produto.addEventListener('change', async () => {
       state.produto = el.produto.value;
       state.checkin = state.checkout = null;
-      state.orcamento = null;
+      state.orcamento = null; state.consulta = null;
       state.hospedes = Math.min(state.hospedes, unit().capacity);
       renderHospedes();
       await recarregar();
@@ -185,7 +202,7 @@
       const livre = !!(dia && dia.available) && !past;
       if (livre) livres++;
 
-      const cls = ['day', dia ? (dia.available ? 'day--free' : 'day--busy') : 'day--loading'];
+      const cls = ['day', dia ? (dia.available ? 'day--free' : dia.on_request ? 'day--consult' : 'day--busy') : 'day--loading'];
       if (past) cls.push('day--past');
       if (dia && ESPECIAIS.indexOf(dia.date_type) !== -1) cls.push('day--special');
       if (s === state.hoje) cls.push('day--today');
@@ -194,11 +211,11 @@
 
       const titulo = !dia ? 'Carregando…'
         : dia.available ? `${WH.rotulo(dia.date_type)} · ${WH.brl(dia.price_cents)}${dia.min_nights > 1 ? ' · mínimo ' + dia.min_nights + ' noites' : ''}`
-        : 'Indisponível';
+        : dia.on_request ? `${WH.rotulo(dia.date_type)} · sob consulta` : 'Indisponível';
 
       cells += `<button type="button" class="${cls.join(' ')}" data-d="${s}" title="${WH.esc(titulo)}">
           <span class="day__n">${d}</span>
-          <span class="day__p">${livre && dia.price_cents != null ? curto(dia.price_cents) : '—'}</span>
+          <span class="day__p">${livre && dia.price_cents != null ? curto(dia.price_cents) : dia && dia.on_request && !past ? 'cons.' : '—'}</span>
         </button>`;
     }
 
@@ -218,12 +235,18 @@
     /* O dia de check-out não é noite da estadia: pode estar ocupado por quem
        chega nesse dia (a estadia é half-open, [check-in, check-out)). */
     const escolhendoSaida = state.checkin && !state.checkout && s > state.checkin;
+    if (!escolhendoSaida && !dia.available && dia.on_request) {
+      toast(`${WH.dataBR(s)} é sob consulta${WHATSAPP ? ' — fale com a gente pelo WhatsApp' : ''}.`);
+      state.consulta = s;
+      renderQuote();
+      return;
+    }
     if (!escolhendoSaida && !dia.available) {
       toast(`${WH.dataBR(s)} indisponível.`);
       return;
     }
     if (!escolhendoSaida) {
-      state.checkin = s; state.checkout = null; state.orcamento = null;
+      state.checkin = s; state.checkout = null; state.orcamento = null; state.consulta = null;
       render();
       return;
     }
@@ -302,6 +325,17 @@
     const P = state.politica;
     const head = cabecalho(u);
 
+    if (u.on_request || (state.consulta && !state.checkin)) {
+      const link = linkConsulta(u, state.consulta, null);
+      el.quote.innerHTML = head + `
+        <div class="quote__hint quote__hint--warn">${u.on_request
+          ? `${WH.esc(u.name)} tem valores sob consulta: cada pedido é montado com a nossa equipe.`
+          : `${WH.dataBR(state.consulta)} tem valores sob consulta para ${WH.esc(u.name)}.`}</div>
+        ${link ? `<div class="quote__actions"><a class="btn btn--dark" target="_blank" rel="noopener" href="${link}">Consultar no WhatsApp</a></div>` : ''}
+        ${blocoPolitica()}`;
+      return;
+    }
+
     if (!state.checkin || !state.checkout) {
       el.quote.innerHTML = head + `
         <div class="quote__dates">
@@ -330,11 +364,14 @@
     }
     if (o.erro) {
       /* A mensagem é a da API (mínimo de noites, lotação etc.): é ela quem sabe a regra. */
-      const tipo = o.erro.code === 'MIN_STAY_NOT_MET' ? 'warn' : 'block';
+      const consulta = o.erro.code === 'RATE_NOT_FOUND';
+      const tipo = o.erro.code === 'MIN_STAY_NOT_MET' || consulta ? 'warn' : 'block';
+      const msg = consulta ? 'Essas datas têm valores sob consulta. Fale com a gente e montamos o seu pedido.' : o.erro.message;
+      const link = linkConsulta(u, state.checkin, state.checkout);
       el.quote.innerHTML = head + datas + `
-        <div class="quote__hint quote__hint--${tipo}">${WH.esc(o.erro.message)}</div>
+        <div class="quote__hint quote__hint--${tipo}">${WH.esc(msg)}</div>
         ${blocoPolitica()}
-        ${WHATSAPP ? `<div class="quote__actions"><a class="btn btn--secondary" target="_blank" rel="noopener" href="https://wa.me/${WHATSAPP}">Falar no WhatsApp</a></div>` : ''}`;
+        ${link ? `<div class="quote__actions"><a class="btn btn--secondary" target="_blank" rel="noopener" href="${link}">${consulta ? 'Consultar no WhatsApp' : 'Falar no WhatsApp'}</a></div>` : ''}`;
       return;
     }
 
@@ -412,20 +449,22 @@
     el.rates.innerHTML = state.produtos.map(p => {
       const por = {};
       for (const r of p.rates) por[r.date_type] = r.price_cents;
+      const pacotes = (p.packages || []).slice().sort((x, y) => x.date_types.join() === y.date_types.join() ? x.nights - y.nights : x.date_types.join() > y.date_types.join() ? -1 : 1).map(k =>
+        `${k.nights} diárias (${k.date_types.map(t => WH.rotulo(t).toLowerCase()).join(' / ')}): ${WH.brl(k.total_cents)}`);
       return `
       <tr>
-        <td>${WH.esc(p.name)}</td>
+        <td>${WH.esc(p.name)}${pacotes.length ? `<small class="rates__pacotes">Pacotes: ${WH.esc(pacotes.join(' · '))}</small>` : ''}</td>
         <td>${p.capacity} hóspedes</td>
-        ${WH.TIPOS.map(t => `<td${t === 'reveillon' || t === 'carnaval' ? ' class="hi"' : ''}>${por[t] != null ? WH.brl(por[t]) : '—'}</td>`).join('')}
+        ${WH.TIPOS.map(t => `<td${t === 'reveillon' || t === 'carnaval' ? ' class="hi"' : ''}>${por[t] != null ? WH.brl(por[t]) : 'consulta'}</td>`).join('')}
       </tr>`;
     }).join('');
 
-    /* As estadias mínimas também saem da tabela vigente, não do HTML. */
+    /* A estadia mínima agora varia por acomodação (Pool Suítes e villas pedem
+       2 diárias, duplex aceita 1 em dia comum): uma frase só com "o maior
+       mínimo" mentiria para metade da tabela. A do produto escolhido sai da
+       API e aparece no calendário (título de cada dia) e na recusa do orçamento. */
     if (el.minimos && state.produtos.length) {
-      const min = {};
-      for (const p of state.produtos) for (const r of p.rates) min[r.date_type] = Math.max(min[r.date_type] || 1, r.min_nights);
-      const partes = WH.TIPOS.filter(t => (min[t] || 1) > 1).map(t => `${min[t]} em ${WH.rotulo(t).toLowerCase()}`);
-      el.minimos.textContent = partes.length ? 'Estadias mínimas: ' + partes.join(', ') + '.' : '';
+      el.minimos.textContent = 'A estadia mínima varia por acomodação e tipo de data — passe o mouse sobre o dia no calendário para ver a de cada data.';
     }
   }
 
@@ -450,12 +489,12 @@
 
     const pedido = params.get('produto');
     state.produto = state.produtos.some(p => p.code === pedido) ? pedido
-      : (state.produtos.some(p => p.code === 'cobertura') ? 'cobertura' : state.produtos[0].code);
+      : WH.agrupar(state.produtos)[0].produtos[0].code;
     state.hospedes = Math.min(2, unit().capacity);
     const hoje = WH.parse(state.hoje);
     state.ano = hoje.getFullYear(); state.mes = hoje.getMonth();
 
-    /* Deep link opcional: ?produto=cobertura&checkin=2026-12-28&checkout=2027-01-02 */
+    /* Deep link opcional: ?produto=grand-villa&checkin=2026-12-28&checkout=2027-01-02 */
     const ci = params.get('checkin'), co = params.get('checkout');
     const valido = /^\d{4}-\d{2}-\d{2}$/;
     if (ci && co && valido.test(ci) && valido.test(co) && ci < co && ci >= state.hoje) {

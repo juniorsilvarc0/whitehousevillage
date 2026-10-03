@@ -29,14 +29,14 @@ da imagem, então mudar o nginx pede `make up` de novo (o alvo já faz `--build`
 
 | Rota | O que é |
 | --- | --- |
-| `/` | Home: hero em vídeo, as quatro acomodações, eventos, estrutura, localização |
+| `/` | Home: hero em vídeo, as acomodações por categoria (Duplex, Pool Suítes, Grand Villa, Classic Villa, Completa), eventos, estrutura, localização |
 | `/disponibilidade.html` | Consulta de datas, orçamento do hóspede e tabela de tarifas |
 | qualquer outro caminho | **404 de verdade**, com `public/404.html` (via `error_page`) |
 
 Deep link que a página de disponibilidade entende:
 
 ```
-/disponibilidade.html?produto=cobertura&checkin=2026-11-20&checkout=2026-11-23
+/disponibilidade.html?produto=grand-villa&checkin=2026-11-20&checkout=2026-11-23
 ```
 
 **`/admin` não existe mais.** O back-office mocado (`public/admin/`,

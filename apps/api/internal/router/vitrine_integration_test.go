@@ -12,6 +12,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -226,7 +227,9 @@ func TestVitrineDiaOcupadoNaoContaNada(t *testing.T) {
 		t.Fatalf("esperava 6 noites, vieram %d", len(envelope.Data))
 	}
 
-	permitidas := map[string]bool{"date": true, "available": true, "date_type": true, "price_cents": true, "min_nights": true}
+	// on_request é regra comercial da casa (dia sem tarifa publicada), não
+	// dado de terceiro: o mesmo para todo visitante, ocupado ou não.
+	permitidas := map[string]bool{"date": true, "available": true, "date_type": true, "price_cents": true, "min_nights": true, "on_request": true}
 	ocupados := 0
 	for _, dia := range envelope.Data {
 		for chave := range dia {
@@ -301,5 +304,115 @@ func TestVitrineLimitaPorIP(t *testing.T) {
 	r := a.chamar(t, http.MethodGet, "/public/policy", "", nil)
 	if r.Status != http.StatusTooManyRequests || r.codigoDeErro(t) != "RATE_LIMITED" {
 		t.Fatalf("o 121º pedido do mesmo IP devolveu %d — esperado 429 RATE_LIMITED", r.Status)
+	}
+}
+
+// Catálogo real (03/10/2026): nome de vitrine, pacote por duração e estadia
+// mínima por produto saem do banco e chegam ao site — e o site e o painel
+// continuam fechando o mesmo número. Usa a cobertura do catálogo de teste e
+// devolve tudo como estava.
+func TestVitrineNomePacoteEMinimoDoProdutoVemDoBanco(t *testing.T) {
+	a := subirAPI(t)
+	exigirSeed(t, a)
+	painel := a.vendedor(t)
+	produto := a.produtoPublico(t, "cobertura")
+
+	var tabela uuid.UUID
+	if err := a.pool.QueryRow(a.ctx, `
+		SELECT id FROM rate_tables
+		 WHERE active AND valid_from <= current_date AND (valid_to IS NULL OR valid_to >= current_date)
+		 ORDER BY valid_from DESC, id LIMIT 1`).Scan(&tabela); err != nil {
+		t.Fatalf("tarifário vigente: %v", err)
+	}
+	t.Cleanup(func() {
+		for _, q := range []string{
+			`UPDATE unit_types SET public_name = NULL WHERE id = $1`,
+			`DELETE FROM rate_packages WHERE unit_type_id = $1`,
+			`DELETE FROM unit_type_min_nights WHERE unit_type_id = $1`,
+		} {
+			if _, err := a.pool.Exec(context.Background(), q, produto.ID); err != nil {
+				t.Errorf("limpeza %q: %v", q, err)
+			}
+		}
+	})
+
+	// Pacote de 2 noites por R$ 1,00 em qualquer tipo de data: sempre mais
+	// barato que duas diárias avulsas, então 4 noites = 2 pacotes = 200 centavos,
+	// seja qual for a data que "daqui a 120 dias" cair.
+	if _, err := a.pool.Exec(a.ctx, `UPDATE unit_types SET public_name = 'Cobertura Vista Mar' WHERE id = $1`, produto.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.pool.Exec(a.ctx, `
+		INSERT INTO rate_packages (rate_table_id, unit_type_id, nights, date_types, total_cents)
+		VALUES ($1, $2, 2, ARRAY['normal','fds','feriado','alta','reveillon','carnaval'], 100)`, tabela, produto.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	type catalogoQA struct {
+		Codigo  string `json:"code"`
+		Nome    string `json:"name"`
+		Pacotes []struct {
+			Noites int      `json:"nights"`
+			Tipos  []string `json:"date_types"`
+			Total  int64    `json:"total_cents"`
+		} `json:"packages"`
+		SobConsulta bool `json:"on_request"`
+	}
+	lista := envelopeDe[[]catalogoQA](t, a.chamar(t, http.MethodGet, "/public/products", "", nil), http.StatusOK, "GET /public/products")
+	var visto *catalogoQA
+	for i := range lista {
+		if lista[i].Codigo == "cobertura" {
+			visto = &lista[i]
+		}
+	}
+	if visto == nil || visto.Nome != "Cobertura Vista Mar" {
+		t.Fatalf("o site deveria mostrar o nome de vitrine: %+v", visto)
+	}
+	if len(visto.Pacotes) != 1 || visto.Pacotes[0].Noites != 2 || visto.Pacotes[0].Total != 100 || len(visto.Pacotes[0].Tipos) != 6 {
+		t.Fatalf("pacote não chegou ao catálogo público: %+v", visto.Pacotes)
+	}
+	if visto.SobConsulta {
+		t.Fatal("produto com tarifa não é sob consulta")
+	}
+
+	entrada, saida := janelaAPartirDeHoje(120, noitesDaVitrine)
+	pedido := map[string]any{"unit_type_id": produto.ID, "check_in": entrada, "check_out": saida, "guests_count": 2}
+	publico := envelopeDe[orcamentoPublicoQA](t, a.chamar(t, http.MethodPost, "/public/quotes", "", pedido),
+		http.StatusOK, "POST /public/quotes com pacote")
+	interno := envelopeDe[orcamentoPublicoQA](t, a.chamar(t, http.MethodPost, "/quotes", painel.Token, pedido),
+		http.StatusOK, "POST /quotes com pacote")
+	if publico != interno {
+		t.Fatalf("site e painel discordam com pacote:\n  site:   %+v\n  painel: %+v", publico, interno)
+	}
+	if publico.Subtotal != 200 {
+		t.Fatalf("4 noites = 2 pacotes de 100 centavos; subtotal veio %d", publico.Subtotal)
+	}
+
+	// A mensagem do motor usa o nome de vitrine na rota pública — o nome
+	// interno do produto é vocabulário da equipe.
+	lotado := map[string]any{"unit_type_id": produto.ID, "check_in": entrada, "check_out": saida, "guests_count": produto.Lotacao + 1}
+	if r := a.chamar(t, http.MethodPost, "/public/quotes", "", lotado); !strings.Contains(string(r.Corpo), "Cobertura Vista Mar") {
+		t.Fatalf("a recusa pública deveria citar o nome de vitrine: %d %s", r.Status, r.Corpo)
+	}
+
+	// Estadia mínima do produto: 5 noites em todo tipo de data. A geral do
+	// tarifário de teste não passa de 4, então só a regra do produto recusa.
+	if _, err := a.pool.Exec(a.ctx, `
+		INSERT INTO unit_type_min_nights (rate_table_id, unit_type_id, date_type, nights)
+		SELECT $1, $2, t, 5 FROM unnest(ARRAY['normal','fds','feriado','alta','reveillon','carnaval']) AS t`, tabela, produto.ID); err != nil {
+		t.Fatal(err)
+	}
+	r := a.chamar(t, http.MethodPost, "/public/quotes", "", pedido)
+	if r.Status == http.StatusOK || r.codigoDeErro(t) != "MIN_STAY_NOT_MET" {
+		t.Fatalf("4 noites com mínimo de 5 do produto deveria dar MIN_STAY_NOT_MET: %d %s", r.Status, r.Corpo)
+	}
+	dias := envelopeDe[[]struct {
+		MinNoites int `json:"min_nights"`
+	}](t, a.chamar(t, http.MethodGet, "/public/availability?unit_type_id="+produto.ID.String()+"&from="+entrada+"&to="+saida, "", nil),
+		http.StatusOK, "GET /public/availability")
+	for _, d := range dias {
+		if d.MinNoites != 5 {
+			t.Fatalf("o calendário público deveria mostrar o mínimo do produto (5): %+v", dias)
+		}
 	}
 }

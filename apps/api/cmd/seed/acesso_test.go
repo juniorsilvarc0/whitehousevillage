@@ -162,18 +162,20 @@ func TestSenhaDeDesenvolvimentoPassaNoVerificadorDoLogin(t *testing.T) {
 	}
 }
 
-// A tabela V1 é conferida linha a linha contra docs/spec.md §3, em REAIS.
-// O teste existe para o dia em que alguém copiar o número da spec direto para
-// um campo `_cents` e vender a diária por R$ 8,50.
+// As tarifas são conferidas em REAIS, nos dois catálogos. O teste existe para o
+// dia em que alguém copiar o número direto para um campo `_cents` e vender a
+// diária por R$ 8,50.
 func TestTarifasEntramEmCentavos(t *testing.T) {
-	for _, tar := range tarifasSeed {
-		for i, v := range tar.valores {
-			if got := reais(v); got != v*100 {
-				t.Fatalf("%s/%s: %d reais viraram %d centavos", tar.produto, ordemDosTipos[i], v, got)
+	for _, cat := range []*catalogo{&catalogoDeTeste, &catalogoDaCasa} {
+		for _, tar := range cat.tarifas {
+			for i, v := range tar.valores {
+				if got := reais(v); got != v*100 {
+					t.Fatalf("%s %s/%s: %d reais viraram %d centavos", cat.nome, tar.produto, ordemDosTipos[i], v, got)
+				}
 			}
 		}
 	}
-	if len(ordemDosTipos) != len(tarifasSeed[0].valores) {
+	if len(ordemDosTipos) != len(tarifasTeste[0].valores) {
 		t.Fatal("a matriz de tarifas não tem uma coluna por tipo de data")
 	}
 }

@@ -13,13 +13,45 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/money"
 )
 
-// Product é o que se vende: apartamento, suíte, cobertura ou a casa completa.
+// Product é o que se vende: um duplex, uma suíte, as quatro suítes juntas, uma
+// das villas ou a casa completa.
 type Product struct {
 	ID          string
 	Name        string
 	Capacity    int
 	Rates       map[calendar.DateType]money.Cents
 	CleaningFee money.Cents
+
+	// MinNights é a estadia mínima PRÓPRIA do produto, por tipo de data. Onde
+	// existe, substitui a regra geral da política (Policy.MinNights) para aquele
+	// tipo: as Pool Suítes pedem 2 diárias até numa terça comum, e a regra geral
+	// da casa pede 1. Tipo ausente aqui cai na regra geral.
+	MinNights map[calendar.DateType]int
+
+	// Packages são os preços por duração (a Grand Villa vende 2 diárias por
+	// menos que duas diárias avulsas). Ver applyPackages.
+	Packages []Package
+}
+
+// Package é um preço fechado para N noites CONSECUTIVAS cujos tipos de data
+// estão todos em Types — "2 diárias no período regular por R$ 6.500".
+//
+// Pacote só existe para baratear: se a soma das diárias avulsas da janela for
+// menor ou igual ao total do pacote, as diárias avulsas valem. Pacote nenhum
+// pode deixar uma estadia mais cara do que ela seria sem ele.
+type Package struct {
+	Nights int
+	Types  []calendar.DateType
+	Total  money.Cents
+}
+
+func (p Package) covers(t calendar.DateType) bool {
+	for _, x := range p.Types {
+		if x == t {
+			return true
+		}
+	}
+	return false
 }
 
 // Policy é a política comercial vigente. Toda reserva congela a versão que usou.
@@ -146,9 +178,9 @@ func Build(req Request, cal calendar.Commercial, pol Policy) (Quote, error) {
 		PolicyVer:   pol.Version,
 	}
 
-	// Agrupa preservando a ordem de aparição, para o orçamento sair na ordem
-	// em que o hóspede vive a estadia.
-	index := map[calendar.DateType]int{}
+	// 1) Toda noite precisa de tarifa avulsa — inclusive as que um pacote vai
+	// cobrir: tipo de data sem tarifa é "sob consulta", e sob consulta não se
+	// orça, com ou sem pacote.
 	for _, d := range days {
 		cls := cal.Classify(d)
 		price, ok := req.Product.Rates[cls.Type]
@@ -159,23 +191,44 @@ func Build(req Request, cal calendar.Commercial, pol Policy) (Quote, error) {
 				Details: map[string]any{"date": d.String(), "date_type": string(cls.Type)},
 			}
 		}
-
 		q.Nights = append(q.Nights, Night{Date: d, Type: cls.Type, Label: cls.Label, Price: price})
-		q.Subtotal += price
 
-		if min, ok := pol.MinNights[cls.Type]; ok && min > q.MinNights {
-			q.MinNights = min // vale a noite mais restritiva da estadia
+		// Vale a noite mais restritiva da estadia; a regra do produto, quando
+		// existe para o tipo, substitui a geral.
+		min, ok := req.Product.MinNights[cls.Type]
+		if !ok {
+			min, ok = pol.MinNights[cls.Type]
 		}
+		if ok && min > q.MinNights {
+			q.MinNights = min
+		}
+	}
 
-		if i, seen := index[cls.Type]; seen {
-			q.Lines[i].Nights++
-			q.Lines[i].Subtotal += price
-		} else {
-			index[cls.Type] = len(q.Lines)
-			q.Lines = append(q.Lines, Line{
-				Type: cls.Type, Label: cls.Label, Nights: 1, UnitPrice: price, Subtotal: price,
-			})
+	// 2) Pacotes: trocam o preço de janelas de noites consecutivas.
+	pacoteDaNoite := applyPackages(q.Nights, req.Product.Packages)
+
+	// 3) Linhas, preservando a ordem de aparição — o orçamento sai na ordem em
+	// que o hóspede vive a estadia. Noites de pacote formam a própria linha.
+	type chave struct {
+		tipo   calendar.DateType
+		pacote int
+	}
+	index := map[chave]int{}
+	for i, n := range q.Nights {
+		q.Subtotal += n.Price
+		k := chave{tipo: n.Type}
+		label := n.Label
+		if p := pacoteDaNoite[i]; p > 0 {
+			k = chave{pacote: p}
+			label = fmt.Sprintf("Pacote %d diárias", p)
 		}
+		if li, seen := index[k]; seen {
+			q.Lines[li].Nights++
+			q.Lines[li].Subtotal += n.Price
+			continue
+		}
+		index[k] = len(q.Lines)
+		q.Lines = append(q.Lines, Line{Type: n.Type, Label: label, Nights: 1, UnitPrice: n.Price, Subtotal: n.Price})
 	}
 
 	// Desconto incide SÓ sobre as diárias — nunca sobre limpeza ou caução.
@@ -205,4 +258,68 @@ func Build(req Request, cal calendar.Commercial, pol Policy) (Quote, error) {
 	}
 
 	return q, nil
+}
+
+// applyPackages reprecifica as noites cobertas por pacote e devolve, para cada
+// noite, o tamanho do pacote que a cobriu (0 = diária avulsa).
+//
+// Guloso da esquerda para a direita, maior pacote primeiro: numa estadia de 5
+// noites regulares da Grand Villa sai o pacote de 4 e uma diária avulsa. Uma
+// janela só vira pacote se TODAS as noites dela forem de tipos que o pacote
+// cobre e se o pacote for mais barato que a soma avulsa da mesma janela.
+//
+// O total do pacote é repartido entre as noites em centavos inteiros (o resto
+// da divisão vai para as primeiras), porque o snapshot da reserva guarda o
+// preço de CADA noite (regra 7) e a soma das noites tem de fechar com o total
+// — o banco confere isso no commit do orçamento.
+func applyPackages(nights []Night, packages []Package) []int {
+	cobertas := make([]int, len(nights))
+	if len(packages) == 0 {
+		return cobertas
+	}
+	ordem := make([]Package, len(packages))
+	copy(ordem, packages)
+	for i := 1; i < len(ordem); i++ { // insertion sort por Nights decrescente
+		for j := i; j > 0 && ordem[j].Nights > ordem[j-1].Nights; j-- {
+			ordem[j], ordem[j-1] = ordem[j-1], ordem[j]
+		}
+	}
+
+	for i := 0; i < len(nights); {
+		aplicado := false
+		for _, p := range ordem {
+			if p.Nights < 2 || p.Total <= 0 || i+p.Nights > len(nights) {
+				continue
+			}
+			var avulso money.Cents
+			cabe := true
+			for _, n := range nights[i : i+p.Nights] {
+				if !p.covers(n.Type) {
+					cabe = false
+					break
+				}
+				avulso += n.Price
+			}
+			if !cabe || p.Total >= avulso {
+				continue
+			}
+			base := int64(p.Total) / int64(p.Nights)
+			resto := int64(p.Total) - base*int64(p.Nights)
+			for k := 0; k < p.Nights; k++ {
+				preco := base
+				if int64(k) < resto {
+					preco++
+				}
+				nights[i+k].Price = money.Cents(preco)
+				cobertas[i+k] = p.Nights
+			}
+			i += p.Nights
+			aplicado = true
+			break
+		}
+		if !aplicado {
+			i++
+		}
+	}
+	return cobertas
 }

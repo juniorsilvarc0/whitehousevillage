@@ -29,6 +29,7 @@ type repositorio interface {
 	Calendario(ctx context.Context, propriedade uuid.UUID, j Janela) (calendar.Commercial, error)
 	Tarifas(ctx context.Context, tabela uuid.UUID, produto *uuid.UUID) (map[uuid.UUID]map[calendar.DateType]money.Cents, error)
 	EstadiaMinima(ctx context.Context, tabela uuid.UUID) (map[calendar.DateType]int, error)
+	Regras(ctx context.Context, tabela uuid.UUID, produto *uuid.UUID) (map[uuid.UUID]RegrasDoProduto, error)
 	Produtos(ctx context.Context, propriedade uuid.UUID, produto *uuid.UUID) ([]Produto, error)
 	Composicao(ctx context.Context, propriedade, produto uuid.UUID) (ComposicaoDoProduto, error)
 	Ocupacao(ctx context.Context, propriedade uuid.UUID, j Janela, produto *uuid.UUID) (map[ChaveDia]Contagem, error)
@@ -95,6 +96,15 @@ func ComCasaPublica(ctx context.Context, casa uuid.UUID) context.Context {
 	return context.WithValue(ctx, chaveCasaPublica{}, casa)
 }
 
+// ehPublico diz se a requisição veio da vitrine (sem sessão).
+func ehPublico(ctx context.Context) bool {
+	if _, ok := auth.UserFrom(ctx); ok {
+		return false
+	}
+	casa, ok := ctx.Value(chaveCasaPublica{}).(uuid.UUID)
+	return ok && casa != uuid.Nil
+}
+
 // ─────────────────────────── Catálogo ───────────────────────────────────────
 
 // ProdutoDoCatalogo é um produto vendável com o tarifário vigente: a tarifa e
@@ -103,7 +113,21 @@ func ComCasaPublica(ctx context.Context, casa uuid.UUID) context.Context {
 type ProdutoDoCatalogo struct {
 	Produto
 	Tarifas   map[calendar.DateType]money.Cents
-	MinNoites map[calendar.DateType]int
+	MinNoites map[calendar.DateType]int // já com a regra própria do produto aplicada
+	Pacotes   []booking.Package
+}
+
+// minimosDoProduto sobrepõe a regra própria do produto à geral, tipo a tipo.
+// É a mesma precedência que o motor aplica (booking.Product.MinNights).
+func minimosDoProduto(geral, proprio map[calendar.DateType]int) map[calendar.DateType]int {
+	out := make(map[calendar.DateType]int, len(geral)+len(proprio))
+	for t, n := range geral {
+		out[t] = n
+	}
+	for t, n := range proprio {
+		out[t] = n
+	}
+	return out
 }
 
 // Catalogo devolve os produtos ativos da casa com a tabela e a política
@@ -129,9 +153,17 @@ func (s *Servico) Catalogo(ctx context.Context) ([]ProdutoDoCatalogo, booking.Po
 	if err != nil {
 		return nil, booking.Policy{}, err
 	}
+	regras, err := s.repo.Regras(ctx, comercial.RateTableID, nil)
+	if err != nil {
+		return nil, booking.Policy{}, err
+	}
 	out := make([]ProdutoDoCatalogo, 0, len(produtos))
 	for _, p := range produtos {
-		out = append(out, ProdutoDoCatalogo{Produto: p, Tarifas: tarifas[p.ID], MinNoites: minimos})
+		out = append(out, ProdutoDoCatalogo{
+			Produto: p, Tarifas: tarifas[p.ID],
+			MinNoites: minimosDoProduto(minimos, regras[p.ID].MinNoites),
+			Pacotes:   regras[p.ID].Pacotes,
+		})
 	}
 	politica := comercial.Politica
 	politica.MinNights = minimos
@@ -167,6 +199,10 @@ func (s *Servico) PorProduto(ctx context.Context, j Janela, produto *uuid.UUID) 
 		return nil, err
 	}
 	minimos, err := s.repo.EstadiaMinima(ctx, comercial.RateTableID)
+	if err != nil {
+		return nil, err
+	}
+	regras, err := s.repo.Regras(ctx, comercial.RateTableID, produto)
 	if err != nil {
 		return nil, err
 	}
@@ -212,7 +248,7 @@ func (s *Servico) PorProduto(ctx context.Context, j Janela, produto *uuid.UUID) 
 			dia := DiaDoProduto{
 				Data:       iso,
 				TipoDeData: tipos[i].Type,
-				MinNoites:  minimos[tipos[i].Type],
+				MinNoites:  minimosDoProduto(minimos, regras[p.ID].MinNoites)[tipos[i].Type],
 			}
 			// A tarifa é lida ANTES de decidir a disponibilidade porque ela
 			// faz parte da decisão: dia sem tarifa é dia que o orçamento
@@ -445,6 +481,10 @@ func (s *Servico) Orcar(ctx context.Context, e Entrada) (Orcamento, error) {
 	if err != nil {
 		return Orcamento{}, err
 	}
+	regras, err := s.repo.Regras(ctx, comercial.RateTableID, &e.UnitTypeID)
+	if err != nil {
+		return Orcamento{}, err
+	}
 
 	// A janela do calendário é a própria estadia. Quando check_out não é
 	// posterior a check_in, quem recusa é o motor (VALIDATION_ERROR); montar a
@@ -460,13 +500,23 @@ func (s *Servico) Orcar(ctx context.Context, e Entrada) (Orcamento, error) {
 	politica := comercial.Politica
 	politica.MinNights = minimos
 
+	// O nome entra nas mensagens do motor ("Sem tarifa para réveillon em …").
+	// Na vitrine vai o nome de vitrine: o nome interno ("(casa principal)") é
+	// vocabulário da equipe e não sai em resposta pública.
+	nome := p.Nome
+	if ehPublico(ctx) {
+		nome = p.NomePublico
+	}
+
 	quote, err := booking.Build(booking.Request{
 		Product: booking.Product{
 			ID:          p.ID.String(),
-			Name:        p.Nome,
+			Name:        nome,
 			Capacity:    p.Capacidade,
 			Rates:       tarifas[p.ID],
 			CleaningFee: p.LimpezaCent,
+			MinNights:   regras[p.ID].MinNoites,
+			Packages:    regras[p.ID].Pacotes,
 		},
 		CheckIn:     e.CheckIn,
 		CheckOut:    e.CheckOut,

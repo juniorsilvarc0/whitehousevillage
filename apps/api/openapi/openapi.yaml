@@ -6655,11 +6655,21 @@ components:
       properties:
         unit_type_id: { type: string, format: uuid }
         code: { type: string, example: cobertura }
-        name: { type: string, example: White House Cobertura }
+        name: { type: string, example: Duplex Aurora, description: "Nome de vitrine (public_name), não o nome interno do painel" }
         capacity: { type: integer, example: 10 }
         cleaning_cents: { type: integer, format: int64 }
         from_price_cents: { type: integer, format: int64, nullable: true, description: "Menor diária da tabela vigente" }
-        exclusive: { type: boolean, description: "Ocupa a casa inteira (White House Completa)" }
+        exclusive: { type: boolean, description: "Ocupa várias unidades de uma vez (as 4 Pool Suítes, a White House Completa)" }
+        on_request: { type: boolean, description: "Sem tarifa publicada: o site mostra sob consulta" }
+        packages:
+          type: array
+          description: Preço fechado de N diárias consecutivas nos tipos de data listados
+          items:
+            type: object
+            properties:
+              nights: { type: integer, example: 2 }
+              date_types: { type: array, items: { $ref: "#/components/schemas/TipoDeData" } }
+              total_cents: { type: integer, format: int64, example: 650000 }
         rates:
           type: array
           items:
@@ -6683,6 +6693,7 @@ components:
         date_type: { $ref: "#/components/schemas/TipoDeData" }
         price_cents: { type: integer, format: int64, nullable: true, description: "Só em dia livre" }
         min_nights: { type: integer }
+        on_request: { type: boolean, description: "Indisponível por não ter tarifa publicada (sob consulta), não por ocupação" }
     OrcamentoPublico:
       type: object
       properties:

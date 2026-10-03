@@ -322,8 +322,8 @@ test-integration: ## Postgres efêmero + migrations + seed + suíte + concorrên
 it-schema: ## (interno) Aplica as migrations no DATABASE_URL corrente
 	cd apps/api && go run ./cmd/migrate up
 
-it-seed: ## (interno) Semeia o banco de integração — sem isso a suíte não roda
-	cd apps/api && go run ./cmd/seed
+it-seed: ## (interno) Semeia o banco de integração com o catálogo de TESTE — sem isso a suíte não roda
+	cd apps/api && SEED_CATALOGO=teste go run ./cmd/seed
 
 it-suite: ## (interno) Suíte com a tag integration, uma passada
 	# -p 1 serializa os PACOTES: eles compartilham um Postgres só, e em paralelo

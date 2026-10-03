@@ -97,24 +97,31 @@
     };
 
     WH.api.produtos().then(produtos => {
-      grid.innerHTML = produtos.map(p => {
-        const t = WH.textoDe(p.code);
-        const specs = ['até ' + p.capacity + ' hóspedes'].concat(t.specs);
+      /* Um card por categoria (Duplex, Pool Suítes, as villas, a Completa):
+         treze cards iguais na home cansariam. A escolha da unidade exata —
+         Duplex Aurora, Pool Suíte Coral — acontece na central de reservas. */
+      grid.innerHTML = WH.agrupar(produtos).map(g => {
+        const t = WH.CATEGORIAS[g.chave] || { tag: 'Hospedagem', scene: 'scene--house', specs: [], desc: '' };
+        const precos = g.produtos.map(p => p.from_price_cents).filter(v => v != null);
+        const menor = precos.length ? Math.min.apply(null, precos) : null;
+        const titulo = g.produtos.length === 1 ? g.produtos[0].name : g.titulo;
+        const quantos = g.produtos.length > 1 ? `${g.produtos.length} opções` : '';
         return `
       <article class="unit-card" data-reveal>
         <div class="unit-card__media scene ${t.scene}">
           <span class="unit-card__tag">${WH.esc(t.tag)}</span>
-          <span class="scene__label">${WH.esc(p.name)}</span>
+          <span class="scene__label">${WH.esc(titulo)}</span>
         </div>
         <div class="unit-card__body">
-          <h3 class="unit-card__title">${WH.esc(p.name)}</h3>
-          <ul class="unit-card__specs">${specs.map(s => `<li>${WH.esc(s)}</li>`).join('')}</ul>
+          <h3 class="unit-card__title">${WH.esc(titulo)}</h3>
+          <ul class="unit-card__specs">${t.specs.concat(quantos ? [quantos] : []).map(s => `<li>${WH.esc(s)}</li>`).join('')}</ul>
           ${t.desc ? `<p class="unit-card__desc">${WH.esc(t.desc)}</p>` : ''}
-          ${p.from_price_cents != null ? `<div class="unit-card__price">
-            <span class="v">${WH.brl(p.from_price_cents)}</span>
-            <span class="l">/ diária · a partir de</span>
-          </div>` : ''}
-          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html?produto=${encodeURIComponent(p.code)}">Ver disponibilidade</a>
+          <div class="unit-card__price">
+            ${menor != null
+              ? `<span class="v">${WH.brl(menor)}</span><span class="l">/ diária · a partir de</span>`
+              : `<span class="v">Sob consulta</span><span class="l">fale com a gente</span>`}
+          </div>
+          <a class="btn btn--secondary unit-card__cta" href="/disponibilidade.html?produto=${encodeURIComponent(g.produtos[0].code)}">Ver disponibilidade</a>
         </div>
       </article>`;
       }).join('');

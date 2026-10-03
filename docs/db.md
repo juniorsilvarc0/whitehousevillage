@@ -15,7 +15,10 @@ Conferido em **31/08/2026** contra o Postgres do compose (`schema_migrations =
 aplicada lá —, contra um Postgres descartável com todas as migrations do repositório
 aplicadas. Em **02/10/2026**, §2, §5, §10, §14, §15 e §16 foram conferidos de novo
 contra um Postgres descartável com todas as migrations até `20261002180000`
-(`brokers` e as FKs de `broker_id`) e o seed aplicado. Para repetir a conferência de
+(`brokers` e as FKs de `broker_id`) e o seed aplicado. Em **03/10/2026**, §3, §4, §14,
+§15 e §16 foram conferidos contra um Postgres descartável em `20261003100000`
+(`public_name`, `unit_type_min_nights`, `rate_packages`) com os dois catálogos do seed
+aplicados e alternados. Para repetir a conferência de
 qualquer afirmação daqui:
 
 ```bash
@@ -167,8 +170,9 @@ O recurso RBAC `brokers` (`supports_own = true`) tem dono na linha desde que a t
 ```
 properties(id, name, slug, timezone, address, city, state, active)
 unit_types(id, property_id, code, name, capacity, consumes, cleaning_fee_cents,
-           description?, sort_order, active)      -- UNIQUE(property_id, code)
-        -- consumes: 'one_member' (produto simples) | 'all_members' (a Completa)
+           description?, sort_order, active, public_name?)      -- UNIQUE(property_id, code)
+        -- consumes: 'one_member' (produto simples) | 'all_members' (a Completa, as Pool Suítes)
+        -- public_name: nome de vitrine (site); NULL = usa name; CHECK unit_types_public_name_nao_vazio
 units(id, property_id, code, name, floor, notes, sort_order, active)
         -- UNIQUE(property_id, code)
 unit_type_members(unit_type_id, unit_id)   -- PK composta — o vínculo é AQUI, e só aqui
@@ -179,7 +183,9 @@ com a ficha da unidade. A unicidade é `(property_id, code)` nas duas tabelas, e
 `code` sozinho como esta página dizia: `property_id` existe em toda tabela justamente
 para caber uma segunda propriedade, e o `AP-01` dela colidiria com o `AP-01` desta.
 
-Oito unidades (`AP-01..03`, `SP-01..04`, `COB-01`) e quatro produtos. A Completa é `consumes='all_members'` e aponta para as oito.
+O inventário semeado depende do catálogo (§16). O **real** tem doze unidades (`AP-01..06`, `SP-01..04`, `GV-01`, `CV-01`) e catorze produtos: um por duplex, um por suíte, as *Pool Suítes* (`all_members` sobre `SP-01..04`), a Grand Villa, a Classic Villa e a Completa (`all_members` sobre as doze). O de **teste**, que a suíte de integração usa, é o de demonstração: oito unidades (`AP-01..03`, `SP-01..04`, `COB-01`) e quatro produtos, a Completa apontando para as oito.
+
+**`unit_types.public_name`** (desde `20261003100000`) é o nome que o site mostra, separado do `name` interno que o painel usa — "Duplex Aurora" na vitrine, "AP 01 — Duplex Aurora" na operação. `NULL` quer dizer "use `name`"; string em branco é recusada pelo `CHECK (btrim(public_name) <> '')`, porque ela não cairia no fallback e o produto apareceria sem nome.
 
 **`units` não tem `unit_type_id`** — esta página listava a coluna e a migration `20260820130000` nunca a criou, porque ela seria *errada*. A relação produto × unidade é **muitos-para-muitos de propósito**: `AP-01` é vendável como *Apartamento 2 Suítes* **e** como parte da *White House Completa*, e uma FK escalar em `units` só saberia escrever um dos dois. `unit_type_members` é a única verdade sobre essa composição, e é dela que a Completa tira as 8 linhas de `stay_blocks` que dão a exclusividade bidirecional. A partir de `20260827100000` esta tabela também é **lado de constraint**: acrescentar ou remover um membro de um produto `all_members` com venda viva é recusado no commit (§5), porque crescer a composição depois da venda abre exatamente o mesmo buraco que vender N−1.
 
@@ -202,6 +208,13 @@ date_type_rules(kind PK, precedence int, weekday_mask int)
 rate_tables(id, property_id, name, valid_from, valid_to, active)
 rates(id, rate_table_id, unit_type_id, date_type, amount_cents)   -- UNIQUE(rate_table_id, unit_type_id, date_type)
 min_nights_rules(id, rate_table_id, date_type, nights)
+unit_type_min_nights(rate_table_id, unit_type_id, date_type, nights)
+        -- PK (rate_table_id, unit_type_id, date_type); FKs rate_tables/unit_types ON DELETE CASCADE,
+        --   date_type → date_type_rules(kind); CHECK (nights > 0); índice em unit_type_id
+rate_packages(id, rate_table_id, unit_type_id, nights, date_types text[], total_cents)
+        -- UNIQUE rate_packages_unicos (rate_table_id, unit_type_id, nights, date_types);
+        --   CHECK (nights >= 2), CHECK (total_cents > 0), CHECK rate_packages_date_types_validos
+        --   (cardinality > 0 e date_types <@ o vocabulário de date_type_rules); índice em unit_type_id
 commercial_policies(id, property_id, version, deposit_pct, balance_due_days, hold_hours,
                     discount_auto_pct, discount_approval_pct, event_deposit_cents, valid_from,
                     hold_extension_hours, hold_max_extensions, quote_validity_days)
@@ -216,9 +229,15 @@ cancellation_tiers(id, policy_id, days_before_min, days_before_max, refund_pct, 
 
 Precedência é **dado**, não `if/else` — mudar a ordem de resolução é `UPDATE date_type_rules`.
 
+**Tipo de data sem linha em `rates` é "sob consulta".** O catálogo real não tem diária de feriado, réveillon e carnaval para a Grand Villa, e nenhuma para a Completa: a ausência da linha é o dado, e o motor responde que o produto não tem preço de tabela naquela noite. `amount_cents` tem `CHECK (> 0)` justamente para zero não virar um jeito alternativo (e errado) de escrever isso.
+
+**Estadia mínima por produto — `unit_type_min_nights`** (desde `20261003100000`). A regra geral (`min_nights_rules`) é por tipo de data; quando existe linha para `(tarifário, produto, tipo)` nesta tabela, ela **sobrepõe** a geral para aquele produto — as suítes pedem 2 noites num dia normal enquanto a regra geral pede 1. Sem linha, vale a geral. A regra de agregação continua a mesma (vale o maior mínimo entre as noites da estadia) e mora no domínio (`booking`); a tabela é só o dado. A PK é a chave natural, por isso não há `id`.
+
+**Pacotes por duração — `rate_packages`** (desde `20261003100000`). Um pacote diz: *N noites CONSECUTIVAS cujos tipos de data estão todos em `date_types` podem ser cobradas por `total_cents`* em vez da soma das diárias (a Grand Villa: 2 noites normal/fds por R$ 6.500, 4 por R$ 12.000, 2 de alta por R$ 10.500, 4 por R$ 20.000). Decidir onde o pacote se aplica dentro de uma estadia — e se aplicá-lo é melhor para o hóspede — é do domínio (`booking`); a tabela não sabe aplicar nada. `date_types` é array porque o pacote cobre um **conjunto** de tipos; o Postgres não tem FK de elemento de array, e o vocabulário é garantido pelo `CHECK date_types <@ ARRAY['normal','fds','feriado','alta','reveillon','carnaval']` (elemento `NULL` também reprova, porque `<@` com `NULL` é falso). A `UNIQUE` compara o array **como está escrito**: `{normal,fds}` e `{fds,normal}` são linhas diferentes, e quem grava (o seed, a futura tela) precisa usar a ordem de `ordemDosTipos`. Nenhuma das duas tabelas tem `property_id`: penduram em `rate_tables`, como `rates` e `min_nights_rules`, e repetir a coluna seria uma segunda fonte da mesma verdade.
+
 `special_periods` **não** leva constraint de exclusão: a sobreposição é intencional (Réveillon dentro da alta temporada) e a precedência resolve.
 
-Três tabelas ganharam **chave natural** para o seed poder reencontrar a própria linha na segunda execução: `special_periods(property_id, name)`, `rate_tables(property_id, name)` e `cancellation_tiers(policy_id, sort_order)`. Por isso o nome do período carrega o ano (`Réveillon 2026/2027`): o Réveillon do ano seguinte é linha nova, não edição desta.
+Três tabelas ganharam **chave natural** para o seed poder reencontrar a própria linha na segunda execução: `special_periods(property_id, name)`, `rate_tables(property_id, name)` e `cancellation_tiers(policy_id, sort_order)`. Por isso o nome do período do catálogo de teste carrega o ano (`Réveillon 2026/2027`): o Réveillon do ano seguinte é linha nova, não edição desta. O catálogo real usa os nomes que o dono deu, **sem ano** (`Natal`, `Réveillon`, `Férias de Janeiro`…): o calendário de 2027/2028 vai precisar de nomes distintos, ou de uma chave natural que inclua o intervalo.
 
 ---
 
@@ -771,8 +790,9 @@ SELECT c.conrelid::regclass, c.conname
 Nem toda uma delas é dívida. Quatro grupos, e só o terceiro custa alguma coisa:
 
 - **Coberta como coluna não-inicial de um índice composto** — `rates(unit_type_id)` e
-  os três `date_type` (`rates`, `reservation_nights`, `quote_nights`,
-  `min_nights_rules`) vivem dentro de `UNIQUE` que começa por outra coluna. O join
+  os `date_type` (`rates`, `reservation_nights`, `quote_nights`,
+  `min_nights_rules`, `unit_type_min_nights`) vivem dentro de `UNIQUE`/PK que começa
+  por outra coluna. O join
   pelo tarifário usa o índice; a varredura por tipo de data, não. Ninguém varre por
   tipo de data.
 - **Tabela de log, escrita muito e lida por outro eixo** — `audit_log(property_id)`,
@@ -810,7 +830,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261002180000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261003100000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -828,14 +848,31 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20260827150000_documento_unico_e_coluna_morta_do_funil` | `contacts_doc_unico_idx` — o `409 CONTACT_DUPLICATE` que a API prometia passa a ter lastro no banco, e não só na trava de aplicação que não alcança seed nem `psql` (§6). E `crm_opportunities.quote_id`, coluna que ninguém escrevia nem lia desde que o orçamento virou tabela própria, é derrubada (§7) |
 | `20260831100000_validade_do_orcamento_versionada` | `commercial_policies.quote_validity_days` (`NOT NULL DEFAULT 7`, `CHECK (> 0)`) — a validade do orçamento vira dado versionado no schema (dívida **D7**, metade de schema; a leitura pela aplicação é F2-05, §4a) |
 | `20261002180000_brokers_e_fk_do_corretor` | `brokers` (9 colunas, §10) e as FKs `reservations_broker_id_fkey` e `users_broker_id_fkey` — esta **composta**, `(broker_id, id) → brokers(id, user_id)` (§2). Anula, com linha em `audit_log` e `RAISE WARNING`, todo `broker_id` órfão que encontrar; o `down` não os devolve (§5). `commission_rule_id` fica para o F2-10, junto com `commission_rules` |
+| `20261003100000_catalogo_real_vitrine_minimo_e_pacotes` | o que o catálogo real precisa (§3, §4): `unit_types.public_name` (nome de vitrine, `NULL` = `name`, nunca em branco), `unit_type_min_nights` (estadia mínima por produto, sobrepõe `min_nights_rules`) e `rate_packages` (preço por duração, com o vocabulário de `date_types` em `CHECK`). O `down` derruba as duas tabelas e a coluna |
 
 ## 16. Seeds
 
-`cmd/seed` popula, numa **transação única**: propriedade, 8 unidades, 4 produtos e a composição (a Completa apontando para as oito), tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (24 tarifas + estadia mínima), política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 23 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento e, desde `20261002180000`, o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`).
+`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 23 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento e, desde `20261002180000`, o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`).
 
 **O corretor de desenvolvimento** (etapa `corretores_de_desenvolvimento`, `cmd/seed/corretores.go`). Sem ele, `corretor@wh.local` entra no painel com `broker_id` nulo, e a partir do F2-13 isso tem efeito: em escopo `own` o corretor só atribui venda ao próprio `users.broker_id`, e a API não tem como criar o vínculo (o CRUD de `/brokers` é do F2-17/Fase 3). São três escritas por conta de perfil `corretor` em `usuariosSeed`, na ordem que as FKs exigem: a ficha em `contacts` (chave natural: telefone; `+5585900000010`, base `contrato`, sem opt-in), o cadastro em `brokers` (chave natural: `UNIQUE (user_id)`) e o vínculo em `users.broker_id`. O `DO UPDATE` do cadastro corrige só `contact_id`; `goal_cents` e `active` são decisão da gestão e o seed não os reescreve — a mesma regra das contas, que não têm a senha reescrita. A etapa segue a trava das **contas** de desenvolvimento (`SEED_DEV_USERS`), não a dos contatos de demonstração: o cadastro é da conta. E termina com uma pós-condição conferida no banco — conta de corretor sem cadastro que aponte de volta para ela é erro, e o seed inteiro volta atrás —, porque os `JOIN`s da etapa descartariam em silêncio um e-mail digitado errado e a contagem diria "inalterada".
 
-Contagem medida em 02/10/2026 num banco recém-migrado: primeira execução `previstas 301, criadas 300, atualizadas 1` (o vínculo é `UPDATE` numa conta que a etapa anterior criou); segunda execução `criadas 0, atualizadas 0, inalteradas 301`.
+**Dois catálogos, escolhidos por `SEED_CATALOGO`** (`cmd/seed/catalogo*.go`, desde 03/10/2026):
+
+| | `real` (padrão) | `teste` |
+|---|---|---|
+| Quem usa | `make seed`, compose, VPS | `make it-seed` (suíte de integração, local e CI) |
+| Unidades | 12: `AP-01..06`, `SP-01..04`, `GV-01`, `CV-01` | 8: `AP-01..03`, `SP-01..04`, `COB-01` |
+| Produtos | 14 (6 duplex, 4 suítes, `pool-suites`, `grand-villa`, `classic-villa`, `completa`), com `public_name` | 4 (`apto-2s`, `suite-piscina`, `cobertura`, `completa`), `public_name` nulo |
+| Tarifas | 75 — a Completa e três tipos da Grand Villa são **sob consulta** (sem linha) | 24 |
+| Estadia mínima | geral (feriado 2) + 39 linhas por produto | geral (feriado 3), nenhuma por produto |
+| Pacotes | 4 (Grand Villa) | nenhum |
+| Feriados / períodos | 10 noites de feriado / 7 períodos | 7 / 4 |
+
+O de teste é **congelado**: é byte a byte o que o seed semeava até 03/10/2026, porque ~33 arquivos de teste de integração dependem dos seus códigos — `TestCatalogoDeTesteCongelado` reprova se as contagens mudarem. Valor desconhecido em `SEED_CATALOGO` é erro, não fallback. Propriedade, tipos de data, políticas, perfis, funil e contas são os mesmos nos dois.
+
+**Um banco nunca fica com os dois catálogos vendendo.** Semear um catálogo **desativa** (`active = false`; nunca apaga — unidade tem histórico em `stay_blocks`) as unidades, os produtos, os feriados e os períodos **do outro catálogo** que não existem no escolhido; o que a gestão cadastrou pela tela não é de catálogo nenhum e não é tocado. E reativa os próprios, que o outro tinha desativado. Para os produtos do catálogo escolhido, a composição, as tarifas, os mínimos por produto e os pacotes ficam **exatamente** iguais à lista: o que falta entra e o que sobra é **removido** — sem isso a Completa real herdaria a `COB-01` e as diárias da Completa de teste. Antes de mexer, o seed confere venda viva (`hold`, `confirmed`, `checked_in`): se a troca mudasse a composição ou o `consumes` de um produto com reserva de pé, ele aborta com a mensagem nomeando produto, unidades e reservas (`o catálogo não pode ser trocado com venda viva: a composição mudaria — completa perderia AP-04, … (reservas: WH-2026-0001)`), e a transação inteira volta. Os gatilhos adiados do §5 reprovariam o mesmo no `COMMIT`, mas falando de invariante, não de seed.
+
+Contagens medidas em 03/10/2026 num banco recém-migrado. Catálogo `teste`: primeira execução `previstas 301, criadas 300, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou) — a mesma de antes dos dois catálogos; segunda `criadas 0, atualizadas 0, inalteradas 301`. Catálogo `real`: primeira `previstas 427, criadas 426, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 427`. Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
 
 Os **contatos de demonstração** existem por duas razões. A primeira: `reservations.contact_id` e `crm_opportunities.contact_id` são `NOT NULL`, então sem contato não há como abrir orçamento, pré-reserva, oportunidade nem smoke test da jornada num banco recém-semeado. A segunda: com **um** contato só, a tela de contatos e o funil nascem praticamente vazios — não dá para ver ordenação, busca por nome, recorte por base legal, nem a diferença entre quem aceitou receber oferta e quem não aceitou. Tela vazia não prova que a tela funciona.
 
@@ -847,7 +884,7 @@ A chave natural é o telefone (`UNIQUE(phone_e164)`), o que torna a etapa idempo
 
 1. Toda escrita é `INSERT ... ON CONFLICT` sobre a **chave natural** da tabela (`slug`, `code`, `(property_id, code)`, `(rate_table_id, unit_type_id, date_type)`…), nunca sobre id gerado — id novo a cada execução é exatamente o que duplicaria tudo na segunda rodada.
 2. O `DO UPDATE` leva `WHERE (colunas) IS DISTINCT FROM (EXCLUDED.colunas)`: linha já correta não é reescrita e não sobe `updated_at`. A segunda execução loga zero criadas e zero atualizadas — é essa a prova de idempotência.
-3. O seed **corrige divergência, mas não apaga acréscimo**: nunca há `DELETE`. Permissão que a gestão concedeu a mais na tela sobrevive; escopo que divergiu da matriz volta ao valor do seed.
+3. O seed **corrige divergência, mas não apaga acréscimo** — com uma exceção delimitada. Permissão que a gestão concedeu a mais na tela sobrevive; escopo que divergiu da matriz volta ao valor do seed. A exceção são os produtos **do catálogo**: composição, tarifas, mínimos por produto e pacotes deles são mantidos exatamente iguais à lista (acima). Nada fora disso leva `DELETE`, e nenhuma linha de cadastro (unidade, produto, feriado, período) é apagada — só desativada.
 
 Desde `20260827110000` o seed também popula o **funil padrão** (`Funil de Reservas`, `is_default`), as **oito etapas** da spec §7 — Novo lead → Em atendimento → Disponibilidade consultada → Orçamento enviado → Negociação → Pré-reserva → Ganho / Perdido — com `probability`, `color`, `sla_days` e tarefa automática, e os **oito motivos de perda** que a constraint `crm_opportunities_perda_motivada` obriga a preencher. Chaves naturais: `(property_id, name)` no funil, `(pipeline_id, name)` na etapa, `(property_id, label)` no motivo.
 

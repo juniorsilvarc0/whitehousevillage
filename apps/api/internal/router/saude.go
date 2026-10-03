@@ -19,7 +19,7 @@ import (
 // em vez de para o orquestrador.
 //
 // Sobe junto com a migration nova, sempre no mesmo commit.
-const SchemaVersionEsperada uint64 = 20261002180000
+const SchemaVersionEsperada uint64 = 20261003100000
 
 // Saude responde os dois endpoints de sonda.
 type Saude struct {

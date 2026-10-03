@@ -68,6 +68,7 @@
 .legend__dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.08); }
 .legend__dot--free { background: var(--c-free-bg); border-color: var(--c-free); }
 .legend__dot--busy { background: var(--c-busy-bg); border-color: var(--c-busy); }
+.legend__dot--consult { background: var(--c-bg-alt); border-style: dashed; border-color: rgba(0,0,0,0.3); }
 .legend__dot--special { background: linear-gradient(135deg, #fff 55%, var(--c-gold) 55%); border-color: var(--c-gold); }
 
 /* Calendários */
@@ -105,6 +106,9 @@
 /* Um só estado de indisponível: o público vê livre ou ocupado, nunca o motivo. */
 .day--busy { background: var(--c-busy-bg); border-color: rgba(164,65,60,0.25); color: var(--c-busy); cursor: not-allowed; }
 .day--busy .day__p { color: inherit; opacity: 0.75; }
+/* Sob consulta não é ocupado: a data pode estar livre, só não tem preço de
+   tabela. Clicável — leva à conversa no WhatsApp. */
+.day--consult { background: var(--c-bg-alt); border-style: dashed; border-color: rgba(0,0,0,0.18); }
 .day--loading { opacity: 0.45; cursor: progress; }
 .day--past { opacity: 0.35; cursor: not-allowed; }
 .day--special::after {
@@ -184,6 +188,7 @@
 .rates tbody tr + tr { border-top: 1px solid var(--c-divider); }
 .rates tbody td:first-child { font-family: var(--font-display); font-size: 1.05rem; color: var(--c-deep); }
 .rates tbody tr:hover { background: var(--c-bg-alt); }
+.rates__pacotes { display: block; margin-top: 4px; font-family: var(--font-body, inherit); font-size: 0.78rem; color: var(--c-text-soft); white-space: normal; }
 .rates .hi { color: var(--c-gold-dark); font-weight: 500; }
 
 /* Toast */
