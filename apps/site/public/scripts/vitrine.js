@@ -18,32 +18,58 @@ window.WH = (function () {
   'use strict';
 
   /* ─── Conteúdo editorial, pelo código do produto no banco ───
-     Produto que existir no banco e não estiver aqui aparece com o card
-     genérico; nada some por falta de texto. */
-  const conteudo = {
-    'apto-2s': {
-      tag: 'Hospedagem', scene: 'scene--house',
-      specs: ['2 suítes', 'cozinha equipada', 'varanda'],
-      desc: 'Apartamento completo com duas suítes, sala integrada e varanda — ideal para famílias e grupos pequenos.'
+     O NOME que o visitante vê vem da API (nome de vitrine, `public_name`); aqui
+     mora só o que o banco não tem: a categoria em que o produto aparece, o
+     selo, a ambientação e os diferenciais. Produto do banco sem entrada aqui
+     aparece com o card genérico — nada some por falta de texto. */
+  const CATEGORIAS = {
+    duplex: {
+      titulo: 'Apartamentos Duplex', tag: 'Hospedagem', scene: 'scene--house',
+      specs: ['2 suítes', 'até 7 pessoas', 'acesso à piscina'],
+      desc: 'Seis apartamentos duplex com duas suítes e acesso à piscina — Aurora, Brisa, Duna, Maré, Âmbar e Horizonte. Você escolhe o seu.'
     },
-    'suite-piscina': {
-      tag: 'Hospedagem', scene: 'scene--pool',
-      specs: ['acesso direto à piscina', 'frigobar', 'ar-condicionado'],
-      desc: 'Suítes com saída direta para a área da piscina. O pé na água a três passos da cama.'
+    suites: {
+      titulo: 'Pool Suítes', tag: 'Pé na piscina', scene: 'scene--pool',
+      specs: ['cama de casal', 'frigobar', 'acesso direto à piscina'],
+      desc: 'Quatro suítes com saída para a piscina — Coral, Pérola, Concha e Oceano. Reserve uma, ou as quatro juntas para até 8 pessoas.'
     },
-    'cobertura': {
-      tag: 'Premium', scene: 'scene--rooftop',
-      specs: ['rooftop', 'piscina privativa', 'espaço gourmet'],
-      desc: 'Suítes, piscina, rooftop, cozinha, churrasqueira, espaço gourmet, sala e área externa — o produto mais desejado da casa.'
+    'grand-villa': {
+      titulo: 'White House Grand Villa', tag: 'Casa principal', scene: 'scene--rooftop',
+      specs: ['4 suítes', 'elevador', 'rooftop com piscina privativa', 'vista para o mar'],
+      desc: 'A casa principal triplex: amplos ambientes, elevador e rooftop com piscina privativa e vista para o mar. Pacotes de 2 e 4 diárias com valor especial.'
     },
-    'completa': {
-      tag: 'Exclusividade total', scene: 'scene--night',
-      specs: ['complexo inteiro', 'eventos', 'exclusividade'],
-      desc: 'O complexo inteiro sob exclusividade: todas as unidades, todas as áreas de lazer. Base para casamentos, retiros e eventos empresariais.'
+    'classic-villa': {
+      titulo: 'White House Classic Villa', tag: 'Casa rústica', scene: 'scene--house',
+      specs: ['casa inteira', 'charme rústico', 'mínimo de 2 diárias'],
+      desc: 'A casa rústica da White House, para quem quer a casa inteira com aconchego e privacidade.'
+    },
+    completa: {
+      titulo: 'White House Completa', tag: 'Exclusividade total', scene: 'scene--night',
+      specs: ['todas as unidades', 'eventos', 'exclusividade'],
+      desc: 'O complexo inteiro sob exclusividade: duplex, suítes e villas. Base para casamentos, retiros e eventos — valores sob consulta.'
     }
   };
-  const conteudoGenerico = { tag: 'Hospedagem', scene: 'scene--house', specs: [], desc: '' };
-  const textoDe = codigo => conteudo[codigo] || conteudoGenerico;
+  const ORDEM_CATEGORIAS = ['duplex', 'suites', 'grand-villa', 'classic-villa', 'completa'];
+
+  function categoriaDe(codigo) {
+    if (/^duplex-/.test(codigo)) return 'duplex';
+    if (/^suite-/.test(codigo) || codigo === 'pool-suites') return 'suites';
+    return CATEGORIAS[codigo] ? codigo : null;
+  }
+  const conteudoGenerico = { titulo: '', tag: 'Hospedagem', scene: 'scene--house', specs: [], desc: '' };
+  const textoDe = codigo => CATEGORIAS[categoriaDe(codigo)] || conteudoGenerico;
+
+  /* Agrupa a lista da API por categoria, na ordem da vitrine. Produto sem
+     categoria conhecida vai para um grupo próprio no fim. */
+  function agrupar(produtos) {
+    const grupos = {};
+    for (const p of produtos) {
+      const c = categoriaDe(p.code) || 'outros';
+      (grupos[c] = grupos[c] || []).push(p);
+    }
+    return ORDEM_CATEGORIAS.concat(['outros']).filter(c => grupos[c])
+      .map(c => ({ chave: c, titulo: (CATEGORIAS[c] || {}).titulo || 'Outras acomodações', produtos: grupos[c] }));
+  }
 
   /* ─── Cliente da API pública ───
      Mesma origem: o nginx do site encaminha /api/v1/public/ para a API. Erro
@@ -122,5 +148,5 @@ window.WH = (function () {
   /* Escapa texto antes de ir para innerHTML — nomes vêm do banco. */
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  return { api, textoDe, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
+  return { api, textoDe, agrupar, CATEGORIAS, brl, rotulo, TIPOS, MESES, key, parse, toKey, addDays, dataCurta, dataBR, esc };
 })();

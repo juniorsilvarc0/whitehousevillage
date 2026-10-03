@@ -60,34 +60,34 @@ type feriado struct {
 	nome string
 }
 
-// Feriados nacionais de 2026–2027 que caem na janela comercial coberta pelo
-// tarifário V1. Não inclui feriado municipal de Luís Correia — falta a lista
-// oficial, e feriado inventado vira diária cobrada a mais.
-var feriadosSeed = []feriado{
-	{data("2026-09-07"), "Independência do Brasil"},
-	{data("2026-10-12"), "Nossa Senhora Aparecida"},
-	{data("2026-11-02"), "Finados"},
-	{data("2026-11-15"), "Proclamação da República"},
-	{data("2026-12-25"), "Natal"},
-	{data("2027-01-01"), "Confraternização Universal"},
-	{data("2027-04-21"), "Tiradentes"},
-}
-
 func feriados(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
+	fs := st.cat.feriados
 	const q = `
-		INSERT INTO holidays (property_id, date, name)
-		SELECT $1, f.dia, f.nome
+		INSERT INTO holidays (property_id, date, name, active)
+		SELECT $1, f.dia, f.nome, true
 		  FROM unnest($2::date[], $3::text[]) AS f(dia, nome)
 		ON CONFLICT (property_id, date) DO UPDATE
-		   SET name = EXCLUDED.name
-		 WHERE holidays.name IS DISTINCT FROM EXCLUDED.name
+		   SET name = EXCLUDED.name, active = true
+		 WHERE (holidays.name, holidays.active) IS DISTINCT FROM (EXCLUDED.name, true)
 		RETURNING (xmax = 0)`
 
 	c, err := upsert(ctx, tx, q, st.propriedadeID,
-		coluna(feriadosSeed, func(f feriado) time.Time { return f.dia }),
-		coluna(feriadosSeed, func(f feriado) string { return f.nome }),
+		coluna(fs, func(f feriado) time.Time { return f.dia }),
+		coluna(fs, func(f feriado) string { return f.nome }),
 	)
-	c.Previstas = len(feriadosSeed)
+	c.Previstas = len(fs)
+	if err != nil {
+		return c, err
+	}
+
+	// Feriado do outro catálogo que não é do escolhido sai do calendário
+	// comercial — desativado, não apagado.
+	c.Desativadas, err = afetadas(ctx, tx, `
+		UPDATE holidays SET active = false
+		 WHERE property_id = $1 AND date = ANY($2::date[]) AND NOT (date = ANY($3::date[])) AND active`,
+		st.propriedadeID,
+		coluna(st.outro.feriados, func(f feriado) time.Time { return f.dia }),
+		coluna(fs, func(f feriado) time.Time { return f.dia }))
 	return c, err
 }
 
@@ -101,34 +101,35 @@ type periodo struct {
 	fim    time.Time // inclusivo: special_periods usa daterange '[]'
 }
 
-// O nome carrega o ano de propósito: ele é a chave natural do seed
-// (`UNIQUE (property_id, name)`), e o Réveillon do ano que vem precisa ser uma
-// LINHA NOVA, não uma edição desta.
-var periodosSeed = []periodo{
-	{"Réveillon 2026/2027", "reveillon", data("2026-12-27"), data("2027-01-02")},
-	{"Carnaval 2027", "carnaval", data("2027-02-05"), data("2027-02-10")},
-	{"Alta temporada 2026/2027", "alta", data("2026-12-15"), data("2027-01-31")},
-	{"Férias de julho 2027", "alta", data("2027-07-01"), data("2027-07-31")},
-}
-
 func periodosEspeciais(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
+	ps := st.cat.periodos
 	const q = `
-		INSERT INTO special_periods (property_id, name, kind, starts_on, ends_on)
-		SELECT $1, p.nome, p.kind, p.inicio, p.fim
+		INSERT INTO special_periods (property_id, name, kind, starts_on, ends_on, active)
+		SELECT $1, p.nome, p.kind, p.inicio, p.fim, true
 		  FROM unnest($2::text[], $3::text[], $4::date[], $5::date[])
 		       AS p(nome, kind, inicio, fim)
 		ON CONFLICT (property_id, name) DO UPDATE
-		   SET kind = EXCLUDED.kind, starts_on = EXCLUDED.starts_on, ends_on = EXCLUDED.ends_on
-		 WHERE (special_periods.kind, special_periods.starts_on, special_periods.ends_on)
-		       IS DISTINCT FROM (EXCLUDED.kind, EXCLUDED.starts_on, EXCLUDED.ends_on)
+		   SET kind = EXCLUDED.kind, starts_on = EXCLUDED.starts_on, ends_on = EXCLUDED.ends_on,
+		       active = true
+		 WHERE (special_periods.kind, special_periods.starts_on, special_periods.ends_on, special_periods.active)
+		       IS DISTINCT FROM (EXCLUDED.kind, EXCLUDED.starts_on, EXCLUDED.ends_on, true)
 		RETURNING (xmax = 0)`
 
 	c, err := upsert(ctx, tx, q, st.propriedadeID,
-		coluna(periodosSeed, func(p periodo) string { return p.nome }),
-		coluna(periodosSeed, func(p periodo) string { return p.kind }),
-		coluna(periodosSeed, func(p periodo) time.Time { return p.inicio }),
-		coluna(periodosSeed, func(p periodo) time.Time { return p.fim }),
+		coluna(ps, func(p periodo) string { return p.nome }),
+		coluna(ps, func(p periodo) string { return p.kind }),
+		coluna(ps, func(p periodo) time.Time { return p.inicio }),
+		coluna(ps, func(p periodo) time.Time { return p.fim }),
 	)
-	c.Previstas = len(periodosSeed)
+	c.Previstas = len(ps)
+	if err != nil {
+		return c, err
+	}
+
+	nome := func(p periodo) string { return p.nome }
+	c.Desativadas, err = afetadas(ctx, tx, `
+		UPDATE special_periods SET active = false
+		 WHERE property_id = $1 AND name = ANY($2::text[]) AND active`,
+		st.propriedadeID, foraDoCatalogo(coluna(st.outro.periodos, nome), coluna(ps, nome)))
 	return c, err
 }

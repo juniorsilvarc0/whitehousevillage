@@ -10,8 +10,11 @@
 // banco fica como estava. Meio seed aplicado é pior que nenhum, porque a
 // execução seguinte parte de um banco que ninguém sabe descrever.
 //
-// Fonte dos dados: docs/spec.md §2 (inventário), §3 (tarifário e políticas) e
-// §1/§7 (perfis). Nada aqui é inventado; o que precisou de decisão está
+// Dois catálogos, escolhidos por SEED_CATALOGO (`real`, o padrão, ou `teste`,
+// o da suíte de integração) — ver catalogo.go.
+//
+// Fonte dos dados: catalogo_real.go (definido pelo dono), docs/spec.md §2
+// (inventário de teste), §3 (tarifário e políticas) e §1/§7 (perfis). Nada aqui é inventado; o que precisou de decisão está
 // comentado no ponto onde a decisão foi tomada.
 package main
 
@@ -39,6 +42,11 @@ type estado struct {
 	tarifarioID   pgtype.UUID
 	funilID       pgtype.UUID
 	producao      bool
+
+	// cat é o catálogo escolhido por SEED_CATALOGO; outro é o que fica de
+	// fora, e cujos itens ausentes de `cat` são desativados.
+	cat   *catalogo
+	outro *catalogo
 }
 
 type etapa struct {
@@ -61,6 +69,8 @@ func etapas() []etapa {
 		{"tarifario", tarifario},
 		{"tarifas", tarifas},
 		{"estadia_minima", estadiaMinima},
+		{"estadia_minima_por_produto", estadiaMinimaPorProduto},
+		{"pacotes", pacotes},
 		{"politica_comercial", politicaComercial},
 		{"politica_de_cancelamento", politicaDeCancelamento},
 		{"contatos_de_demonstracao", contatosDeDemonstracao},
@@ -117,7 +127,13 @@ func run() error {
 	// caso em que o rollback é indispensável.
 	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 
-	st := &estado{producao: cfg.IsProduction()}
+	cat, outro, err := escolherCatalogo()
+	if err != nil {
+		return err
+	}
+	slog.Info("catálogo escolhido", "catalogo", cat.nome, "desativa_o_de", outro.nome)
+
+	st := &estado{producao: cfg.IsProduction(), cat: cat, outro: outro}
 	var total contagem
 
 	for _, e := range etapas() {
@@ -135,6 +151,8 @@ func run() error {
 			"criadas", c.Criadas,
 			"atualizadas", c.Atualizadas,
 			"inalteradas", c.inalteradas(),
+			"desativadas", c.Desativadas,
+			"removidas", c.Removidas,
 			"ms", time.Since(inicio).Milliseconds(),
 		)
 	}
@@ -144,12 +162,15 @@ func run() error {
 	}
 
 	slog.Info("seed concluído",
+		"catalogo", cat.nome,
 		"previstas", total.Previstas,
 		"criadas", total.Criadas,
 		"atualizadas", total.Atualizadas,
 		"inalteradas", total.inalteradas(),
+		"desativadas", total.Desativadas,
+		"removidas", total.Removidas,
 	)
-	if total.Criadas == 0 && total.Atualizadas == 0 {
+	if !total.mudou() {
 		slog.Info("nada mudou — o banco já estava no estado do seed")
 	}
 	return nil

@@ -64,9 +64,13 @@ type Contexto struct {
 // Produto é o `unit_types` cru — vira booking.Product depois de receber as
 // tarifas.
 type Produto struct {
-	ID          uuid.UUID
-	Codigo      string
-	Nome        string
+	ID     uuid.UUID
+	Codigo string
+	Nome   string
+	// NomePublico é o nome de vitrine (`unit_types.public_name`), o que o site
+	// mostra; `Nome` é o interno, o que gestor e corretor leem ("AP 01 — Duplex
+	// Aurora" contra "Duplex Aurora"). Sem nome de vitrine cadastrado, é o Nome.
+	NomePublico string
 	Capacidade  int
 	Consome     string
 	LimpezaCent money.Cents
@@ -392,6 +396,82 @@ func (r *Repository) EstadiaMinima(ctx context.Context, tabela uuid.UUID) (map[c
 	return out, db.MapError(linhas.Err())
 }
 
+// RegrasDoProduto são as regras comerciais PRÓPRIAS de um produto na tabela:
+// a estadia mínima que substitui a geral (`unit_type_min_nights`) e os preços
+// por duração (`rate_packages`). Produto sem nenhuma das duas não aparece no
+// mapa — e o motor cai na regra geral e na diária avulsa.
+type RegrasDoProduto struct {
+	MinNoites map[calendar.DateType]int
+	Pacotes   []booking.Package
+}
+
+// Regras lê as regras próprias dos produtos da tabela (ou de um só).
+func (r *Repository) Regras(ctx context.Context, tabela uuid.UUID, produto *uuid.UUID) (map[uuid.UUID]RegrasDoProduto, error) {
+	out := map[uuid.UUID]RegrasDoProduto{}
+	pegar := func(id uuid.UUID) RegrasDoProduto {
+		rg, ok := out[id]
+		if !ok {
+			rg = RegrasDoProduto{MinNoites: map[calendar.DateType]int{}}
+		}
+		return rg
+	}
+
+	linhas, err := r.exec(ctx).Query(ctx, `
+		SELECT unit_type_id, date_type, nights
+		  FROM unit_type_min_nights
+		 WHERE rate_table_id = $1 AND ($2::uuid IS NULL OR unit_type_id = $2::uuid)`, tabela, produto)
+	if err != nil {
+		return nil, db.MapError(err)
+	}
+	for linhas.Next() {
+		var (
+			id     uuid.UUID
+			tipo   string
+			noites int
+		)
+		if err := linhas.Scan(&id, &tipo, &noites); err != nil {
+			linhas.Close()
+			return nil, db.MapError(err)
+		}
+		rg := pegar(id)
+		rg.MinNoites[calendar.DateType(tipo)] = noites
+		out[id] = rg
+	}
+	linhas.Close()
+	if err := linhas.Err(); err != nil {
+		return nil, db.MapError(err)
+	}
+
+	linhas, err = r.exec(ctx).Query(ctx, `
+		SELECT unit_type_id, nights, date_types, total_cents
+		  FROM rate_packages
+		 WHERE rate_table_id = $1 AND ($2::uuid IS NULL OR unit_type_id = $2::uuid)
+		 ORDER BY unit_type_id, nights DESC`, tabela, produto)
+	if err != nil {
+		return nil, db.MapError(err)
+	}
+	defer linhas.Close()
+	for linhas.Next() {
+		var (
+			id     uuid.UUID
+			noites int
+			tipos  []string
+			total  int64
+		)
+		if err := linhas.Scan(&id, &noites, &tipos, &total); err != nil {
+			return nil, db.MapError(err)
+		}
+		pk := booking.Package{Nights: noites, Total: money.Cents(total)}
+		for _, t := range tipos {
+			pk.Types = append(pk.Types, calendar.DateType(t))
+		}
+		rg := pegar(id)
+		rg.Pacotes = append(rg.Pacotes, pk)
+		out[id] = rg
+	}
+	return out, db.MapError(linhas.Err())
+}
+
 // Produtos devolve os produtos ATIVOS da propriedade, na ordem da vitrine.
 //
 // Produto inativo fica de fora inclusive quando pedido pelo id: o que está
@@ -399,7 +479,7 @@ func (r *Repository) EstadiaMinima(ctx context.Context, tabela uuid.UUID) (map[c
 // prometer o que não existe mais.
 func (r *Repository) Produtos(ctx context.Context, propriedade uuid.UUID, produto *uuid.UUID) ([]Produto, error) {
 	const q = `
-		SELECT id, code, name, capacity, consumes, cleaning_fee_cents
+		SELECT id, code, name, COALESCE(public_name, name), capacity, consumes, cleaning_fee_cents
 		  FROM unit_types
 		 WHERE property_id = $1 AND active
 		   AND ($2::uuid IS NULL OR id = $2::uuid)
@@ -417,7 +497,7 @@ func (r *Repository) Produtos(ctx context.Context, propriedade uuid.UUID, produt
 			p       Produto
 			limpeza int64
 		)
-		if err := linhas.Scan(&p.ID, &p.Codigo, &p.Nome, &p.Capacidade, &p.Consome, &limpeza); err != nil {
+		if err := linhas.Scan(&p.ID, &p.Codigo, &p.Nome, &p.NomePublico, &p.Capacidade, &p.Consome, &limpeza); err != nil {
 			return nil, db.MapError(err)
 		}
 		p.LimpezaCent = money.Cents(limpeza)

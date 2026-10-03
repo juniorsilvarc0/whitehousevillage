@@ -124,7 +124,19 @@ type ProdutoPublico struct {
 	Limpeza  int64     `json:"cleaning_cents"`
 	APartir  *int64    `json:"from_price_cents"`
 	Tarifas  []Tarifa  `json:"rates"`
+	Pacotes  []Pacote  `json:"packages"`
 	Exclusiv bool      `json:"exclusive"`
+	// SobConsulta: o produto não tem tarifa publicada nenhuma (a Completa). O
+	// site mostra "sob consulta" e leva para o WhatsApp, em vez de um preço.
+	SobConsulta bool `json:"on_request"`
+}
+
+// Pacote é o preço fechado de N diárias consecutivas nos tipos de data
+// listados — o "2 diárias por R$ 6.500" da Grand Villa.
+type Pacote struct {
+	Noites int                 `json:"nights"`
+	Tipos  []calendar.DateType `json:"date_types"`
+	Total  int64               `json:"total_cents"`
 }
 
 // Tarifa é a diária de um tipo de data, com o mínimo de noites dele.
@@ -155,9 +167,10 @@ func (h *Handler) Produtos(w http.ResponseWriter, r *http.Request) {
 	out := make([]ProdutoPublico, 0, len(catalogo))
 	for _, p := range catalogo {
 		item := ProdutoPublico{
-			ID: p.ID, Codigo: p.Codigo, Nome: p.Nome, Lotacao: p.Capacidade,
+			ID: p.ID, Codigo: p.Codigo, Nome: p.NomePublico, Lotacao: p.Capacidade,
 			Limpeza:  int64(p.LimpezaCent),
 			Tarifas:  []Tarifa{},
+			Pacotes:  []Pacote{},
 			Exclusiv: p.Consome == disponibilidade.ConsomeTodas,
 		}
 		for _, tipo := range ordemDosTipos {
@@ -171,6 +184,10 @@ func (h *Handler) Produtos(w http.ResponseWriter, r *http.Request) {
 				item.APartir = &centavos
 			}
 		}
+		for _, pk := range p.Pacotes {
+			item.Pacotes = append(item.Pacotes, Pacote{Noites: pk.Nights, Tipos: pk.Types, Total: int64(pk.Total)})
+		}
+		item.SobConsulta = len(item.Tarifas) == 0
 		out = append(out, item)
 	}
 	httpx.JSON(w, http.StatusOK, out)
@@ -224,6 +241,11 @@ type DiaPublico struct {
 	Tipo      calendar.DateType `json:"date_type"`
 	Preco     *int64            `json:"price_cents"`
 	MinNoites int               `json:"min_nights"`
+	// SobConsulta: o dia não está à venda pelo site porque não tem tarifa
+	// publicada (Réveillon da Grand Villa, qualquer dia da Completa) — não
+	// porque alguém ocupou. O site manda para o WhatsApp em vez de dizer
+	// "indisponível". É regra comercial da casa, não dado de terceiro.
+	SobConsulta bool `json:"on_request"`
 }
 
 // Disponibilidade — GET /public/availability?unit_type_id=&from=&to=
@@ -269,6 +291,7 @@ func (h *Handler) Disponibilidade(w http.ResponseWriter, r *http.Request) {
 			if dia.Livre {
 				dia.Preco = d.Preco
 			}
+			dia.SobConsulta = !dia.Livre && d.Motivo != nil && *d.Motivo == disponibilidade.MotivoSemTarifa
 			out = append(out, dia)
 		}
 	}

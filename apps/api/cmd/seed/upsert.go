@@ -14,18 +14,40 @@ import (
 // criadas+atualizadas é o que já estava correto. Numa segunda execução criadas
 // e atualizadas ficam em zero e tudo cai em `inalteradas` — é essa a prova de
 // idempotência que o seed imprime, sem precisar de ninguém contando tabela.
+//
+// `Desativadas` e `Removidas` ficam FORA de `Previstas`: contam o que o seed
+// tirou de cena — itens do outro catálogo desativados, e linhas de um produto
+// do catálogo escolhido que não estão na lista (membro de composição, tarifa,
+// mínimo, pacote). Numa segunda execução também ficam em zero.
 type contagem struct {
 	Previstas   int
 	Criadas     int
 	Atualizadas int
+	Desativadas int
+	Removidas   int
 }
 
 func (c contagem) inalteradas() int { return c.Previstas - c.Criadas - c.Atualizadas }
+
+func (c contagem) mudou() bool {
+	return c.Criadas+c.Atualizadas+c.Desativadas+c.Removidas > 0
+}
 
 func (c *contagem) somar(o contagem) {
 	c.Previstas += o.Previstas
 	c.Criadas += o.Criadas
 	c.Atualizadas += o.Atualizadas
+	c.Desativadas += o.Desativadas
+	c.Removidas += o.Removidas
+}
+
+// afetadas executa um UPDATE ou DELETE e devolve quantas linhas mudaram.
+func afetadas(ctx context.Context, tx pgx.Tx, sql string, args ...any) (int, error) {
+	tag, err := tx.Exec(ctx, sql, args...)
+	if err != nil {
+		return 0, err
+	}
+	return int(tag.RowsAffected()), nil
 }
 
 // upsert executa um INSERT ... ON CONFLICT cuja cláusula RETURNING é

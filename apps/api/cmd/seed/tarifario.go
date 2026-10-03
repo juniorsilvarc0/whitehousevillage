@@ -43,31 +43,17 @@ func tarifario(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
 // tabela de docs/spec.md §3, para conferir linha a linha com o documento.
 var ordemDosTipos = []string{"normal", "fds", "feriado", "alta", "reveillon", "carnaval"}
 
-// tarifa é uma linha da Tabela Comercial V1, em REAIS.
-//
-// A spec escreve os valores em reais (850 = R$ 850,00 a diária) e o banco guarda
-// centavos; a conversão acontece num lugar só, no `reais()`. Gravar 850 direto
-// num campo `_cents` seria vender a diária por R$ 8,50.
-type tarifa struct {
-	produto string
-	valores [6]int64
-}
-
-var tarifasSeed = []tarifa{
-	{"apto-2s", [6]int64{850, 1100, 1400, 1600, 3200, 2600}},
-	{"suite-piscina", [6]int64{550, 700, 900, 1050, 2100, 1700}},
-	{"cobertura", [6]int64{1900, 2400, 3100, 3600, 7500, 6000}},
-	{"completa", [6]int64{5500, 6900, 8900, 10500, 21000, 17000}},
-}
-
 func tarifas(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
 	var (
 		produtos []string
 		tipos    []string
 		valores  []int64
 	)
-	for _, t := range tarifasSeed {
+	for _, t := range st.cat.tarifas {
 		for i, tipo := range ordemDosTipos {
+			if t.valores[i] == sobConsulta {
+				continue
+			}
 			produtos = append(produtos, t.produto)
 			tipos = append(tipos, tipo)
 			valores = append(valores, reais(t.valores[i]))
@@ -86,26 +72,28 @@ func tarifas(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
 
 	c, err := upsert(ctx, tx, q, st.tarifarioID, st.propriedadeID, produtos, tipos, valores)
 	c.Previstas = len(produtos)
+	if err != nil {
+		return c, err
+	}
+
+	// "Sob consulta" é AUSÊNCIA de linha. Sem este DELETE, a Completa do
+	// catálogo real herdaria as diárias da Completa de teste e a vitrine
+	// mostraria preço onde o dono quer conversa. Só toca produtos do catálogo
+	// escolhido; nada referencia `rates` por FK — a reserva congela o valor
+	// em `reservation_nights`.
+	c.Removidas, err = afetadas(ctx, tx, `
+		DELETE FROM rates r
+		 USING unit_types ut
+		 WHERE r.rate_table_id = $1
+		   AND ut.id = r.unit_type_id AND ut.property_id = $2 AND ut.code = ANY($3::text[])
+		   AND NOT EXISTS (SELECT 1 FROM unnest($4::text[], $5::text[]) AS k(produto, tipo)
+		                    WHERE k.produto = ut.code AND k.tipo = r.date_type)`,
+		st.tarifarioID, st.propriedadeID, st.cat.codigosDeProduto(), produtos, tipos)
 	return c, err
 }
 
-// minimo é a estadia mínima de um tipo de data — spec §3. Vale o MAIOR mínimo
-// entre as noites da estadia; quem aplica a regra é o domínio, aqui é só o dado.
-type minimo struct {
-	tipo   string
-	noites int32
-}
-
-var estadiaMinimaSeed = []minimo{
-	{"normal", 1},
-	{"fds", 2},
-	{"feriado", 3},
-	{"alta", 3},
-	{"reveillon", 4},
-	{"carnaval", 4},
-}
-
 func estadiaMinima(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
+	ms := st.cat.minimoGeral
 	const q = `
 		INSERT INTO min_nights_rules (rate_table_id, date_type, nights)
 		SELECT $1, m.tipo, m.noites
@@ -116,10 +104,83 @@ func estadiaMinima(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error)
 		RETURNING (xmax = 0)`
 
 	c, err := upsert(ctx, tx, q, st.tarifarioID,
-		coluna(estadiaMinimaSeed, func(m minimo) string { return m.tipo }),
-		coluna(estadiaMinimaSeed, func(m minimo) int32 { return m.noites }),
+		coluna(ms, func(m minimo) string { return m.tipo }),
+		coluna(ms, func(m minimo) int32 { return m.noites }),
 	)
-	c.Previstas = len(estadiaMinimaSeed)
+	c.Previstas = len(ms)
+	return c, err
+}
+
+// estadiaMinimaPorProduto grava unit_type_min_nights, que SOBREPÕE a regra geral
+// para o produto. Como nas tarifas, o conjunto de cada produto do catálogo fica
+// exatamente igual à lista: linha a mais é removida.
+func estadiaMinimaPorProduto(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
+	ms := st.cat.minimoPorProduto
+	produtosM := coluna(ms, func(m minimoProduto) string { return m.produto })
+	tiposM := coluna(ms, func(m minimoProduto) string { return m.tipo })
+
+	const q = `
+		INSERT INTO unit_type_min_nights (rate_table_id, unit_type_id, date_type, nights)
+		SELECT $1, ut.id, m.tipo, m.noites
+		  FROM unnest($3::text[], $4::text[], $5::int[]) AS m(produto, tipo, noites)
+		  JOIN unit_types ut ON ut.property_id = $2 AND ut.code = m.produto
+		ON CONFLICT (rate_table_id, unit_type_id, date_type) DO UPDATE
+		   SET nights = EXCLUDED.nights
+		 WHERE unit_type_min_nights.nights IS DISTINCT FROM EXCLUDED.nights
+		RETURNING (xmax = 0)`
+
+	c, err := upsert(ctx, tx, q, st.tarifarioID, st.propriedadeID, produtosM, tiposM,
+		coluna(ms, func(m minimoProduto) int32 { return m.noites }))
+	c.Previstas = len(ms)
+	if err != nil {
+		return c, err
+	}
+
+	c.Removidas, err = afetadas(ctx, tx, `
+		DELETE FROM unit_type_min_nights x
+		 USING unit_types ut
+		 WHERE x.rate_table_id = $1
+		   AND ut.id = x.unit_type_id AND ut.property_id = $2 AND ut.code = ANY($3::text[])
+		   AND NOT EXISTS (SELECT 1 FROM unnest($4::text[], $5::text[]) AS k(produto, tipo)
+		                    WHERE k.produto = ut.code AND k.tipo = x.date_type)`,
+		st.tarifarioID, st.propriedadeID, st.cat.codigosDeProduto(), produtosM, tiposM)
+	return c, err
+}
+
+// pacotes grava rate_packages, um por vez: `unnest` de um array de arrays
+// achata tudo num array só, então a lista de tipos não viaja em lote.
+func pacotes(ctx context.Context, tx pgx.Tx, st *estado) (contagem, error) {
+	const q = `
+		INSERT INTO rate_packages (rate_table_id, unit_type_id, nights, date_types, total_cents)
+		SELECT $1, ut.id, $4, $5::text[], $6
+		  FROM unit_types ut WHERE ut.property_id = $2 AND ut.code = $3
+		ON CONFLICT (rate_table_id, unit_type_id, nights, date_types) DO UPDATE
+		   SET total_cents = EXCLUDED.total_cents
+		 WHERE rate_packages.total_cents IS DISTINCT FROM EXCLUDED.total_cents
+		RETURNING (xmax = 0)`
+
+	var c contagem
+	chaves := make([]string, 0, len(st.cat.pacotes))
+	for _, p := range st.cat.pacotes {
+		cp, err := upsert(ctx, tx, q, st.tarifarioID, st.propriedadeID,
+			p.produto, p.noites, p.tipos, reais(p.total))
+		if err != nil {
+			return c, fmt.Errorf("pacote %s: %w", p.chave(), err)
+		}
+		c.somar(cp)
+		chaves = append(chaves, p.chave())
+	}
+	c.Previstas = len(st.cat.pacotes)
+
+	var err error
+	c.Removidas, err = afetadas(ctx, tx, `
+		DELETE FROM rate_packages rp
+		 USING unit_types ut
+		 WHERE rp.rate_table_id = $1
+		   AND ut.id = rp.unit_type_id AND ut.property_id = $2 AND ut.code = ANY($3::text[])
+		   AND NOT (ut.code || '|' || rp.nights || '|' || array_to_string(rp.date_types, ',')
+		            = ANY($4::text[]))`,
+		st.tarifarioID, st.propriedadeID, st.cat.codigosDeProduto(), chaves)
 	return c, err
 }
 

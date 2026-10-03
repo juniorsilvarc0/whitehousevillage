@@ -54,6 +54,9 @@ func (r *repoFalso) Tarifas(_ context.Context, _ uuid.UUID, produto *uuid.UUID) 
 func (r *repoFalso) EstadiaMinima(context.Context, uuid.UUID) (map[calendar.DateType]int, error) {
 	return r.minimos, nil
 }
+func (r *repoFalso) Regras(context.Context, uuid.UUID, *uuid.UUID) (map[uuid.UUID]RegrasDoProduto, error) {
+	return nil, nil
+}
 func (r *repoFalso) Produtos(_ context.Context, _ uuid.UUID, produto *uuid.UUID) ([]Produto, error) {
 	if produto == nil {
 		return r.produtos, nil
