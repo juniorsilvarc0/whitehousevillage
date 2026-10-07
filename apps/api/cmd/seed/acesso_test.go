@@ -66,7 +66,7 @@ func TestAdminPodeEditarPerfis(t *testing.T) {
 func TestCorretorNaoAlcancaFinanceiroGlobalNemConfiguracoes(t *testing.T) {
 	proibidos := []string{
 		"finance.receivables", "finance.payables",
-		"inventory", "channels",
+		"inventory", "inventory.goods", "channels",
 		auth.RecursoUsuarios, auth.RecursoPerfis, "settings", "integrations", "audit",
 		"site", // o conteúdo do site fala em nome da casa (docs/site-cms.md)
 	}
@@ -163,15 +163,100 @@ func TestSiteEhDaGestao(t *testing.T) {
 	}
 }
 
+// Os BENS por ambiente (20261007170000) são um recurso separado do cadastro
+// comercial, e este teste é o que impede a fusão de voltar.
+//
+// Fundir os dois faria `inventory:editar` significar duas coisas: quem corrige
+// a contagem de taças passaria a poder apagar um produto que a casa vende, e
+// quem cadastra unidade passaria a mexer na conferência. Quem conta é quem
+// limpa, pelo celular — a distância entre as duas telas é um toque.
+func TestBensSaoRecursoSeparadoDoCadastro(t *testing.T) {
+	const cadastro, bens = "inventory", "inventory.goods"
+
+	catalogo := map[string]recurso{}
+	for _, r := range catalogoSeed {
+		catalogo[r.codigo] = r
+	}
+
+	r, ok := catalogo[bens]
+	if !ok {
+		t.Fatalf("recurso %q fora do catálogo — a conferência de bens não teria como ser autorizada", bens)
+	}
+	if strings.Join(r.acoes, ",") != strings.Join(tudo, ",") {
+		t.Errorf("%s com ações %v; o contrato é as quatro", bens, r.acoes)
+	}
+	if r.suportaOwn {
+		t.Errorf("%s com suportaOwn=true; cômodo não tem dono no sentido do RBAC", bens)
+	}
+	if r.grupo != catalogo[cadastro].grupo {
+		t.Errorf("%s no grupo %q e %s no grupo %q — os dois são Operação", bens, r.grupo, cadastro, catalogo[cadastro].grupo)
+	}
+
+	// O rótulo de `inventory` dizia "Inventário e enxoval" e mentia: não há uma
+	// peça de enxoval nas rotas que ele protege (propriedade, produtos,
+	// unidades, composição). O enxoval agora tem recurso próprio, e o rótulo
+	// errado é o tipo de coisa que volta num copiar-colar.
+	if strings.Contains(strings.ToLower(catalogo[cadastro].rotulo), "enxoval") {
+		t.Errorf("rótulo de %s promete enxoval (%q), que mora em %s — a grade de perfis mentiria sobre o que a célula abre",
+			cadastro, catalogo[cadastro].rotulo, bens)
+	}
+
+	// Quem recebe: admin (pelo catálogo inteiro) e a operação. Ninguém mais —
+	// nem o corretor, nem a conta de serviço do site, que não têm o que fazer
+	// com bens.
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vitrine, err := matrizDaVitrine()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	concedido := map[string]bool{}
+	for _, l := range append(linhas, vitrine...) {
+		if l.recurso != bens {
+			continue
+		}
+		if l.escopo != escopoAll {
+			t.Errorf("%s com escopo %q em %s:%s — o recurso não tem dono", l.perfil, l.escopo, bens, l.acao)
+		}
+		concedido[l.perfil+":"+l.acao] = true
+	}
+	for _, perfil := range []string{"admin", "usuario"} {
+		for _, a := range tudo {
+			if !concedido[perfil+":"+a] {
+				t.Errorf("%s sem %s:%s — a operação não conseguiria conferir a casa", perfil, bens, a)
+			}
+		}
+	}
+	for chave := range concedido {
+		if p := strings.SplitN(chave, ":", 2)[0]; p != "admin" && p != "usuario" {
+			t.Errorf("%s recebeu %s — só a gestão e a operação contam bens", chave, bens)
+		}
+	}
+}
+
 func TestCatalogoNaoTemCodigoRepetidoNemAcaoInvalida(t *testing.T) {
 	validas := map[string]bool{ver: true, criar: true, editar: true, excluir: true}
 	vistos := map[string]bool{}
+	ordens := map[int32]string{}
 
 	for _, r := range catalogoSeed {
 		if vistos[r.codigo] {
 			t.Errorf("recurso %q repetido no catálogo", r.codigo)
 		}
 		vistos[r.codigo] = true
+
+		// `sort_order` repetido deixa a grade de perfis sem ordem
+		// determinística: os dois recursos trocam de lugar entre duas aberturas
+		// da tela, e quem revisa permissão não acha a linha onde a deixou.
+		// Acrescentar recurso no meio de um grupo (o caso de `inventory.goods`)
+		// é exatamente quando a colisão acontece.
+		if outro, ok := ordens[r.ordem]; ok {
+			t.Errorf("recursos %q e %q com a mesma ordem %d — a grade perderia ordem estável", outro, r.codigo, r.ordem)
+		}
+		ordens[r.ordem] = r.codigo
 
 		if len(r.acoes) == 0 {
 			t.Errorf("recurso %q sem nenhuma ação — linha invisível na grade", r.codigo)

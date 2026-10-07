@@ -28,6 +28,7 @@ export const RECURSOS_DO_CATALOGO = [
   "calendar",
   "agenda",
   "inventory",
+  "inventory.goods",
   "channels",
 
   "quotes",

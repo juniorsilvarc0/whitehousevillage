@@ -58,8 +58,31 @@ var catalogoSeed = []recurso{
 	{"reservations", "Reservas", "Operação", tudo, true, 10},
 	{"calendar", "Calendário", "Operação", tudo, true, 11},
 	{"agenda", "Agenda operacional", "Operação", tudo, true, 12},
-	{"inventory", "Inventário e enxoval", "Operação", tudo, false, 13},
-	{"channels", "Canais e OTA", "Operação", tudo, false, 14},
+
+	// `inventory` e `inventory.goods` são DOIS recursos de propósito — a
+	// decisão de autorização que docs/db.md §11 deixou em aberto.
+	//
+	// `inventory` protege o CADASTRO COMERCIAL: propriedade, produtos,
+	// unidades e composição (todas as linhas de internal/router/
+	// rotas_inventario.go, com `const Recurso = "inventory"`). O rótulo dizia
+	// "Inventário e enxoval" e mentia: não há uma peça de enxoval dentro dele.
+	// Agora diz o que ele realmente abre.
+	//
+	// `inventory.goods` protege os BENS por ambiente — `unit_rooms`,
+	// `inventory_items`, a colocação, a conferência e a avaria
+	// (20261007170000). Quem conta é quem limpa, pelo celular. Num recurso só,
+	// `inventory:editar` significaria duas coisas ao mesmo tempo: a permissão
+	// que deixa salvar "contei 9 taças" deixaria apagar um produto que a casa
+	// vende. Isso não é risco teórico, é um toque na tela.
+	//
+	// Nenhum dos dois tem dono (`supports_own = false`): apartamento e cômodo
+	// não têm `owner_id`, e escopo `own` aqui seria um filtro que o SQL não
+	// sabe aplicar. O namespace com ponto é o padrão da casa (`crm.*`,
+	// `finance.*`) e não exige nada do banco: `resources.code` é texto livre.
+	{"inventory", "Cadastro de unidades e produtos", "Operação", tudo, false, 13},
+	{"inventory.goods", "Bens e enxoval por ambiente", "Operação", tudo, false, 14},
+
+	{"channels", "Canais e OTA", "Operação", tudo, false, 15},
 
 	{"quotes", "Orçamentos", "Comercial", tudo, true, 20},
 	{"contacts", "Contatos", "Comercial", tudo, false, 21},
@@ -188,6 +211,16 @@ var matrizSeed = map[string][]concessao{
 		{"calendar", nil, escopoAll},
 		{"agenda", nil, escopoAll},
 		{"inventory", nil, escopoAll},
+
+		// Os bens em `all`: quem opera a casa confere qualquer ambiente de
+		// qualquer unidade — a diarista que limpa o AP-01 hoje limpa a GV-01
+		// amanhã, e cômodo não tem dono para um `own` filtrar. Vai junto com
+		// `inventory` neste perfil, e é a mesma tela de perfis que pode tirar
+		// um sem tirar o outro no dia em que a casa quiser um perfil só de
+		// contagem — que é exatamente o que a separação dos dois recursos
+		// passou a permitir.
+		{"inventory.goods", nil, escopoAll},
+
 		{"channels", nil, escopoAll},
 		{"quotes", nil, escopoAll},
 		{"contacts", nil, escopoAll},
@@ -243,7 +276,10 @@ var matrizSeed = map[string][]concessao{
 		{"chat", nil, escopoOwn},
 
 		// O próprio cadastro e as próprias comissões. Financeiro global,
-		// inventário, canais e configurações ficam de fora (spec §11).
+		// canais e configurações ficam de fora (spec §11) — e os DOIS
+		// inventários também: o corretor não cadastra unidade nem conta taça.
+		// Dar-lhe `inventory.goods` seria conceder a tela de conferência da
+		// casa a quem nunca entra nela.
 		{"brokers", somenteLeitura, escopoOwn},
 		{"finance.commissions", somenteLeitura, escopoOwn},
 	},
