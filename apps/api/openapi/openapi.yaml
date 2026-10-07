@@ -5911,7 +5911,7 @@ paths:
   # ════════════════════════════════════════════════════════════════════
   # Bens e enxoval por ambiente — módulo `inventario-bens`.
   #
-  # Schema: `20261007170000`, sete tabelas (docs/db.md §11). Recurso RBAC:
+  # Schema: `20261007170000` + `20261007200000`, oito tabelas (docs/db.md §11). Recurso RBAC:
   # `inventory.goods`, e NÃO `inventory` — aquele protege o cadastro comercial
   # (`/properties`, `/unit-types`, `/units`, composição), e pendurar bens no
   # mesmo recurso faria `inventory:editar` significar duas coisas: a permissão
@@ -6320,6 +6320,11 @@ paths:
         Ordenadas por `sort_order` e desempatadas por `media_id` — sem o
         desempate, um item com duas fotos no mesmo `sort_order` troca de capa a
         cada abertura da tela. A **capa** é a primeira da lista.
+
+        Pôr uma foto num bem são **duas** permissões: enviar o arquivo
+        (`POST /inventory/media`, `criar`) e ligá-lo à galeria
+        (`PUT` aqui, `editar`). Quem só tem `criar` envia um arquivo que fica
+        solto — por isso o painel só oferece o envio a quem tem as duas.
       x-rbac: { recurso: inventory.goods, acao: ver }
       responses:
         "200":
@@ -6656,6 +6661,45 @@ paths:
         "403": { $ref: "#/components/responses/Erro" }
         "404": { $ref: "#/components/responses/Erro" }
 
+  /inventory/units:
+    get:
+      tags: [Bens]
+      summary: Lista as unidades físicas para o inventário de bens
+      description: |
+        O seletor de unidade das telas de bens. Existe porque `/units` exige
+        `inventory:ver` (o cadastro comercial), e o perfil que só tem
+        `inventory.goods` — o de quem conta, pelo celular — ficava sem ter onde
+        escolher a unidade. Derivar a lista de `GET /rooms` não serve: unidade
+        que ainda não tem ambiente some, e é justamente nela que alguém precisa
+        criar o primeiro cômodo.
+
+        Devolve de cada unidade **só** `id`, `code`, `name` e `active`, mais os
+        números do inventário dela — nada de tarifa, capacidade, composição ou
+        ocupação, pelo mesmo motivo de `GET /units/{id}/inventory`.
+
+        Ordem por `code`, com desempate por `id`.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 100, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean }, description: "Omitido devolve ativas e inativas; a tela manda `true`." }
+        - { name: q,        in: query, schema: { type: string }, description: "Busca por `code` e `name`." }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/UnidadeDoInventario" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+
   /units/{id}/inventory:
     parameters:
       - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
@@ -6684,7 +6728,7 @@ paths:
           in: query
           schema: { type: boolean, default: false }
           description: Inclui ambientes e bens desativados — a visão de auditoria do histórico.
-        - { name: category, in: query, schema: { $ref: "#/components/schemas/CategoriaDeBem" }, description: Filtra os bens exibidos em cada ambiente. }
+        - { name: category, in: query, schema: { $ref: "#/components/schemas/CategoriaDeBem" }, description: "Filtra os bens exibidos em cada ambiente. Ambiente sem bem da categoria **continua** na resposta (vazio) — só o `q` tira ambiente." }
         - { name: q, in: query, schema: { type: string }, description: Busca pelo nome do bem; ambiente sem resultado sai da resposta. }
       responses:
         "200":
@@ -6707,9 +6751,11 @@ paths:
       summary: Copia ambientes e colocações de outra unidade
       description: |
         Seis duplex iguais não se cadastram seis vezes. A cópia traz os
-        **ambientes** (por `name` e `kind`) e as **colocações** da unidade de
-        origem; o catálogo de bens não é copiado porque é da propriedade — o
-        mesmo "Prato raso branco" serve às doze unidades.
+        **ambientes** (com `name`, `kind` e `sort_order`, para a ordem de
+        caminhada vir junto) e as **colocações** da unidade de origem; o
+        catálogo de bens não é copiado porque é da propriedade — o mesmo "Prato
+        raso branco" serve às doze unidades. Da origem só entram ambientes e
+        bens **ativos**: o que saiu de linha lá não renasce aqui.
 
         ## A cópia só ACRESCENTA — nunca sobrescreve quantidade
 
@@ -6887,6 +6933,14 @@ paths:
         `counted_qty: null` é "ainda não contado"; zero é "contei e não achei
         nenhum". São coisas diferentes, e a diferença é o que a tela de
         pendências pergunta.
+
+        **Conferência `fechada` traz `result`** — as mesmas divergências e a
+        mesma perda que `POST /close` devolveu, lidas de volta e não
+        recalculadas: o custo de reposição de cada linha é **congelado no
+        fechamento** (`inventory_count_lines.replacement_cost_cents`, regra 7 do
+        CLAUDE.md). Recalcular com o custo de hoje faria a perda apurada em
+        março mudar quando alguém recotasse o prato em junho. Aberta ou
+        cancelada, `result` é `null`.
       x-rbac: { recurso: inventory.goods, acao: ver }
       responses:
         "200":
@@ -6963,11 +7017,12 @@ paths:
       tags: [Bens]
       summary: Cancela a conferência aberta
       description: |
-        **Cancela, não apaga**: `status` vai para `cancelada` e `closed_at`
+        **Cancela, não apaga**: `status` vai para `cancelada`, `closed_at`
         recebe o instante da desistência (é o que o `CHECK
         inventory_counts_fechamento` exige — aberta sem data de encerramento,
-        encerrada com ela). As linhas contadas até ali ficam gravadas: alguém
-        andou pela casa e contou, e esse trabalho é informação.
+        encerrada com ela) e `closed_by` recebe quem desistiu. As linhas
+        contadas até ali ficam gravadas: alguém andou pela casa e contou, e esse
+        trabalho é informação.
 
         É assim que se libera a unidade para uma contagem nova, porque o índice
         único parcial só olha para `status = 'aberta'`.
@@ -7096,8 +7151,11 @@ paths:
         "409":
           description: |
             `COUNT_CLOSED` — já encerrada (`details.status`, `details.closed_at`).
-            `COUNT_HAS_PENDING_LINES` — ainda há linha sem contagem
-            (`details.pending`, `details.pending_by_room`).
+            `COUNT_HAS_PENDING_LINES` — ainda há linha sem contagem.
+            `details.pending` é o total (inteiro) e `details.pending_by_room` é
+            uma **lista** `[{room_id, room_name, pending}]`, na ordem de
+            caminhada pela casa e só com os ambientes que têm pendência — é o
+            que a tela usa para mandar quem conta de volta ao cômodo certo.
           $ref: "#/components/responses/Erro"
         "422": { $ref: "#/components/responses/Erro" }
 
@@ -7311,7 +7369,8 @@ paths:
           description: A planilha
           headers:
             Content-Disposition:
-              schema: { type: string, example: 'attachment; filename="inventario-grand-villa-2026-10-07.csv"' }
+              schema: { type: string, example: 'attachment; filename="inventario-gv-01-2026-10-07.csv"' }
+              description: "`inventario-<código da unidade>-<data>.csv` quando filtrado por `unit_id`; sem unidade, o slug da propriedade no lugar do código. A data é a de hoje no fuso da propriedade."
           content:
             text/csv:
               schema: { type: string }
@@ -10406,6 +10465,26 @@ components:
               description: Os bens colocados neste ambiente, por nome.
               items: { $ref: "#/components/schemas/Colocacao" }
 
+    UnidadeDoInventario:
+      type: object
+      required: [id, code, name, active, rooms, items]
+      description: "A unidade física vista pelo inventário de bens (`GET /inventory/units`). Só identificação e números do inventário — nada do cadastro comercial."
+      properties:
+        id:     { type: string, format: uuid }
+        code:   { type: string, example: GV-01 }
+        name:   { type: string, example: "White House Grand Villa" }
+        active: { type: boolean }
+        rooms:  { type: integer, description: Ambientes ativos da unidade. Zero é a unidade que ainda precisa da planta. }
+        items:  { type: integer, description: Bens distintos colocados em ambientes ativos. }
+        open_count_id:
+          type: [string, "null"]
+          format: uuid
+          description: A conferência aberta desta unidade, se houver — o seletor leva direto a ela.
+        last_closed_at:
+          type: [string, "null"]
+          format: date-time
+          description: Quando a última conferência foi fechada, para a lista dizer "conferida há 40 dias".
+
     InventarioDaUnidade:
       type: object
       required: [unit, rooms, totals]
@@ -10429,6 +10508,11 @@ components:
         totals:
           type: object
           required: [rooms, items, expected_qty, open_issues]
+          description: |
+            Somam **o que a resposta mostra**, depois de `include_inactive`,
+            `category` e `q`. Sem filtro, são os números da unidade inteira; com
+            filtro, são os do recorte — a tela que filtrou "louça" e mostra "120
+            peças" está falando da louça, não do apartamento.
           properties:
             rooms:        { type: integer }
             items:        { type: integer, description: Bens distintos colocados nesta unidade. }
@@ -10584,6 +10668,15 @@ components:
           type: [integer, "null"]
           description: "`counted_qty − expected_qty`. Nulo enquanto a linha estiver pendente. Negativo é falta; positivo, sobra."
         note:       { type: [string, "null"] }
+        replacement_cost_cents:
+          type: [integer, "null"]
+          format: int64
+          description: |
+            Custo de reposição **congelado no fechamento** (regra 7 do
+            CLAUDE.md), copiado de `inventory_items.replacement_cost_cents`.
+            `null` enquanto a conferência está aberta ou foi cancelada, e
+            quando o bem não tinha custo cotado no instante do fechamento. É
+            dele — e não do catálogo de hoje — que sai a perda de `result`.
         counted_by: { type: [string, "null"], format: uuid }
         counted_by_name: { type: [string, "null"], description: Nome do usuário que contou. }
         counted_at:
@@ -10613,6 +10706,45 @@ components:
               type: array
               description: Um ambiente por vez é como o celular conta; a ordem é a de caminhada pela casa.
               items: { $ref: "#/components/schemas/AmbienteDaConferencia" }
+            result:
+              oneOf:
+                - $ref: "#/components/schemas/ApuracaoDaConferencia"
+                - type: "null"
+              description: "Presente só em conferência `fechada`: o que o `POST /close` apurou, lido de volta com o custo congelado. `null` em aberta e cancelada."
+
+    ApuracaoDaConferencia:
+      type: object
+      required: [divergences, issues_created]
+      properties:
+        divergences:
+          type: array
+          description: Uma linha por divergência, na ordem de caminhada pela casa. Vazio quer dizer que a casa está como o cadastro diz.
+          items: { $ref: "#/components/schemas/DivergenciaDeConferencia" }
+        issues_created: { type: integer, description: "Avarias `faltando` abertas por este fechamento (as que têm `count_id` desta conferência e nasceram nele)." }
+
+    DivergenciaDeConferencia:
+      type: object
+      required: [room_id, room_name, item_id, item_name, expected_qty, counted_qty, diff]
+      properties:
+        room_id:      { type: string, format: uuid }
+        room_name:    { type: string }
+        item_id:      { type: string, format: uuid }
+        item_name:    { type: string }
+        expected_qty: { type: integer }
+        counted_qty:  { type: integer }
+        diff:         { type: integer, description: Negativo é falta; positivo, sobra. }
+        replacement_cost_cents:
+          type: [integer, "null"]
+          format: int64
+          description: O custo **congelado no fechamento** na linha da conferência — não o do catálogo de hoje.
+        loss_cents:
+          type: [integer, "null"]
+          format: int64
+          description: "Falta × custo congelado, em centavos. `null` quando o bem não tinha custo cotado no fechamento — e nunca zero, que seria dizer que a perda não custou nada. Sobra também é `null`."
+        issue_id:
+          type: [string, "null"]
+          format: uuid
+          description: A avaria aberta por este fechamento, quando houve.
 
     ConferenciaAbrir:
       type: object
@@ -10639,11 +10771,15 @@ components:
     ContagemDaLinha:
       type: object
       additionalProperties: false
-      required: [counted_qty]
+      minProperties: 1
       description: |
         O gesto do celular. `counted_at` e `counted_by` são do servidor e são
         campo desconhecido aqui (`422`): "quando isto foi conferido, e por quem"
         não pode depender do relógio do aparelho.
+
+        **Nenhum campo é obrigatório, mas o corpo vazio é `422`.** Campo ausente
+        não mexe (é o `Opt[T]`): `{"note": "lascado"}` anota sem tocar na
+        contagem, e `{"counted_qty": 9}` conta sem apagar a nota.
       properties:
         counted_qty:
           type: [integer, "null"]
@@ -10665,7 +10801,10 @@ components:
       type: object
       additionalProperties: false
       properties:
-        note: { type: [string, "null"], maxLength: 2000 }
+        note:
+          type: [string, "null"]
+          maxLength: 2000
+          description: "A observação da conferência. Ausente mantém a que já existe; texto **substitui**; `null` limpa — a mesma regra do `PATCH`."
         raise_issues:
           type: boolean
           default: true
@@ -10684,25 +10823,12 @@ components:
         count: { $ref: "#/components/schemas/Conferencia" }
         divergences:
           type: array
-          description: Uma linha por divergência, na ordem de caminhada pela casa. Vazio quer dizer que a casa está como o cadastro diz.
-          items:
-            type: object
-            properties:
-              room_name:    { type: string }
-              item_id:      { type: string, format: uuid }
-              item_name:    { type: string }
-              expected_qty: { type: integer }
-              counted_qty:  { type: integer }
-              diff:         { type: integer, description: Negativo é falta; positivo, sobra. }
-              replacement_cost_cents: { type: [integer, "null"], format: int64 }
-              loss_cents:
-                type: [integer, "null"]
-                format: int64
-                description: "Falta × custo de reposição, em centavos. `null` quando o bem não tem custo cotado — e nunca zero, que seria dizer que a perda não custou nada."
-              issue_id:
-                type: [string, "null"]
-                format: uuid
-                description: A avaria aberta por este fechamento, quando houve.
+          description: |
+            Uma linha por divergência, na ordem de caminhada pela casa. Vazio
+            quer dizer que a casa está como o cadastro diz. É exatamente o que
+            `GET /inventory/counts/{id}` devolve depois em `result` — o custo é
+            congelado na linha no mesmo `UPDATE` do fechamento.
+          items: { $ref: "#/components/schemas/DivergenciaDeConferencia" }
         issues_created: { type: integer }
 
     Avaria:
@@ -10762,6 +10888,16 @@ components:
       type: object
       additionalProperties: false
       required: [room_id, item_id, kind, qty]
+      description: |
+        A reserva entra por **`reservation_id` ou `reservation_code`**, nunca
+        os dois (`422`). O código existe porque é o que a governanta tem na mão
+        ("WH-2026-0142", da folha do check-out), e trocar código por id exigiria
+        `reservations:ver`, que o perfil de contagem não tem. Código que não
+        existe nesta propriedade é `422` com `details.reservation_code`, e a
+        resposta devolve a reserva só pelo `code` — nunca o hóspede.
+
+        `count_id`, quando vem, tem de ser uma conferência da **mesma unidade**
+        do ambiente (`422` com `details.count_id` se não for).
       properties:
         room_id:        { type: string, format: uuid }
         item_id:        { type: string, format: uuid }
@@ -10769,18 +10905,20 @@ components:
         qty:            { type: integer, minimum: 1 }
         note:           { type: [string, "null"], maxLength: 2000 }
         reservation_id: { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0142, description: "Alternativa a `reservation_id` — ver a descrição do schema." }
         count_id:       { type: [string, "null"], format: uuid }
 
     AvariaSubstituir:
       type: object
       additionalProperties: false
       required: [kind, qty]
-      description: "Corpo do `PUT`. Sem `room_id`/`item_id` (são a identidade do fato) e sem `resolved_at`/`resolved_by` (são do servidor)."
+      description: "Corpo do `PUT`. Sem `room_id`/`item_id` (são a identidade do fato) e sem `resolved_at`/`resolved_by` (são do servidor). A reserva vai por `reservation_id` **ou** `reservation_code`, como no `POST`."
       properties:
         kind:           { $ref: "#/components/schemas/TipoDeAvaria" }
         qty:            { type: integer, minimum: 1 }
         note:           { type: [string, "null"], maxLength: 2000 }
         reservation_id: { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0142 }
         resolution:
           oneOf:
             - $ref: "#/components/schemas/DesfechoDeAvaria"
@@ -10789,12 +10927,13 @@ components:
     AvariaAtualizar:
       type: object
       additionalProperties: false
-      description: "Corpo do `PATCH` — campo ausente não muda nada; campo com `null` limpa (e `resolution: null` **reabre** a pendência)."
+      description: "Corpo do `PATCH` — campo ausente não muda nada; campo com `null` limpa (e `resolution: null` **reabre** a pendência). A reserva vai por `reservation_id` **ou** `reservation_code`, nunca os dois; qualquer um dos dois em `null` desvincula."
       properties:
         kind:           { $ref: "#/components/schemas/TipoDeAvaria" }
         qty:            { type: integer, minimum: 1 }
         note:           { type: [string, "null"], maxLength: 2000 }
         reservation_id: { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0142 }
         resolution:
           oneOf:
             - $ref: "#/components/schemas/DesfechoDeAvaria"

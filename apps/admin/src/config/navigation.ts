@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import {
   CalendarRange, LayoutGrid, ClipboardList, Columns3, ContactRound, MessageCircle,
-  CalendarDays, Wallet, Users, Package, Share2, ChartLine, SlidersHorizontal, Calculator, BookUser, Globe,
+  CalendarDays, Wallet, Users, Armchair, Share2, ChartLine, SlidersHorizontal, Calculator, BookUser, Globe,
 } from "lucide-react";
 
 import type { RecursoCodigo } from "@/lib/auth/recursos";
@@ -178,13 +178,12 @@ export const CATALOGO: NavItem[] = [
     emConstrucao: true, quando: "Em breve — contas a receber, a pagar e conferência de pagamentos." },
   { title: "Comissões",     href: "/app/comissoes",     icon: Users,             group: "Comercial",     recurso: "finance.commissions",
     emConstrucao: true, quando: "Em breve — comissões dos corretores." },
-  // A *configuração* do inventário já existe, em Configurações → Inventário.
-  // Este item é a tela **operacional** (ordens de manutenção, enxoval), que é
-  // outra coisa e é de outra fase. Repontá-lo para a tela de configuração seria
-  // criar dois caminhos para o mesmo lugar e acender dois itens do menu ao mesmo
-  // tempo, porque `estaAtivo()` casa por prefixo.
-  { title: "Inventário",    href: "/app/inventario",    icon: Package,           group: "Operação",      recurso: "inventory",
-    emConstrucao: true, quando: "Em breve — manutenção e controle dos apartamentos. O cadastro já está em Configurações." },
+  // Os BENS por ambiente (enxoval, louça, móveis), com conferência e avarias —
+  // recurso `inventory.goods`, desde 20261007170000. Não é o cadastro de
+  // unidades e produtos, que continua em Configurações sob o recurso
+  // `inventory`: são duas permissões de propósito, porque quem conta taça pelo
+  // celular não deve poder apagar um produto que a casa vende (docs/db.md §11).
+  { title: "Inventário",    href: "/app/inventario",    icon: Armchair,          group: "Operação",      recurso: "inventory.goods" },
   { title: "Canais",        href: "/app/canais",        icon: Share2,            group: "Administração", recurso: "channels",
     emConstrucao: true, quando: "Em breve — reservas do Airbnb e do Booking direto no calendário." },
   { title: "Relatórios",    href: "/app/relatorios",    icon: ChartLine,         group: "Análise",       recurso: "reports",

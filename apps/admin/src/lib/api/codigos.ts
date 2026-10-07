@@ -41,6 +41,14 @@ export type CodigoDeErro =
   // resolve — quem age é a gestão do inventário, não o hóspede.
   | "COMPOSITION_INCOMPLETE"
   | "HOLD_LIMIT_REACHED"
+  // Inventário de bens (`inventory.goods`). Os três são 409 e é por isso que
+  // entram aqui, e não num dicionário à parte como os do CRM e de contatos:
+  // `normalizarCodigo` não tem ramo para 409 e os jogaria em `INTERNAL`, e
+  // `COUNT_ALREADY_OPEN` carrega em `details.count_id` o caminho até a
+  // conferência que já está aberta — perder o código é perder a saída.
+  | "COUNT_ALREADY_OPEN"
+  | "COUNT_CLOSED"
+  | "COUNT_HAS_PENDING_LINES"
   | "INTERNAL"
   // Fora do contrato: a API não respondeu (caiu, DNS, timeout). É do BFF, não
   // do servidor, e por isso não pode se disfarçar de INTERNAL — a tela precisa
@@ -54,7 +62,9 @@ const CONHECIDOS: readonly string[] = [
   "TOKEN_REUSED", "EMAIL_IN_USE", "ROLE_IMMUTABLE", "ROLE_IN_USE",
   "RATE_NOT_FOUND", "POLICY_IMMUTABLE", "CODE_IN_USE", "RESOURCE_IN_USE",
   "INVALID_STATE_TRANSITION", "RESERVATION_NOT_CANCELLABLE", "UNIT_NOT_AVAILABLE",
-  "COMPOSITION_INCOMPLETE", "HOLD_LIMIT_REACHED", "INTERNAL",
+  "COMPOSITION_INCOMPLETE", "HOLD_LIMIT_REACHED",
+  "COUNT_ALREADY_OPEN", "COUNT_CLOSED", "COUNT_HAS_PENDING_LINES",
+  "INTERNAL",
 ];
 
 /** Código desconhecido não pode virar `undefined` no meio da tela: mapeia pelo

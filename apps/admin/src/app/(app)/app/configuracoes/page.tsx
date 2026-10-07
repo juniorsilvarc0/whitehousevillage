@@ -25,12 +25,15 @@ type Area = {
  *
  * Cada área declara o par recurso × ação que a própria tela exige — a mesma
  * chave que a OpenAPI declara em `x-rbac` e que a API confere no middleware.
- * O inventário exige `inventory`, não `settings`, embora more aqui dentro: o
- * agrupamento é editorial, a permissão é do recurso.
+ * "Unidades e produtos" exige `inventory`, não `settings`, embora more aqui
+ * dentro: o agrupamento é editorial, a permissão é do recurso.
  */
 const AREAS: Area[] = [
   {
-    titulo: "Inventário",
+    // Era "Inventário" até 07/10/2026. O nome passou a ser do inventário de
+    // BENS (menu Operação, recurso `inventory.goods`); este cartão é o cadastro
+    // comercial (recurso `inventory`, rótulo "Cadastro de unidades e produtos").
+    titulo: "Unidades e produtos",
     descricao: "O que você vende (produtos), os apartamentos de verdade (unidades) e quais apartamentos formam cada produto.",
     href: "/app/configuracoes/inventario",
     recurso: "inventory",
@@ -69,7 +72,7 @@ export default async function ConfiguracoesPage() {
   const areas = AREAS.filter((area) => can(permissions, area.recurso, area.acao));
   // O guard desta tela é a união das áreas, não `settings` sozinho: quem tem
   // `inventory` mas não `settings` (o perfil `usuario` do seed) precisa chegar
-  // ao inventário, e uma porta trancada com a chave errada só faria essa pessoa
+  // a unidades e produtos, e uma porta trancada com a chave errada só faria essa pessoa
   // digitar a URL da tela de dentro na mão.
   if (areas.length === 0) return <SemAcesso recurso="settings" />;
 

@@ -21,13 +21,21 @@ contra um Postgres descartável com todas as migrations até `20261002180000`
 aplicados e alternados. Ainda em **03/10/2026**, §2, §13b, §14, §15 e §16 foram
 conferidos em `20261003120000` (`site_content`, `site_media` e o recurso RBAC `site`),
 com `up` → `down 1` → `up`, `down -all` → `up` e os dois catálogos semeados duas vezes
-cada. Em **07/10/2026**, §3, §11, §14 e §15 foram conferidos em `20261007170000` (as sete
+cada. Em **07/10/2026**, §3, §11, §14 e §15 foram conferidos em `20261007170000` (as oito
 tabelas do inventário de bens por ambiente): as colunas, as constraints e os índices
 foram lidos de `pg_constraint`/`pg_indexes`, cada `CHECK` e cada chave parcial foi
 provada com `INSERT` que deve falhar, e o ciclo rodou `up` → `down 1` → `up` no banco de
 desenvolvimento e `up` → `down -all` → `up` num Postgres descartável — o `down` não deixa
-tabela, índice, constraint, função nem sequência para trás. Para repetir a conferência de
-qualquer afirmação daqui:
+tabela, índice, constraint, função nem sequência para trás. Ainda em **07/10/2026**, §11,
+§14 e §15 foram conferidos em `20261007200000` (`inventory_count_lines.replacement_cost_cents`,
+o custo congelado no fechamento): coluna, `CHECK` e comentário foram lidos de
+`information_schema`/`pg_constraint`; o `CHECK` foi provado com `INSERT` e `UPDATE` de
+custo zero e negativo, que falham com `23514`; o backfill foi provado com conferências
+fechada, cancelada e aberta numa transação desfeita; e o ciclo rodou `up` → `down 1` →
+`up` no banco de desenvolvimento (PG 16) e `up` → `down 1` → `up` → `down -all` → `up`
+num Postgres descartável (PG 17, no host, porque a VM do Docker estava sem disco). O
+`pg_dump --schema-only` depois de `up` + `down 1` é idêntico ao de um banco que nunca viu
+a migration. Para repetir a conferência de qualquer afirmação daqui:
 
 ```bash
 # quais tabelas existem
@@ -633,7 +641,8 @@ Comissão incide sobre diárias, nunca sobre limpeza ou caução. Caução é `r
 
 ## 11. Operação — inventário de bens por ambiente
 
-Entregue em `20261007170000`. **Sete tabelas existem**; três continuam projeto (abaixo).
+Entregue em `20261007170000`; o custo congelado na linha da conferência veio em
+`20261007200000`. **Oito tabelas existem**; três continuam projeto (abaixo).
 
 Esta seção projetava, desde 20/08/2026, duas tabelas que nunca foram criadas —
 `inventory_items(… min_stock, cost_cents)` e `unit_inventory(unit_id, item_id,
@@ -665,8 +674,8 @@ inventory_counts(id, property_id, unit_id, status, note?, opened_by?, opened_at,
                  closed_by?, closed_at?, updated_at)                      -- 10 colunas
         -- status: aberta | fechada | cancelada
 inventory_count_lines(id, count_id, room_id, item_id, expected_qty, counted_qty?,
-                      note?, counted_by?, counted_at?, created_at, updated_at)
-                                                                          -- 11 colunas
+                      note?, counted_by?, counted_at?, created_at, updated_at,
+                      replacement_cost_cents?)                            -- 12 colunas
         -- UNIQUE (count_id, room_id, item_id)
 inventory_issues(id, property_id, room_id, item_id, kind, qty, note?, reservation_id?,
                  count_id?, resolution?, reported_by?, reported_at, resolved_by?,
@@ -726,12 +735,26 @@ da casa é uma soma sobre linhas que ninguém audita. É a mesma separação de 
   duas fontes da mesma verdade. `inventory_counts_fechamento` é o
   `CHECK ((status = 'aberta') = (closed_at IS NULL))`, mesma forma de
   `crm_opportunities`.
-- **`inventory_count_lines.expected_qty` é congelada na abertura** (regra 7 do
-  CLAUDE.md), copiada de `room_inventory.expected_qty`. Mesmo motivo de
-  `reservation_nights` guardar a tarifa aplicada: lida por `JOIN`, mudar o padrão da casa
-  hoje reescreveria o que a contagem de março esperava, e a divergência que foi apurada e
-  cobrada deixaria de existir no relatório. Medido: com a linha congelada em 12 e
-  `room_inventory` alterado para 8 depois, a linha continua dizendo 12.
+- **A linha da conferência congela as duas metades da conta** (regra 7 do CLAUDE.md):
+  `expected_qty` na **abertura**, copiada de `room_inventory.expected_qty`, e
+  `replacement_cost_cents` no **fechamento** (`20261007200000`), copiada de
+  `inventory_items.replacement_cost_cents` no mesmo `UPDATE` que fecha a conferência.
+  Mesmo motivo de `reservation_nights` guardar a tarifa aplicada: lida por `JOIN`, mudar
+  o padrão da casa hoje reescreveria o que a contagem de março esperava, e a divergência
+  que foi apurada e cobrada deixaria de existir no relatório. Medido: com a linha
+  congelada em 12 e `room_inventory` alterado para 8 depois, a linha continua dizendo 12.
+  O custo segue a mesma lógica. A perda de cada divergência é `falta × replacement_cost_cents`
+  **da linha**, e o contrato exige que `GET /inventory/counts/{id}` de uma conferência
+  `fechada` a devolva lida de volta, não recalculada: recotar o prato em junho não muda a
+  perda apurada em março. Medido: custo congelado em 2590, item recotado para 3990, e a
+  perda de uma falta de 3 continua 7770 (recalculada seria 11970). O custo fica `NULL` em
+  conferência aberta, em cancelada e quando o bem não tinha custo cotado no instante do
+  fechamento. Zero é recusado por `inventory_count_lines_custo_positivo`, como em
+  `inventory_items`, porque entraria na conta como perda de R$ 0,00. Duas garantias são
+  da API, e não do banco: "`NULL` em aberta e em cancelada" e "não muda depois de
+  fechada". `CHECK` não enxerga o status do pai, e o mesmo vale para `expected_qty`. O
+  backfill da migration deu às conferências já fechadas o custo **atual** do item, uma
+  aproximação aceitável só porque `20261007170000` nunca chegou a produção.
   **`counted_qty` `NULL` é "não contado"; zero é "contei e não achei nenhum"** — são
   coisas diferentes, e é a diferença que a tela de pendências pergunta
   (`inventory_count_lines_pendentes_idx`, parcial em `counted_qty IS NULL`).
@@ -756,14 +779,15 @@ da casa é uma soma sobre linhas que ninguém audita. É a mesma separação de 
   composta (o padrão de `users.broker_id`, §2); lá havia exploit medido, aqui não há, e
   não se compra constraint no escuro.
 - A migration termina com o mesmo bloco `DO` de `20260827110000`: **aborta** se qualquer
-  tabela do módulo passar de 25 colunas. A maior tem 15.
+  tabela do módulo passar de 25 colunas. A maior tem 15. `20261007200000` repete o bloco
+  para `inventory_count_lines`, que foi de 11 para 12.
 
 **Permissão: dois recursos, e por quê.** O recurso RBAC `inventory` **já estava** no
 catálogo do seed desde `20260820140000`, e a migration não o toca porque `resources` é
 semeado, não migrado (§16). Só que ele **já estava ocupado**:
 `internal/modules/inventario` (`dto.go`, `const Recurso = "inventory"`) o usa para o CRUD
 de **propriedade, produtos, unidades e composição** — todas as linhas de
-`internal/router/rotas_inventario.go`. Pendurar as sete tabelas deste módulo no mesmo
+`internal/router/rotas_inventario.go`. Pendurar as oito tabelas deste módulo no mesmo
 recurso faria `inventory:editar` significar duas coisas: a permissão que deixa quem limpa
 salvar "contei 9 taças" no celular deixaria apagar um produto que a casa vende, e o
 inverso — um toque na tela de distância. Decidido em 07/10/2026, no `catalogoSeed` de
@@ -774,7 +798,7 @@ inverso — um toque na tela de distância. Decidido em 07/10/2026, no `catalogo
   Grupo "Operação", as quatro ações, `supports_own = false`, `sort_order` 13.
 - **`inventory.goods`** ("Bens e enxoval por ambiente", grupo "Operação", as quatro ações,
   `supports_own = false` — cômodo não tem dono no sentido do RBAC, `sort_order` 14, e
-  `channels` foi para 15) é o recurso das sete tabelas deste módulo. Namespace com ponto
+  `channels` foi para 15) é o recurso das oito tabelas deste módulo. Namespace com ponto
   como `crm.*` e `finance.*`. Concedido em `all` ao `admin` (catálogo inteiro) e ao perfil
   de operação `usuario`; **não** ao `corretor` nem à conta de serviço `vitrine` — nenhum
   dos dois tem o que fazer com bens.
@@ -1004,7 +1028,7 @@ inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta d
 | `site_media` | `site_media_storage_key_unica` `UNIQUE (storage_key)` · `CHECK (kind IN ('imagem','video'))` · `CHECK (bytes > 0)` · `mime` e `storage_key` não vazios · `(created_by)` (§13b) |
 | `inventory_counts` | `inventory_counts_aberta_idx` `UNIQUE (unit_id) WHERE status = 'aberta'` — no máximo **uma** conferência aberta por unidade; parcial porque a unidade acumula fechadas para sempre (§11) · `CHECK ((status = 'aberta') = (closed_at IS NULL))` · `(unit_id, opened_at DESC, id)` e `(property_id, opened_at DESC, id)` — histórico ordenado com desempate |
 | `inventory_items` | `inventory_items_source_ref_idx` `UNIQUE (property_id, source_ref) WHERE source_ref IS NOT NULL` — é o que torna a importação idempotente · `CHECK (replacement_cost_cents IS NULL OR > 0)` — zero não é sinônimo de "não cotado" · `(property_id, category, name, id)` — a tela do catálogo, filtro e ordenação no mesmo índice |
-| `inventory_count_lines` | `UNIQUE (count_id, room_id, item_id)` — linha duplicada mostraria a divergência em dobro · `CHECK ((counted_qty IS NULL) = (counted_at IS NULL))` · `(count_id, room_id, item_id) WHERE counted_qty IS NULL` — o que falta contar. `expected_qty` é **congelada** na abertura (regra 7, §11) |
+| `inventory_count_lines` | `UNIQUE (count_id, room_id, item_id)` — linha duplicada mostraria a divergência em dobro · `CHECK ((counted_qty IS NULL) = (counted_at IS NULL))` · `(count_id, room_id, item_id) WHERE counted_qty IS NULL` — o que falta contar · `inventory_count_lines_custo_positivo` `CHECK (replacement_cost_cents IS NULL OR replacement_cost_cents > 0)` — zero entraria na conta como perda de R$ 0,00. `expected_qty` é **congelada** na abertura e `replacement_cost_cents` no fechamento (regra 7, §11) |
 | `inventory_issues` | `CHECK ((resolution IS NULL) = (resolved_at IS NULL))` — pendência aberta é `resolution IS NULL`, e não há coluna `status` ao lado · `CHECK (qty > 0)` · `(property_id, reported_at DESC, id) WHERE resolution IS NULL` — a lista de pendências, parcial pelo mesmo motivo do índice do kanban · `(reservation_id) WHERE reservation_id IS NOT NULL` — o que cobrar da estadia |
 | `unit_rooms` | `UNIQUE (unit_id, name)` — dois "Suíte 1" fazem contar a mesma cama duas vezes · `CHECK` do vocabulário de `kind` · `(unit_id, sort_order, name, id)` — a lista de conferência sai ordenada do índice, com desempate determinístico |
 | `inventory_media` | `inventory_media_storage_key_unica` `UNIQUE (storage_key)` · `UNIQUE (thumb_key) WHERE thumb_key IS NOT NULL` e `CHECK (thumb_key <> storage_key)` — as duas chaves moram no mesmo namespace do volume, e a colisão sobrescreveria a foto |
@@ -1067,7 +1091,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261007170000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261007200000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -1087,7 +1111,8 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20261002180000_brokers_e_fk_do_corretor` | `brokers` (9 colunas, §10) e as FKs `reservations_broker_id_fkey` e `users_broker_id_fkey` — esta **composta**, `(broker_id, id) → brokers(id, user_id)` (§2). Anula, com linha em `audit_log` e `RAISE WARNING`, todo `broker_id` órfão que encontrar; o `down` não os devolve (§5). `commission_rule_id` fica para o F2-10, junto com `commission_rules` |
 | `20261003100000_catalogo_real_vitrine_minimo_e_pacotes` | o que o catálogo real precisa (§3, §4): `unit_types.public_name` (nome de vitrine, `NULL` = `name`, nunca em branco), `unit_type_min_nights` (estadia mínima por produto, sobrepõe `min_nights_rules`) e `rate_packages` (preço por duração, com o vocabulário de `date_types` em `CHECK`). O `down` derruba as duas tabelas e a coluna |
 | `20261003120000_conteudo_e_midia_do_site` | o banco do menu **Site** (§13b, `docs/site-cms.md`): `site_content` (campo editado do site, chave em `CHECK` de formato, valor jsonb não nulo) e `site_media` (foto/vídeo imutável, `storage_key` única). O recurso RBAC `site` não é migration: entra pelo seed, como todo o catálogo de `resources` |
-| `20261007170000_inventario_de_bens_por_ambiente` | o inventário de bens físicos por ambiente (§11), sete tabelas: `unit_rooms` (o cômodo, conceito novo no banco), `inventory_items` (catálogo da propriedade, com `source_ref` único parcial para importação idempotente), `room_inventory` (a colocação — é o `unit_inventory` projetado, com o cômodo no lugar da unidade), `inventory_media` + `inventory_item_media` (foto própria, muitos-para-muitos; **não** `site_media`, que não tem `property_id` e cai no `down` do CMS), `inventory_counts` + `inventory_count_lines` (conferência, com no máximo uma aberta por unidade e `expected_qty` congelada na abertura) e `inventory_issues` (quebrado/faltando/avariado, com `reservation_id` para cobrar o hóspede). `min_stock` fica para `stock_movements`; `cost_cents` virou `replacement_cost_cents`. O `down` derruba as sete e não deixa sobra |
+| `20261007170000_inventario_de_bens_por_ambiente` | o inventário de bens físicos por ambiente (§11), oito tabelas: `unit_rooms` (o cômodo, conceito novo no banco), `inventory_items` (catálogo da propriedade, com `source_ref` único parcial para importação idempotente), `room_inventory` (a colocação — é o `unit_inventory` projetado, com o cômodo no lugar da unidade), `inventory_media` + `inventory_item_media` (foto própria, muitos-para-muitos; **não** `site_media`, que não tem `property_id` e cai no `down` do CMS), `inventory_counts` + `inventory_count_lines` (conferência, com no máximo uma aberta por unidade e `expected_qty` congelada na abertura) e `inventory_issues` (quebrado/faltando/avariado, com `reservation_id` para cobrar o hóspede). `min_stock` fica para `stock_movements`; `cost_cents` virou `replacement_cost_cents`. O `down` derruba as oito e não deixa sobra |
+| `20261007200000_congela_custo_na_conferencia` | `inventory_count_lines.replacement_cost_cents` (anulável, `CHECK > 0` em `inventory_count_lines_custo_positivo`): o custo de reposição **congelado no fechamento**, de onde sai a perda de cada divergência. Com ele, a conferência fechada devolve lida de volta a perda que apurou, e recotar o item não a reescreve (regra 7, §11). Backfill das conferências já fechadas com o custo **atual** do item: aproximação de desenvolvimento, porque `20261007170000` nunca chegou a produção. A tabela vai de 11 para 12 colunas, conferida pelo bloco `DO` da régua. O `down` derruba a coluna (e com ela o `CHECK` e o comentário) e é **lossy**: o custo congelado some, e o `up` seguinte o refaz com o custo do dia |
 
 ## 16. Seeds
 

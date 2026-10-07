@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/bens"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
@@ -94,6 +95,10 @@ func New(o Opcoes) (http.Handler, error) {
 
 		// Site: conteúdo editável do site de vendas e o volume de mídia.
 		Site: site.NovoHandler(o.Pool, tx, o.Config.MediaDir),
+
+		// Bens por ambiente; as fotos vão para MEDIA_DIR/bens. Montar é
+		// OBRIGATÓRIO: rotas_inventario_bens.go não guarda contra handler nulo.
+		Bens: bens.NovoHandler(o.Pool, tx, o.Config.MediaDir),
 	}
 
 	prepararVolumeDeMidia(o.Config.MediaDir)

@@ -33,6 +33,7 @@ import { describe, expect, it } from "vitest";
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const COMERCIAL_TS = path.resolve(AQUI, "comercial.ts");
+const BENS_TS = path.resolve(AQUI, "../bens/tipos.ts");
 const API = path.resolve(AQUI, "../../../../api/internal/modules");
 
 /** Tira comentários antes de procurar chave: `/** … *\/` tem `:` dentro. */
@@ -41,14 +42,15 @@ function semComentarios(fonte: string): string {
 }
 
 /** Chaves de um `export type X = { … }` do painel. */
-function chavesDoTipoTS(nome: string): string[] {
-  const fonte = semComentarios(readFileSync(COMERCIAL_TS, "utf8"));
+function chavesDoTipoTS(nome: string, arquivo = COMERCIAL_TS): string[] {
+  const fonte = semComentarios(readFileSync(arquivo, "utf8"));
+  const rotulo = path.basename(arquivo);
   const inicio = fonte.indexOf(`export type ${nome} = {`);
-  if (inicio < 0) throw new Error(`tipo ${nome} não encontrado em comercial.ts`);
+  if (inicio < 0) throw new Error(`tipo ${nome} não encontrado em ${rotulo}`);
 
   const corpo = fonte.slice(inicio + `export type ${nome} = {`.length);
   const fim = corpo.indexOf("};");
-  if (fim < 0) throw new Error(`tipo ${nome} sem fechamento em comercial.ts`);
+  if (fim < 0) throw new Error(`tipo ${nome} sem fechamento em ${rotulo}`);
 
   return [...corpo.slice(0, fim).matchAll(/(\w+)\??\s*:/g)].map((m) => m[1]);
 }
@@ -74,7 +76,7 @@ function tagsDoStructGo(arquivo: string, nome: string): string[] | null {
  * manual: o par (tipo do painel, struct do Go) é a decisão que se quer
  * revisada, não adivinhada por convenção de nome.
  */
-const CORPOS: { rota: string; tipoTS: string; arquivoGo: string; structGo: string }[] = [
+const CORPOS: { rota: string; tipoTS: string; arquivoGo: string; structGo: string; arquivoTS?: string }[] = [
   { rota: "POST/PUT /unit-types", tipoTS: "ProdutoEntrada", arquivoGo: "inventario/dto.go", structGo: "ProdutoEntrada" },
   { rota: "POST/PUT /units", tipoTS: "UnidadeEntrada", arquivoGo: "inventario/dto.go", structGo: "UnidadeEntrada" },
   { rota: "POST/PUT /rate-tables", tipoTS: "TabelaDeTarifasEntrada", arquivoGo: "tarifario/dto.go", structGo: "TabelaEntrada" },
@@ -85,6 +87,14 @@ const CORPOS: { rota: string; tipoTS: string; arquivoGo: string; structGo: strin
   { rota: "PUT /policies/cancellation", tipoTS: "PoliticaDeCancelamentoEntrada", arquivoGo: "tarifario/dto.go", structGo: "PoliticaDeCancelamentoEntrada" },
   { rota: "PUT /policies/cancellation (faixa)", tipoTS: "FaixaDeCancelamento", arquivoGo: "tarifario/dto.go", structGo: "FaixaEntrada" },
   { rota: "POST /quotes", tipoTS: "PedidoDeOrcamento", arquivoGo: "disponibilidade/dto.go", structGo: "Pedido" },
+  // Inventário de bens por ambiente (`inventory.goods`). Os tipos moram em
+  // `lib/bens/tipos.ts`; os DTOs, em `internal/modules/bens/dto.go`.
+  { rota: "POST/PUT /inventory/items", tipoTS: "BemEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "BemCriar" },
+  { rota: "POST /rooms", tipoTS: "AmbienteCriarEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "AmbienteCriar" },
+  { rota: "PUT /rooms/{id}", tipoTS: "AmbienteSubstituirEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "AmbienteSubstituir" },
+  { rota: "POST /inventory/placements", tipoTS: "ColocacaoCriarEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "ColocacaoCriar" },
+  { rota: "PUT /inventory/placements/{id}", tipoTS: "ColocacaoSubstituirEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "ColocacaoSubstituir" },
+  { rota: "POST /inventory/issues", tipoTS: "AvariaCriarEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "AvariaCriar" },
 ];
 
 describe("o corpo que o painel manda é o corpo que a API aceita", () => {
@@ -97,7 +107,7 @@ describe("o corpo que o painel manda é o corpo que a API aceita", () => {
         return;
       }
 
-      const doPainel = chavesDoTipoTS(corpo.tipoTS);
+      const doPainel = chavesDoTipoTS(corpo.tipoTS, corpo.arquivoTS);
       expect(doPainel.length).toBeGreaterThan(0);
 
       const desconhecidas = doPainel.filter((chave) => !tags.includes(chave));
@@ -113,6 +123,6 @@ describe("o corpo que o painel manda é o corpo que a API aceita", () => {
   it("a lista de corpos não encolheu sem ninguém notar", () => {
     // Uma linha removida da tabela é cobertura que some em silêncio — o mesmo
     // modo de falha do teste que "passa" porque não afirma nada.
-    expect(CORPOS.length).toBeGreaterThanOrEqual(10);
+    expect(CORPOS.length).toBeGreaterThanOrEqual(16);
   });
 });

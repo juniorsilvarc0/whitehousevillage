@@ -32,6 +32,15 @@ const TELAS = [
   "/app/configuracoes",
   "/app/configuracoes/tarifario",
   "/app/configuracoes/inventario",
+  // Inventário de bens por ambiente (Fase 5, `inventory.goods`).
+  "/app/inventario",
+  "/app/inventario/bens",
+  "/app/inventario/conferencias",
+  "/app/inventario/avarias",
+  // A folha de impressão vive fora da casca (grupo de rotas `(impressao)`).
+  // Sem `?unidade=` ela responde 200 com a instrução de onde escolher — o que
+  // basta para provar que a rota existe e que a sessão chega até ela.
+  "/app/inventario/imprimir",
 ];
 
 // `channel: "chrome"` usa o Chrome instalado na máquina — é o que mais se

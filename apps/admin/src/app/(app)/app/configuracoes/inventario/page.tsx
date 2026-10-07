@@ -9,7 +9,7 @@ import { requireSession } from "@/lib/auth/session";
 
 import { PainelDeInventario, type Composicoes } from "./painel";
 
-export const metadata = { title: "Inventário" };
+export const metadata = { title: "Unidades e produtos" };
 
 /**
  * Produtos, unidades e a composição que liga os dois.
@@ -56,7 +56,7 @@ export default async function InventarioPage() {
     <Tela>
       <CabecalhoDeTela
         voltar={{ href: "/app/configuracoes", rotulo: "Configurações" }}
-        titulo="Inventário"
+        titulo="Unidades e produtos"
         descricao={
           <>
             <strong>Produto</strong> é o que você vende ao cliente; <strong>unidade</strong> é o

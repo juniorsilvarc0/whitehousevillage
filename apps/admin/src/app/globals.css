@@ -209,6 +209,12 @@ body::before {
   }
 }
 
+/* Folha de impressão (inventário por unidade): o wash é da tela, não do papel. */
+@media print {
+  body::before { display: none; }
+  @page { margin: 12mm; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, ::before, ::after {
     animation-duration: 0.01ms !important;

@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/bens"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
@@ -98,6 +99,11 @@ type Deps struct {
 
 	// Site é a área administrativa do site de vendas (rotas_site.go).
 	Site *site.Handler
+
+	// Bens é o inventário de bens por ambiente (rotas_inventario_bens.go,
+	// recurso `inventory.goods`) — não confundir com Inventario, que é o
+	// cadastro comercial de propriedade, produtos e unidades.
+	Bens *bens.Handler
 }
 
 // Rotas devolve a tabela completa da API v1, concatenando os grupos.
@@ -122,6 +128,7 @@ func Rotas(d Deps) []Rota {
 		func(d Deps) []Rota { return rotasContatos(d.Contatos) },
 		rotasVitrine,
 		rotasSite,
+		rotasBens,
 	} {
 		todas = append(todas, grupo(d)...)
 	}
@@ -194,10 +201,16 @@ func rotasNucleo(d Deps) []Rota {
 // 300 MB numa conexão de celular passa de 50 s com folga, e o teto cancelaria
 // o contexto antes do INSERT em site_media; a entrega do vídeo (Range) idem.
 // Cada uma estende o próprio prazo de rede (internal/modules/site/handler.go).
+//
+// O envio e a entrega da foto de bem também: 15 MB pelo celular de dentro de
+// um apartamento de alvenaria passam do teto nos dois sentidos, e o contrato
+// diz isso em `POST /inventory/media` e `GET /inventory/media/{id}`.
 var rotasDeLongaDuracao = map[string]bool{
-	"/stream":          true,
-	RotaDeEnvioDeMidia: true,
-	RotaDaMidiaPublica: true,
+	"/stream":              true,
+	RotaDeEnvioDeMidia:     true,
+	RotaDaMidiaPublica:     true,
+	RotaDeEnvioDeFotoDeBem: true,
+	RotaDaFotoDeBem:        true,
 }
 
 // EhDeLongaDuracao diz se a rota fica aberta por tempo indeterminado.
