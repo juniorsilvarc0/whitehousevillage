@@ -110,6 +110,28 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
 
+  # Importa o levantamento fotográfico de bens (docs/db.md §11). Passo MANUAL e
+  # único por casa — fora do deploy.sh. Monta o MESMO volume `midia` da API:
+  # sem isso o banco ficaria certo e toda foto daria 404 no painel. A pasta do
+  # levantamento NÃO está no git (fotos do interior das casas): copie-a para a
+  # VPS. O padrão aponta para o mesmo lugar do dev; LEVANTAMENTO_DIR troca.
+  # Padrão, e não `:?` obrigatório, porque o compose interpola o arquivo
+  # inteiro em todo comando — obrigatório, derrubaria o deploy.sh.
+  # Repetível: reexecutar só acrescenta o que falta.
+  importar-bens:
+    <<: *imagem-api
+    profiles: ["tools"]
+    entrypoint: ["/app/importar-bens"]
+    environment:
+      APP_ENV: production
+      TZ: America/Fortaleza
+      MEDIA_DIR: /data/midia
+    volumes:
+      - midia:/data/midia
+      - ${LEVANTAMENTO_DIR:-../scratch/levantamento-inventario}:/levantamento:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+
   api:
     <<: *imagem-api
     environment:
@@ -122,7 +144,8 @@ services:
     # próprio, nenhum outro projeto da VPS o enxerga. Sobrevive a todo redeploy
     # (o deploy.sh nunca roda `down`, muito menos `down -v`) e herda da imagem o
     # dono nonroot de /data/midia na primeira montagem. Entra no backup junto
-    # com o banco (docs/infra.md §5.1). Só a API monta; o worker não usa mídia.
+    # com o banco (docs/infra.md §5.1). Só a API monta (e o `importar-bens`, sob
+    # demanda); o worker não usa mídia.
     volumes:
       - midia:/data/midia
     # `borda` além de `interna`: o nginx do site encaminha /api/v1/public/* para
