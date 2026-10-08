@@ -6572,11 +6572,42 @@ paths:
         do arquivo, não pela extensão: JPEG, PNG ou WebP até 15 MB. Fora disso,
         `422 VALIDATION_ERROR` com `details.file` em linguagem do gestor.
 
-        **Gera a miniatura no envio**, gravada como segundo arquivo ao lado do
-        original, e devolve as duas URLs. Não é refinamento: uma grade de 200
-        itens baixando fotos de 15 MB no celular, dentro do apartamento, com o
-        sinal que houver, não é tela utilizável. Se a miniatura falhar, o
-        original continua valendo e `thumb_url` sai igual a `url`.
+        **A foto é convertida no envio, e o que se guarda é a convertida.**
+        JPEG e PNG saem como JPEG de lado maior até **1280 px** (só reduz, nunca
+        amplia), **qualidade 75**, sem metadados — a orientação EXIF é aplicada
+        antes, para a foto tirada em pé não sair deitada, e o resto do EXIF
+        (localização inclusive) não vai para o volume. O arquivo enviado não é
+        mantido. O porquê é de disco, medido: foto de celular chega com 3 a 5 MB,
+        convertida fica em torno de 150 KB, e o inventário serve para
+        reconhecer o objeto, não para imprimir — no levantamento das duas casas
+        a mesma regra economizou 37% sobre fotos que o WhatsApp já tinha
+        comprimido. PNG com transparência é achatado sobre fundo branco; o
+        perfil de cor (ICC) também sai, e foto em Display P3 fica um pouco menos
+        saturada — irrelevante para reconhecer um prato.
+
+        **JPEG que já está dentro de 1280 px, sem orientação EXIF a aplicar, e
+        cuja conversão não ficaria menor é guardado sem recodificar, só sem os
+        metadados.** Medido: recodificar foto que já veio enxuta a faz CRESCER
+        (+5% nas 405 do levantamento, até +43% no pior caso), porque o
+        codificador da biblioteca padrão não otimiza as tabelas de Huffman.
+
+        Três casos guardam o arquivo **como veio** — metadados inclusive —, com
+        aviso no log e sem recusar o envio: **WebP** (a biblioteca padrão do Go
+        não o decodifica, e formato raro não justifica dependência nova), foto
+        grande demais para decodificar com segurança na memória da API, e foto
+        que passa na detecção pelos bytes mas não decodifica (JPEG aritmético,
+        de 12 bits ou cortado) — esta também sai sem miniatura. O teto do
+        **envio** continua 15 MB.
+
+        Por isso, na resposta, `mime`, `bytes`, `width` e `height` descrevem o
+        arquivo **guardado** — um PNG enviado volta como `image/jpeg` — e
+        `original_name` continua sendo o nome que veio.
+
+        **Gera a miniatura no envio**, gravada como segundo arquivo ao lado da
+        foto guardada, e devolve as duas URLs. Não é refinamento: uma grade de
+        200 itens baixando a foto inteira no celular, dentro do apartamento, com
+        o sinal que houver, não é tela utilizável. Se a miniatura falhar, a
+        foto continua valendo e `thumb_url` sai igual a `url`.
 
         A linha é **imutável**: trocar a foto de um bem é enviar outra e apontar
         a galeria para o novo `id` (`PUT /inventory/items/{id}/photos`).
@@ -10325,15 +10356,15 @@ components:
       required: [id, mime, bytes, url, thumb_url]
       properties:
         id:        { type: string, format: uuid }
-        mime:      { type: string, enum: [image/jpeg, image/png, image/webp], description: Detectado pelos bytes do arquivo, não pela extensão. }
-        bytes:     { type: integer, format: int64 }
-        width:     { type: [integer, "null"] }
+        mime:      { type: string, enum: [image/jpeg, image/png, image/webp], description: "Do arquivo **guardado**, detectado pelos bytes. Desde a conversão no envio, JPEG e PNG viram `image/jpeg`; `image/png` só aparece em foto anterior a ela, e `image/webp` no WebP, que é guardado como veio." }
+        bytes:     { type: integer, format: int64, description: Tamanho do arquivo guardado — o convertido, não o enviado. }
+        width:     { type: [integer, "null"], description: "Do arquivo guardado: depois da conversão, no máximo 1280 no lado maior." }
         height:    { type: [integer, "null"] }
         original_name: { type: string, description: O nome que o arquivo tinha no aparelho; nunca é usado para montar o caminho no volume. }
         url:
           type: string
           example: /api/v1/inventory/media/0b7c2f4e-0000-4000-8000-000000000000
-          description: Entrega **autenticada** do original. Não é endereço público.
+          description: Entrega **autenticada** da foto guardada (a convertida no envio). Não é endereço público.
         thumb_url:
           type: string
           example: /api/v1/inventory/media/0b7c2f4e-0000-4000-8000-000000000000?size=thumb

@@ -44,7 +44,12 @@ import (
 //     fecharia "completa" sem ter olhado para ela;
 //   - VALIDAÇÃO ANTES DE TUDO: vocabulário fora do mapa, nome fora do limite do
 //     contrato, foto que não é foto pelos bytes — qualquer problema aborta a
-//     casa inteira antes de tocar no banco ou no disco.
+//     casa inteira antes de tocar no banco ou no disco;
+//   - A FOTO PASSA PELA MESMA CONVERSÃO DO ENVIO DO PAINEL (conversao.go):
+//     JPEG e PNG vão para o volume em JPEG de até 1280 px, qualidade 75, sem
+//     metadados — e a chave já sai `.jpg` no plano, decidida pelo cabeçalho;
+//     WebP e foto grande demais vão como vieram, com aviso. Arquivo que já
+//     está no volume não é reescrito nem reconvertido.
 //
 // O dry-run percorre EXATAMENTE o mesmo caminho, numa transação READ ONLY, e
 // troca cada INSERT pela pergunta "isto já está lá?". Assim o plano que ele
@@ -224,9 +229,15 @@ type itemDoPlano struct {
 }
 
 type fotoDoPlano struct {
-	Arquivo   string
-	Origem    string
-	Mime      string
+	Arquivo string
+	Origem  string
+	// MimeDaOrigem é o tipo do arquivo do levantamento; Mime, o do arquivo que
+	// vai para o volume (JPEG quando Converter).
+	MimeDaOrigem string
+	Mime         string
+	// Converter: JPEG/PNG que cabe na memória é convertido como no envio do
+	// painel (conversao.go). WebP e foto grande demais vão como vieram.
+	Converter bool
 	Chave     string
 	Miniatura string
 }
@@ -417,12 +428,19 @@ func planejarImportacao(lev Levantamento, fotos fs.FS) (planoDaImportacao, error
 	donoDaChave := map[string]string{}
 	for i := range p.Fotos {
 		f := &p.Fotos[i]
-		tipo, problema := conferirFotoDeOrigem(fotos, f.Arquivo)
+		tipo, convertivel, problema := conferirFotoDeOrigem(fotos, f.Arquivo)
 		if problema != "" {
 			falha("foto %q: %s", f.Arquivo, problema)
 			continue
 		}
-		f.Mime = tipo.mime
+		// O que vai para o volume decide a chave: a convertida é JPEG, e a
+		// decisão sai do CABEÇALHO (tipo e tamanho), não da decodificação —
+		// assim o dry-run sabe a chave sem converter nada.
+		ext := tipo.ext
+		f.MimeDaOrigem, f.Mime, f.Converter = tipo.mime, tipo.mime, convertivel
+		if convertivel {
+			ext, f.Mime = "jpg", mimeJPEG
+		}
 		base := chaveDeOrigem(f.Origem)
 		switch {
 		case base == "":
@@ -437,8 +455,8 @@ func planejarImportacao(lev Levantamento, fotos fs.FS) (planoDaImportacao, error
 			continue
 		}
 		donoDaChave[base] = f.Origem
-		f.Chave = prefixoDaChaveImportada + base + "." + tipo.ext
-		if tipo.mime != mimeWebP {
+		f.Chave = prefixoDaChaveImportada + base + "." + ext
+		if convertivel {
 			f.Miniatura = prefixoDaChaveImportada + base + ".thumb.jpg"
 		}
 	}
@@ -450,33 +468,42 @@ func planejarImportacao(lev Levantamento, fotos fs.FS) (planoDaImportacao, error
 }
 
 // conferirFotoDeOrigem abre a foto no diretório do levantamento e confere
-// tamanho e tipo pelos bytes. Devolve o problema em linguagem de quem corrige.
-func conferirFotoDeOrigem(fotos fs.FS, arquivo string) (tipoDeFoto, string) {
+// tamanho e tipo pelos bytes; de JPEG e PNG lê também o cabeçalho de imagem,
+// que diz se a foto cabe na memória para ser convertida. Devolve o problema
+// em linguagem de quem corrige.
+func conferirFotoDeOrigem(fotos fs.FS, arquivo string) (tipo tipoDeFoto, convertivel bool, problema string) {
 	f, err := fotos.Open(arquivo)
 	if err != nil {
-		return tipoDeFoto{}, "não encontrada na pasta de fotos"
+		return tipoDeFoto{}, false, "não encontrada na pasta de fotos"
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
-		return tipoDeFoto{}, "ilegível"
+		return tipoDeFoto{}, false, "ilegível"
 	}
 	switch {
 	case info.Size() == 0:
-		return tipoDeFoto{}, "arquivo vazio"
+		return tipoDeFoto{}, false, "arquivo vazio"
 	case info.Size() > LimiteDaFoto:
-		return tipoDeFoto{}, fmt.Sprintf("%d bytes, acima do limite de 15 MiB", info.Size())
+		return tipoDeFoto{}, false, fmt.Sprintf("%d bytes, acima do limite de 15 MiB", info.Size())
 	}
 	cabeca := make([]byte, tamanhoDaCabeca)
 	n, err := io.ReadFull(f, cabeca)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return tipoDeFoto{}, "ilegível"
+		return tipoDeFoto{}, false, "ilegível"
 	}
 	tipo, ok := detectarFoto(cabeca[:n])
 	if !ok {
-		return tipoDeFoto{}, "não é JPEG, PNG nem WebP pelos bytes"
+		return tipoDeFoto{}, false, "não é JPEG, PNG nem WebP pelos bytes"
 	}
-	return tipo, ""
+	if tipo.mime == mimeWebP {
+		return tipo, false, ""
+	}
+	cfg, err := configDaImagem(io.MultiReader(bytes.NewReader(cabeca[:n]), f), tipo.mime)
+	if err != nil {
+		return tipoDeFoto{}, false, "cabeçalho de imagem ilegível: " + err.Error()
+	}
+	return tipo, cabeNoOrcamento(cfg), ""
 }
 
 // ─────────────────────────── O importador ───────────────────────────────────
@@ -798,31 +825,44 @@ func (e *execucaoDaImportacao) contarArquivos(f fotoDoPlano) {
 	}
 }
 
-// garantirArquivos escreve no volume o original e a miniatura que ainda não
-// estiverem lá, e devolve a linha a registrar. O tipo é conferido pelos bytes
-// DE NOVO na escrita: o arquivo de origem pode ter mudado desde a validação.
+// garantirArquivos escreve no volume a foto e a miniatura que ainda não
+// estiverem lá, e devolve a linha a registrar — com `mime`, `bytes` e
+// dimensões do arquivo GUARDADO, conferidos nele. Arquivo que já está no
+// volume não é reescrito nem reconvertido (inclusive o órfão de uma passada
+// que falhou). Foto nova passa pela mesma conversão do envio do painel.
 func (e *execucaoDaImportacao) garantirArquivos(ctx context.Context, f fotoDoPlano) (registroDeMidia, error) {
 	final, err := e.s.caminhoNoVolume(f.Chave)
 	if err != nil {
 		return registroDeMidia{}, err
 	}
+	var miniatura []byte // a gerada junto com a conversão, da imagem na memória
 	if arquivoExiste(final) {
 		e.rel.ArquivosNoVolume++
 	} else {
-		if err := e.copiarOrigem(ctx, f, final); err != nil {
+		dados, mini, err := e.prepararOrigem(ctx, f)
+		if err != nil {
 			return registroDeMidia{}, err
 		}
+		if _, err := gravarNoVolume(ctx, e.s.dir, final, nil, bytes.NewReader(dados)); err != nil {
+			return registroDeMidia{}, fmt.Errorf("foto %q: %w", f.Arquivo, err)
+		}
 		e.rel.ArquivosEscritos++
+		miniatura = mini
 	}
+
 	info, err := os.Stat(final)
 	if err != nil {
 		return registroDeMidia{}, apperr.Internal.WithCause(err)
 	}
+	guardada, err := tipoDoArquivo(final)
+	if err != nil {
+		return registroDeMidia{}, fmt.Errorf("foto %q no volume (%s): %w", f.Arquivo, f.Chave, err)
+	}
 	m := registroDeMidia{
-		PropriedadeID: e.prop, Mime: f.Mime, Bytes: info.Size(),
+		PropriedadeID: e.prop, Mime: guardada.mime, Bytes: info.Size(),
 		NomeOriginal: nomeOriginal(f.Arquivo), ChaveArquivo: f.Chave,
 	}
-	if d, err := medirFoto(final, f.Mime); err != nil {
+	if d, err := medirFoto(final, guardada.mime); err != nil {
 		slog.WarnContext(ctx, "bens: importação sem medir a foto", "arquivo", f.Arquivo, "err", err)
 	} else {
 		m.Largura, m.Altura = &d.largura, &d.altura
@@ -840,13 +880,15 @@ func (e *execucaoDaImportacao) garantirArquivos(ctx context.Context, f fotoDoPla
 		m.ChaveMiniatura = &f.Miniatura
 		return m, nil
 	}
-	mini, err := gerarMiniatura(ctx, final, f.Mime)
-	if err != nil || mini == nil {
-		slog.WarnContext(ctx, "bens: foto importada sem miniatura; a grade usa o original", "arquivo", f.Arquivo, "err", err)
-		return m, nil
+	if miniatura == nil {
+		// A foto já estava no volume e a miniatura não: sai do arquivo guardado.
+		if miniatura, err = gerarMiniatura(ctx, final, guardada.mime); err != nil || miniatura == nil {
+			slog.WarnContext(ctx, "bens: foto importada sem miniatura; a grade usa a foto", "arquivo", f.Arquivo, "err", err)
+			return m, nil
+		}
 	}
-	if _, err := gravarNoVolume(ctx, e.s.dir, caminhoMini, nil, bytes.NewReader(mini)); err != nil {
-		slog.WarnContext(ctx, "bens: miniatura importada não gravada; a grade usa o original", "arquivo", f.Arquivo, "err", err)
+	if _, err := gravarNoVolume(ctx, e.s.dir, caminhoMini, nil, bytes.NewReader(miniatura)); err != nil {
+		slog.WarnContext(ctx, "bens: miniatura importada não gravada; a grade usa a foto", "arquivo", f.Arquivo, "err", err)
 		return m, nil
 	}
 	e.rel.ArquivosEscritos++
@@ -854,24 +896,60 @@ func (e *execucaoDaImportacao) garantirArquivos(ctx context.Context, f fotoDoPla
 	return m, nil
 }
 
-func (e *execucaoDaImportacao) copiarOrigem(ctx context.Context, f fotoDoPlano, final string) error {
-	origem, err := e.fotos.Open(f.Arquivo)
+// prepararOrigem lê a foto do levantamento e devolve o que vai para o volume
+// e a miniatura dela. A convertível passa pela mesma prepararFoto do envio do
+// painel; as exceções planejadas (WebP, grande demais) vão como vieram, com
+// aviso. O tipo é conferido pelos bytes DE NOVO: o arquivo de origem pode ter
+// mudado desde a validação, e foto planejada para conversão que não converte
+// aborta a casa — a chave dela já diz JPEG.
+func (e *execucaoDaImportacao) prepararOrigem(ctx context.Context, f fotoDoPlano) ([]byte, []byte, error) {
+	ler := func() ([]byte, error) { return fs.ReadFile(e.fotos, f.Arquivo) }
+	if !f.Converter {
+		dados, err := ler()
+		if err != nil {
+			return nil, nil, fmt.Errorf("foto %q: %w", f.Arquivo, err)
+		}
+		if tipo, ok := detectarFoto(dados[:min(len(dados), tamanhoDaCabeca)]); !ok || tipo.mime != f.MimeDaOrigem {
+			return nil, nil, fmt.Errorf("foto %q mudou desde a validação: não é mais %s pelos bytes", f.Arquivo, f.MimeDaOrigem)
+		}
+		motivo := errSemOrcamento // o plano só deixa de converter WebP e foto grande demais
+		if f.MimeDaOrigem == mimeWebP {
+			motivo = errNaoConvertivel
+		}
+		slog.WarnContext(ctx, "bens: foto importada como veio, sem conversão",
+			"arquivo", f.Arquivo, "mime", f.MimeDaOrigem, "bytes", len(dados), "motivo", motivo)
+		return dados, nil, nil
+	}
+	prep, err := prepararFoto(ctx, tipoDeFoto{mime: f.MimeDaOrigem}, ler)
 	if err != nil {
-		return fmt.Errorf("foto %q: %w", f.Arquivo, err)
+		return nil, nil, fmt.Errorf("foto %q: %w", f.Arquivo, err)
 	}
-	defer func() { _ = origem.Close() }()
+	if prep.ComoVeio {
+		return nil, nil, fmt.Errorf("foto %q não pôde ser convertida (%v): corrija ou reexporte a foto e rode de novo", f.Arquivo, prep.Motivo)
+	}
+	if prep.Miniatura == nil {
+		slog.WarnContext(ctx, "bens: foto importada sem miniatura; a grade usa a foto", "arquivo", f.Arquivo, "err", prep.Motivo)
+	}
+	return prep.Dados, prep.Miniatura, nil
+}
+
+// tipoDoArquivo detecta, pelos bytes, o tipo de um arquivo do volume.
+func tipoDoArquivo(caminho string) (tipoDeFoto, error) {
+	arq, err := os.Open(caminho)
+	if err != nil {
+		return tipoDeFoto{}, err
+	}
+	defer func() { _ = arq.Close() }()
 	cabeca := make([]byte, tamanhoDaCabeca)
-	n, err := io.ReadFull(origem, cabeca)
+	n, err := io.ReadFull(arq, cabeca)
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
-		return fmt.Errorf("foto %q: %w", f.Arquivo, err)
+		return tipoDeFoto{}, err
 	}
-	if tipo, ok := detectarFoto(cabeca[:n]); !ok || tipo.mime != f.Mime {
-		return fmt.Errorf("foto %q mudou desde a validação: não é mais %s pelos bytes", f.Arquivo, f.Mime)
+	tipo, ok := detectarFoto(cabeca[:n])
+	if !ok {
+		return tipoDeFoto{}, errors.New("o arquivo no volume não é JPEG, PNG nem WebP pelos bytes")
 	}
-	if _, err := gravarNoVolume(ctx, e.s.dir, final, cabeca[:n], origem); err != nil {
-		return fmt.Errorf("foto %q: %w", f.Arquivo, err)
-	}
-	return nil
+	return tipo, nil
 }
 
 // ligacoes monta as galerias: `sort_order` = posição da foto no item.

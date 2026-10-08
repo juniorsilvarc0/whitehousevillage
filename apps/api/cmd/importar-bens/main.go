@@ -16,7 +16,9 @@
 // DATABASE_URL e MEDIA_DIR vêm da mesma configuração da API
 // (internal/platform/config). As fotos vão para MEDIA_DIR/bens, que precisa ser
 // o MESMO volume que a API serve — no stack de desenvolvimento, o volume nomeado
-// montado em /data/midia do contêiner, e não uma pasta do host.
+// montado em /data/midia do contêiner, e não uma pasta do host. Cada foto nova
+// passa pela mesma conversão do envio do painel (JPEG de até 1280 px,
+// qualidade 75, sem metadados); a que já está no volume não é reescrita.
 //
 // Este comando só lê flags e arquivos e imprime o relatório: validação,
 // mapeamento de vocabulário e gravação são do módulo.

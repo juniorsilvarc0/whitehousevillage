@@ -156,14 +156,16 @@ func TestPlanoDaImportacao(t *testing.T) {
 		t.Fatalf("três arquivos distintos, uma foto cada: %+v", p.Fotos)
 	}
 	a, b, c := p.Fotos[0], p.Fotos[1], p.Fotos[2]
-	if a.Chave != "importacao-chatwoot-1-10.jpg" || a.Miniatura != "importacao-chatwoot-1-10.thumb.jpg" || a.Mime != mimeJPEG {
+	if a.Chave != "importacao-chatwoot-1-10.jpg" || a.Miniatura != "importacao-chatwoot-1-10.thumb.jpg" || a.Mime != mimeJPEG || !a.Converter {
 		t.Fatalf("foto a: %+v", a)
 	}
-	if b.Chave != "importacao-chatwoot-1-11.png" || b.Mime != mimePNG {
-		t.Fatalf("foto b: tipo pelos bytes e extensão do tipo: %+v", b)
+	// O PNG é convertido como no envio do painel: vai para o volume como JPEG,
+	// e a chave já diz isso no plano (o dry-run sabe sem converter).
+	if b.Chave != "importacao-chatwoot-1-11.jpg" || b.Mime != mimeJPEG || b.MimeDaOrigem != mimePNG || !b.Converter {
+		t.Fatalf("foto b: PNG convertido vira JPEG no volume: %+v", b)
 	}
-	if c.Chave != "importacao-chatwoot-1-12.webp" || c.Miniatura != "" {
-		t.Fatalf("foto c: WebP sem miniatura: %+v", c)
+	if c.Chave != "importacao-chatwoot-1-12.webp" || c.Miniatura != "" || c.Converter || c.Mime != mimeWebP {
+		t.Fatalf("foto c: WebP vai como veio, sem miniatura: %+v", c)
 	}
 	if p.Pecas != 6 {
 		t.Fatalf("peças = %d, esperado 6", p.Pecas)

@@ -134,13 +134,27 @@ func (s *Service) caminhoNoVolume(chave string) (string, error) {
 	return filepath.Join(s.dir, chave), nil
 }
 
-// EnviarFoto grava a foto no volume, gera a miniatura e registra a linha.
+// EnviarFoto recebe a foto, CONVERTE (JPEG/PNG → JPEG de lado maior até
+// 1280 px, qualidade 75, sem metadados; conversao.go), grava no volume com a
+// miniatura e registra a linha — que descreve o arquivo GUARDADO: `mime`,
+// `bytes`, `width` e `height` são os da convertida, e o enviado não fica.
 //
-// A ordem mantém volume e banco coerentes: o arquivo é escrito num temporário
-// DENTRO da pasta (rename só é atômico no mesmo sistema de arquivos), renomeado
-// para o nome final, a miniatura é gravada ao lado, e só então a linha nasce.
-// Se o registro falhar, os dois arquivos são apagados — não sobra arquivo sem
-// linha. A miniatura falhar NÃO falha o envio: o original continua valendo.
+// WebP e foto grande demais para decodificar com segurança são guardados como
+// vieram, com aviso no log e sem recusar o envio (o contrato). O mesmo vale
+// para a foto que passou na detecção pelos bytes mas a biblioteca padrão não
+// decodifica (JPEG aritmético ou de 12 bits, arquivo cortado depois do
+// cabeçalho): é guardada como veio, avisada, e fica sem miniatura — como era
+// antes da conversão.
+//
+// JPEG que já cabe em 1280 px, sem orientação a aplicar, e cuja conversão não
+// sairia menor é guardado como veio MENOS os metadados (regraDaFonteMantida):
+// recodificar só perderia qualidade e aumentaria o arquivo.
+//
+// A ordem mantém volume e banco coerentes: o envio é recebido num temporário
+// DENTRO da pasta (sem passar inteiro pela memória enquanto a rede o entrega),
+// convertido, a foto guardada e a miniatura são gravadas com rename atômico, e
+// só então a linha nasce. Se o registro falhar, os arquivos são apagados — não
+// sobra arquivo sem linha. A miniatura falhar NÃO falha o envio.
 func (s *Service) EnviarFoto(ctx context.Context, corpo io.Reader, nome string) (Midia, error) {
 	prop, err := propriedadeDoAtor(ctx)
 	if err != nil {
@@ -170,13 +184,34 @@ func (s *Service) EnviarFoto(ctx context.Context, corpo io.Reader, nome string) 
 		return Midia{}, ErroDeArquivo(msgFotoInvalida)
 	}
 
+	recebido, enviados, err := receberNoVolume(ctx, s.dir, cabeca, corpo)
+	if err != nil {
+		return Midia{}, err
+	}
+	defer removerTemporario(ctx, recebido)
+
+	prep, err := prepararFoto(ctx, tipo, func() ([]byte, error) { return os.ReadFile(recebido) })
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			// Aba fechada esperando a vez da conversão: não é 500 (db.MapError).
+			return Midia{}, err
+		}
+		return Midia{}, apperr.Internal.WithCause(err)
+	}
+
 	id := uuid.New()
-	chave := id.String() + "." + tipo.ext
+	chave := id.String() + "." + prep.Ext
 	final, err := s.caminhoNoVolume(chave)
 	if err != nil {
 		return Midia{}, err
 	}
-	total, err := gravarNoVolume(ctx, s.dir, final, cabeca, corpo)
+	if prep.ComoVeio {
+		slog.WarnContext(ctx, "bens: foto guardada como veio, sem conversão",
+			"media_id", id, "mime", prep.Mime, "bytes", enviados, "motivo", prep.Motivo)
+		err = publicarNoVolume(recebido, final)
+	} else {
+		_, err = gravarNoVolume(ctx, s.dir, final, nil, bytes.NewReader(prep.Dados))
+	}
 	if err != nil {
 		return Midia{}, err
 	}
@@ -189,27 +224,34 @@ func (s *Service) EnviarFoto(ctx context.Context, corpo io.Reader, nome string) 
 		}
 	}
 
+	info, err := os.Stat(final)
+	if err != nil {
+		desfazer()
+		return Midia{}, apperr.Internal.WithCause(err)
+	}
 	m := registroDeMidia{
-		ID: id, PropriedadeID: prop, Mime: tipo.mime, Bytes: total,
+		ID: id, PropriedadeID: prop, Mime: prep.Mime, Bytes: info.Size(),
 		NomeOriginal: nomeOriginal(nome), ChaveArquivo: chave, CriadoPor: atorOuNulo(ctx),
 	}
-	if d, err := medirFoto(final, tipo.mime); err != nil {
+	if d, err := medirFoto(final, prep.Mime); err != nil {
 		slog.WarnContext(ctx, "bens: não consegui medir a foto", "media_id", id, "err", err)
 	} else {
 		m.Largura, m.Altura = &d.largura, &d.altura
 	}
 
-	if mini, err := gerarMiniatura(ctx, final, tipo.mime); err != nil {
-		slog.WarnContext(ctx, "bens: foto sem miniatura; a grade usa o original", "media_id", id, "err", err)
-	} else if mini != nil {
+	if prep.Miniatura == nil {
+		if !prep.ComoVeio {
+			slog.WarnContext(ctx, "bens: foto sem miniatura; a grade usa a foto", "media_id", id, "err", prep.Motivo)
+		}
+	} else {
 		chaveMini := id.String() + ".thumb.jpg"
 		caminhoMini, err := s.caminhoNoVolume(chaveMini)
 		if err != nil {
 			desfazer()
 			return Midia{}, err
 		}
-		if _, err := gravarNoVolume(ctx, s.dir, caminhoMini, nil, bytes.NewReader(mini)); err != nil {
-			slog.WarnContext(ctx, "bens: miniatura não gravada; a grade usa o original", "media_id", id, "err", err)
+		if _, err := gravarNoVolume(ctx, s.dir, caminhoMini, nil, bytes.NewReader(prep.Miniatura)); err != nil {
+			slog.WarnContext(ctx, "bens: miniatura não gravada; a grade usa a foto", "media_id", id, "err", err)
 		} else {
 			gravados = append(gravados, caminhoMini)
 			m.ChaveMiniatura = &chaveMini
@@ -231,50 +273,78 @@ func (s *Service) EnviarFoto(ctx context.Context, corpo io.Reader, nome string) 
 	return m.publica(), nil
 }
 
-// gravarNoVolume escreve `cabeca` + `resto` num temporário da pasta, aplica o
-// teto de 15 MB, sincroniza e renomeia para `final`. Devolve o total de bytes.
-func gravarNoVolume(ctx context.Context, dir, final string, cabeca []byte, resto io.Reader) (int64, error) {
+// receberNoVolume escreve `cabeca` + `resto` num temporário DENTRO da pasta
+// (o rename para o nome final só é atômico no mesmo sistema de arquivos),
+// aplica o teto de 15 MB e sincroniza. Devolve o caminho do temporário e o
+// total de bytes; quem chama publica (publicarNoVolume) ou apaga.
+func receberNoVolume(ctx context.Context, dir string, cabeca []byte, resto io.Reader) (string, int64, error) {
 	tmp, err := os.CreateTemp(dir, ".envio-*")
 	if err != nil {
-		return 0, apperr.Internal.WithCause(fmt.Errorf("bens: criando temporário: %w", err))
+		return "", 0, apperr.Internal.WithCause(fmt.Errorf("bens: criando temporário: %w", err))
 	}
 	nomeTmp := tmp.Name()
-	renomeado := false
+	pronto := false
 	defer func() {
-		if !renomeado {
+		if !pronto {
 			_ = tmp.Close()
-			if err := os.Remove(nomeTmp); err != nil && !errors.Is(err, os.ErrNotExist) {
-				slog.WarnContext(ctx, "bens: temporário de envio ficou no volume", "arquivo", nomeTmp, "err", err)
-			}
+			removerTemporario(ctx, nomeTmp)
 		}
 	}()
 
 	if _, err := tmp.Write(cabeca); err != nil {
-		return 0, apperr.Internal.WithCause(err)
+		return "", 0, apperr.Internal.WithCause(err)
 	}
 	// +1 para enxergar o byte que passa do teto sem ler o resto do corpo.
 	copiados, err := io.Copy(tmp, io.LimitReader(resto, LimiteDaFoto-int64(len(cabeca))+1))
 	total := int64(len(cabeca)) + copiados
 	if err != nil {
-		return 0, erroDeLeitura(err)
+		return "", 0, erroDeLeitura(err)
 	}
 	if total > LimiteDaFoto {
-		return 0, ErroDeArquivo(msgFotoInvalida)
+		return "", 0, ErroDeArquivo(msgFotoInvalida)
 	}
 	if err := tmp.Sync(); err != nil {
-		return 0, apperr.Internal.WithCause(err)
+		return "", 0, apperr.Internal.WithCause(err)
 	}
 	if err := tmp.Close(); err != nil {
-		return 0, apperr.Internal.WithCause(err)
+		return "", 0, apperr.Internal.WithCause(err)
 	}
-	if err := os.Chmod(nomeTmp, permissaoArquivo); err != nil {
-		return 0, apperr.Internal.WithCause(err)
+	pronto = true
+	return nomeTmp, total, nil
+}
+
+// publicarNoVolume dá ao temporário a permissão final e o renomeia para o
+// nome definitivo.
+func publicarNoVolume(tmp, final string) error {
+	if err := os.Chmod(tmp, permissaoArquivo); err != nil {
+		return apperr.Internal.WithCause(err)
 	}
-	if err := os.Rename(nomeTmp, final); err != nil {
-		return 0, apperr.Internal.WithCause(fmt.Errorf("bens: renomeando envio: %w", err))
+	if err := os.Rename(tmp, final); err != nil {
+		return apperr.Internal.WithCause(fmt.Errorf("bens: renomeando envio: %w", err))
 	}
-	renomeado = true
+	return nil
+}
+
+// gravarNoVolume escreve `cabeca` + `resto` no nome final, passando pelo
+// temporário (receber + publicar). Devolve o total de bytes.
+func gravarNoVolume(ctx context.Context, dir, final string, cabeca []byte, resto io.Reader) (int64, error) {
+	tmp, total, err := receberNoVolume(ctx, dir, cabeca, resto)
+	if err != nil {
+		return 0, err
+	}
+	if err := publicarNoVolume(tmp, final); err != nil {
+		removerTemporario(ctx, tmp)
+		return 0, err
+	}
 	return total, nil
+}
+
+// removerTemporario apaga o temporário que sobrou; já publicado (renomeado),
+// não há o que apagar.
+func removerTemporario(ctx context.Context, caminho string) {
+	if err := os.Remove(caminho); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.WarnContext(ctx, "bens: temporário de envio ficou no volume", "arquivo", caminho, "err", err)
+	}
 }
 
 // erroDeLeitura traduz a falha ao ler o corpo: o teto do corpo inteiro

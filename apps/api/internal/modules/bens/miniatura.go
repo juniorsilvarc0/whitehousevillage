@@ -35,12 +35,13 @@ const (
 	orcamentoDeMemoria = 256 << 20
 )
 
-// semaforoDaMiniatura serializa a geração: duas fotos de 48 MP decodificadas
-// ao mesmo tempo dobram o pico de memória do processo, e o ganho de paralelismo
+// semaforoDeDecodificacao serializa TODA decodificação de foto — a conversão
+// no envio (conversao.go) e a miniatura: duas fotos de 48 MP decodificadas ao
+// mesmo tempo dobram o pico de memória do processo, e o ganho de paralelismo
 // aqui é nenhum — o gargalo do envio é a rede do celular.
-var semaforoDaMiniatura = make(chan struct{}, 1)
+var semaforoDeDecodificacao = make(chan struct{}, 1)
 
-var errSemOrcamento = errors.New("bens: foto grande demais para gerar miniatura")
+var errSemOrcamento = errors.New("bens: foto grande demais para decodificar com segurança")
 
 // dimensoes é o tamanho da foto como ela APARECE (já com a orientação EXIF):
 // é o que a tela usa para reservar o espaço da imagem.
@@ -88,16 +89,19 @@ func medirFoto(caminho, mime string) (*dimensoes, error) {
 	return nil, fmt.Errorf("bens: tipo sem medição: %s", mime)
 }
 
-// gerarMiniatura decodifica a foto, reduz e devolve o JPEG da miniatura.
-// WebP devolve (nil, nil): sem miniatura, sem erro.
+// gerarMiniatura decodifica a foto JÁ GUARDADA no volume, reduz e devolve o
+// JPEG da miniatura. É o caminho de quem não tem a imagem na memória — o
+// importador reaproveitando um arquivo que já estava no volume. Foto nova
+// gera a miniatura da imagem convertida (prepararFoto), sem decodificar duas
+// vezes. WebP devolve (nil, nil): sem miniatura, sem erro.
 func gerarMiniatura(ctx context.Context, caminho, mime string) ([]byte, error) {
 	if mime != mimeJPEG && mime != mimePNG {
 		return nil, nil
 	}
 
 	select {
-	case semaforoDaMiniatura <- struct{}{}:
-		defer func() { <-semaforoDaMiniatura }()
+	case semaforoDeDecodificacao <- struct{}{}:
+		defer func() { <-semaforoDeDecodificacao }()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -127,7 +131,7 @@ func gerarMiniatura(ctx context.Context, caminho, mime string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if int64(cfg.Width)*int64(cfg.Height)*bytesPorPixel(cfg.ColorModel) > orcamentoDeMemoria {
+	if !cabeNoOrcamento(cfg) {
 		return nil, errSemOrcamento
 	}
 	if _, err := f.Seek(0, io.SeekStart); err != nil {
@@ -138,12 +142,23 @@ func gerarMiniatura(ctx context.Context, caminho, mime string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return codificarMiniatura(img, orientacao)
+}
+
+// miniaturaDaImagem gera a miniatura de uma imagem já na memória e já em pé
+// (a convertida no envio).
+func miniaturaDaImagem(img image.Image) ([]byte, error) {
+	return codificarMiniatura(img, 1)
+}
+
+// codificarMiniatura reduz ao lado da miniatura, aplica a orientação sobre a
+// imagem já pequena e codifica JPEG.
+func codificarMiniatura(img image.Image, orientacao int) ([]byte, error) {
 	b := img.Bounds()
 	if b.Dx() <= 0 || b.Dy() <= 0 {
 		return nil, errors.New("bens: foto sem pixels")
 	}
-
-	lw, lh := tamanhoDaMiniatura(b.Dx(), b.Dy(), ladoDaMiniatura)
+	lw, lh := encaixarNoLado(b.Dx(), b.Dy(), ladoDaMiniatura)
 	reduzida := orientar(reduzir(img, lw, lh), orientacao)
 
 	var buf bytes.Buffer
@@ -170,9 +185,10 @@ func bytesPorPixel(m color.Model) int64 {
 	}
 }
 
-// tamanhoDaMiniatura encaixa w×h num quadrado de lado `lado`, mantendo a
-// proporção. Nunca AMPLIA: foto menor que o lado sai do mesmo tamanho.
-func tamanhoDaMiniatura(w, h, lado int) (int, int) {
+// encaixarNoLado encaixa w×h num quadrado de lado `lado`, mantendo a
+// proporção — a miniatura (480) e a foto guardada (1280). Nunca AMPLIA: foto
+// menor que o lado sai do mesmo tamanho.
+func encaixarNoLado(w, h, lado int) (int, int) {
 	maior := max(w, h)
 	if maior <= lado {
 		return w, h
@@ -277,10 +293,10 @@ func reduzir(img image.Image, lw, lh int) *image.RGBA {
 	return out
 }
 
-// orientar aplica a orientação EXIF (1–8) à miniatura. O decoder da stdlib
-// IGNORA o EXIF, e o navegador o RESPEITA ao mostrar o original — sem isto a
-// miniatura da foto tirada com o celular em pé sairia deitada, ao lado de um
-// original em pé. Roda sobre a miniatura (no máximo 480×480), não sobre a foto.
+// orientar aplica a orientação EXIF (1–8) aos pixels. O decoder da stdlib
+// IGNORA o EXIF, e o navegador o RESPEITA ao mostrar a foto — sem isto a foto
+// tirada com o celular em pé sairia deitada. Roda sobre a imagem já reduzida
+// (a miniatura, no máximo 480; a foto guardada, no máximo 1280).
 func orientar(src *image.RGBA, orientacao int) *image.RGBA {
 	if orientacao < 2 || orientacao > 8 {
 		return src
