@@ -58,6 +58,8 @@ type ambiente struct {
 	emissor     *auth.Emissor
 	ctx         context.Context
 	propriedade uuid.UUID
+	// dirMidia é o MEDIA_DIR do handler; as fotos ficam em dirMidia/bens.
+	dirMidia string
 
 	// O que o teste criou, para a limpeza única do fim (ver subir).
 	mu           sync.Mutex
@@ -92,7 +94,8 @@ func subir(t *testing.T) *ambiente {
 
 	emissor := auth.NovoEmissor(segredoJWT, 15*time.Minute)
 	autenticador := auth.NewAutenticador(emissor, auth.NewRepository(pool))
-	h := bens.NovoHandler(pool, db.NewTxManager(pool), t.TempDir())
+	dirMidia := t.TempDir()
+	h := bens.NovoHandler(pool, db.NewTxManager(pool), dirMidia)
 
 	r := chi.NewRouter()
 	montadas := 0
@@ -115,7 +118,7 @@ func subir(t *testing.T) *ambiente {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	a := &ambiente{pool: pool, servidor: srv, emissor: emissor, ctx: ctx}
+	a := &ambiente{pool: pool, servidor: srv, emissor: emissor, ctx: ctx, dirMidia: dirMidia}
 	if err := pool.QueryRow(ctx, `SELECT id FROM properties ORDER BY created_at LIMIT 1`).Scan(&a.propriedade); err != nil {
 		t.Fatalf("lendo a propriedade do seed (rodou cmd/seed?): %v", err)
 	}

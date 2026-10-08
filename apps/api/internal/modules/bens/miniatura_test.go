@@ -44,7 +44,7 @@ func TestTamanhoDaMiniaturaNuncaAmplia(t *testing.T) {
 		{10000, 10, 480, 1},
 	}
 	for _, c := range casos {
-		lw, lh := tamanhoDaMiniatura(c.w, c.h, 480)
+		lw, lh := encaixarNoLado(c.w, c.h, 480)
 		if lw != c.lw || lh != c.lh {
 			t.Errorf("%dx%d → %dx%d, esperado %dx%d", c.w, c.h, lw, lh, c.lw, c.lh)
 		}

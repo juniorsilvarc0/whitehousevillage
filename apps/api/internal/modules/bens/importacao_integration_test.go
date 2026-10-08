@@ -3,8 +3,13 @@
 package bens_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"io/fs"
 	"net/http"
 	"os"
@@ -460,5 +465,114 @@ func TestImportacaoFalhaNoMeioDesfazOBancoEReaproveitaOrfao(t *testing.T) {
 	}
 	if n := c.arquivosNoVolume(t); n != 6 {
 		t.Fatalf("o volume termina com 6 arquivos, tem %d", n)
+	}
+}
+
+// trocarFoto põe outro conteúdo, com outra extensão, no lugar de uma foto do
+// cenário — e nas referências do levantamento.
+func (c *cenarioDeImportacao) trocarFoto(letra, ext string, dados []byte) string {
+	velho := "it_" + c.sufixo + "_" + letra + ".jpg"
+	novo := "it_" + c.sufixo + "_" + letra + "." + ext
+	delete(c.fotos, velho)
+	c.fotos[novo] = &fstest.MapFile{Data: dados}
+	for i := range c.lev.Itens {
+		for j := range c.lev.Itens[i].Fotos {
+			if c.lev.Itens[i].Fotos[j].Arquivo == velho {
+				c.lev.Itens[i].Fotos[j].Arquivo = novo
+			}
+		}
+	}
+	return novo
+}
+
+// A importação passa pela MESMA conversão do envio do painel: a foto grande
+// vai a 1280 px, o PNG vira JPEG (e a chave, `.jpg`), a WebP vai como veio
+// (chave `.webp`, sem miniatura). O registro descreve o arquivo guardado. E o
+// que já está no volume não é reescrito nem reconvertido, mesmo que a origem
+// mude.
+func TestImportacaoConverteAsFotosComoOEnvio(t *testing.T) {
+	a := subir(t)
+	c := a.cenarioDeImportacao(t)
+
+	grande := fotoDeCelular(t, 2400, 1800)
+	c.trocarFoto("a", "jpg", grande)
+	transparente := image.NewNRGBA(image.Rect(0, 0, 640, 480))
+	for y := range 480 {
+		for x := 320; x < 640; x++ {
+			transparente.SetNRGBA(x, y, color.NRGBA{0, 0, 200, 255})
+		}
+	}
+	var comAlfa bytes.Buffer
+	if err := png.Encode(&comAlfa, transparente); err != nil {
+		t.Fatal(err)
+	}
+	c.trocarFoto("b", "png", comAlfa.Bytes())
+	webp := webp1x1(t)
+	c.trocarFoto("c", "webp", webp)
+	chaveDaWebP := fmt.Sprintf("importacao-chatwoot-it%s-3.webp", c.sufixo)
+
+	if previsto := c.importar(t, true); previsto.ArquivosEscritos != 5 {
+		t.Fatalf("o dry-run prevê 5 arquivos (2 fotos com miniatura e a WebP sem): %+v", previsto)
+	}
+	rel := c.importar(t, false)
+	if rel.ArquivosEscritos != 5 || rel.ArquivosNoVolume != 0 || rel.Fotos.Criados != 3 {
+		t.Fatalf("primeira passada: %+v", rel)
+	}
+
+	noVolume := func(chave string) []byte {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(c.midia, bens.SubdiretorioDoVolume, chave))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	for _, quer := range []struct {
+		chave, mime string
+		w, h        int
+		miniatura   bool
+	}{
+		{c.chave(1), "image/jpeg", 1280, 960, true},
+		{c.chave(2), "image/jpeg", 640, 480, true},
+		{chaveDaWebP, "image/webp", 1, 1, false},
+	} {
+		var mime string
+		var tamanho int64
+		var w, h int
+		var temMiniatura bool
+		if err := a.pool.QueryRow(a.ctx, `SELECT mime, bytes, width, height, thumb_key IS NOT NULL FROM inventory_media WHERE storage_key = $1`,
+			quer.chave).Scan(&mime, &tamanho, &w, &h, &temMiniatura); err != nil {
+			t.Fatalf("%s: %v", quer.chave, err)
+		}
+		if mime != quer.mime || w != quer.w || h != quer.h || temMiniatura != quer.miniatura {
+			t.Fatalf("%s: %s %d×%d miniatura=%v; esperado %s %d×%d miniatura=%v", quer.chave, mime, w, h, temMiniatura, quer.mime, quer.w, quer.h, quer.miniatura)
+		}
+		if guardado := noVolume(quer.chave); int64(len(guardado)) != tamanho {
+			t.Fatalf("%s: o registro diz %d bytes, o volume tem %d", quer.chave, tamanho, len(guardado))
+		}
+	}
+	if n := len(noVolume(c.chave(1))); n >= len(grande) {
+		t.Fatalf("a foto grande guardada (%d bytes) tem de ser menor que a origem (%d)", n, len(grande))
+	}
+	daPNG, err := jpeg.Decode(bytes.NewReader(noVolume(c.chave(2))))
+	if err != nil {
+		t.Fatalf("o PNG é guardado como JPEG: %v", err)
+	}
+	if vr, vg, vb, _ := daPNG.At(100, 240).RGBA(); vr>>8 < 245 || vg>>8 < 245 || vb>>8 < 245 {
+		t.Fatalf("o transparente do PNG vira branco, virou (%d,%d,%d)", vr>>8, vg>>8, vb>>8)
+	}
+	if !bytes.Equal(noVolume(chaveDaWebP), webp) {
+		t.Fatal("a WebP vai como veio")
+	}
+
+	// A origem da foto grande muda; o volume já tem a dela e não reconverte.
+	antes := noVolume(c.chave(1))
+	c.fotos["it_"+c.sufixo+"_a.jpg"] = &fstest.MapFile{Data: fotoDeCelular(t, 3000, 2000)}
+	segunda := c.importar(t, false)
+	if segunda.ArquivosEscritos != 0 || segunda.ArquivosNoVolume != 5 {
+		t.Fatalf("a segunda passada não escreve nada: %+v", segunda)
+	}
+	if !bytes.Equal(noVolume(c.chave(1)), antes) {
+		t.Fatal("o arquivo que já estava no volume foi reescrito")
 	}
 }

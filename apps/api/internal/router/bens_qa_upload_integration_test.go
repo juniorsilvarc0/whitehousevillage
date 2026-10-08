@@ -148,14 +148,22 @@ func TestBensQAEnvioDeFotoRecusaOQueNaoEhFotoAceita(t *testing.T) {
 	})
 
 	// O limite é "até 15 MB": 15.000.000 bytes estão dentro em qualquer leitura
-	// de MB. É a foto de 48 MP do celular, e ela tem de entrar.
+	// de MB. É a foto de 48 MP do celular, e ela tem de entrar. O volume guarda
+	// a CONVERTIDA (JPEG, lado maior até 1280 px), e `bytes`, `width` e
+	// `height` descrevem o arquivo guardado — não o enviado.
 	t.Run("15.000.000 bytes entram", func(t *testing.T) {
 		grande := make([]byte, 15_000_000)
 		copy(grande, jpegDeVerdade)
 		r := a.qbEnviarFoto(t, u.Token, "file", "48mp.jpg", "image/jpeg", grande)
 		m := qbDado[qbMidia](t, r, http.StatusCreated, "foto de 15.000.000 bytes")
-		if m.Bytes != 15_000_000 || m.Mime != "image/jpeg" {
-			t.Fatalf("registro da foto grande: %+v", m)
+		if m.Mime != "image/jpeg" || m.Bytes <= 0 || m.Bytes >= 15_000_000 {
+			t.Fatalf("registro da foto grande (guardada convertida, menor que a enviada): %+v", m)
+		}
+		if m.Largura == nil || m.Altura == nil {
+			t.Fatalf("a foto guardada tem dimensões: %+v", m)
+		}
+		if *m.Largura != 64 || *m.Altura != 48 {
+			t.Fatalf("a foto guardada é a de 64×48 que veio no começo do envio, veio %d×%d", *m.Largura, *m.Altura)
 		}
 	})
 }
@@ -186,8 +194,13 @@ func TestBensQAMiniaturaDoJPEGComOrientacaoExifSaiEmPe(t *testing.T) {
 	if m.Miniatur == m.URL || m.Miniatur != m.URL+"?size=thumb" {
 		t.Fatalf("JPEG decodificável tem de gerar miniatura: url=%q thumb_url=%q", m.URL, m.Miniatur)
 	}
-	if m.Largura != nil && m.Altura != nil {
-		t.Logf("dimensões declaradas: %d×%d (contrato não fixa se são as de exibição)", *m.Largura, *m.Altura)
+	// A orientação é aplicada na conversão: a foto é GUARDADA em pé, e as
+	// dimensões descrevem o arquivo guardado.
+	if m.Largura == nil || m.Altura == nil {
+		t.Fatalf("a foto decodificável tem dimensões: %+v", m)
+	}
+	if *m.Largura != 800 || *m.Altura != 1200 {
+		t.Fatalf("a foto guardada está em pé, 800×1200; veio %d×%d", *m.Largura, *m.Altura)
 	}
 
 	mini := a.qbBaixar(t, u.Token, m.Miniatur)
@@ -221,10 +234,10 @@ func TestBensQAMiniaturaDoJPEGComOrientacaoExifSaiEmPe(t *testing.T) {
 	}
 }
 
-// Em linguagem de negócio: a foto PNG (print de tela, foto editada) também
-// vira miniatura JPEG; a WebP, que a biblioteca padrão não lê, sai com
-// `thumb_url == url` — a grade mostra o original, e a foto nunca deixa de
-// valer por causa da miniatura.
+// Em linguagem de negócio: a foto PNG (print de tela, foto editada) é guardada
+// como JPEG e também vira miniatura JPEG; a WebP, que a biblioteca padrão não
+// lê, é guardada como veio e sai com `thumb_url == url` — a grade mostra o
+// original, e a foto nunca deixa de valer por causa da miniatura.
 func TestBensQAMiniaturaDoPNGEWebPSemMiniatura(t *testing.T) {
 	a := subirAPI(t)
 	u := a.criarUsuario(t, "bens-foto", a.qbPerfilDoSeed(t, "usuario"))
@@ -234,8 +247,8 @@ func TestBensQAMiniaturaDoPNGEWebPSemMiniatura(t *testing.T) {
 		original := qbPNG(t, 1000, 500)
 		r := a.qbEnviarFoto(t, u.Token, "file", "print.png", "image/png", original)
 		m := qbDado[qbMidia](t, r, http.StatusCreated, "PNG")
-		if m.Mime != "image/png" {
-			t.Errorf("mime = %q", m.Mime)
+		if m.Mime != "image/jpeg" {
+			t.Errorf("mime = %q; o PNG é guardado convertido em JPEG", m.Mime)
 		}
 		if m.Miniatur != m.URL+"?size=thumb" {
 			t.Fatalf("PNG decodificável tem de gerar miniatura: url=%q thumb_url=%q", m.URL, m.Miniatur)
@@ -247,8 +260,12 @@ func TestBensQAMiniaturaDoPNGEWebPSemMiniatura(t *testing.T) {
 			t.Fatalf("miniatura do PNG 1000×500: %d×%d (%v), esperado JPEG 480×240", cfg.Width, cfg.Height, err)
 		}
 		orig := a.qbBaixar(t, u.Token, m.URL)
-		if orig.Headers.Get("Content-Type") != "image/png" || !bytes.Equal(orig.Corpo, original) {
-			t.Errorf("o original do PNG não volta intacto: %q, %d bytes de %d", orig.Headers.Get("Content-Type"), len(orig.Corpo), len(original))
+		exigirStatusQB(t, orig, http.StatusOK, "foto do PNG")
+		guardada, err := jpeg.DecodeConfig(bytes.NewReader(orig.Corpo))
+		if orig.Headers.Get("Content-Type") != "image/jpeg" || err != nil || guardada.Width != 1000 || guardada.Height != 500 ||
+			int64(len(orig.Corpo)) != m.Bytes {
+			t.Errorf("a foto do PNG volta como o JPEG guardado, 1000×500 e com os bytes registrados: %q, %d×%d (%v), %d bytes de %d",
+				orig.Headers.Get("Content-Type"), guardada.Width, guardada.Height, err, len(orig.Corpo), m.Bytes)
 		}
 	})
 
