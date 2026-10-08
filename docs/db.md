@@ -35,7 +35,17 @@ fechada, cancelada e aberta numa transação desfeita; e o ciclo rodou `up` → 
 `up` no banco de desenvolvimento (PG 16) e `up` → `down 1` → `up` → `down -all` → `up`
 num Postgres descartável (PG 17, no host, porque a VM do Docker estava sem disco). O
 `pg_dump --schema-only` depois de `up` + `down 1` é idêntico ao de um banco que nunca viu
-a migration. Para repetir a conferência de qualquer afirmação daqui:
+a migration. Ainda em **07/10/2026**, §3, §11, §14 e §15 foram conferidos em
+`20261007213000` (`unit_rooms.code`, a identidade estável do cômodo). A coluna, as três
+constraints e o comentário foram lidos de `information_schema`/`pg_constraint`. O backfill
+foi provado com 24 cômodos em três unidades (acento composto e decomposto, colisão, nome
+que vira vazio, corte em 60, ordem por `created_at`), primeiro numa transação desfeita e
+depois comitado e migrado pelo `cmd/migrate`, no PG 16 do desenvolvimento (`en_US.utf8`) e
+num PG 17 descartável em `locale C`, com resultado idêntico. Formato, tamanho e `UNIQUE`
+foram provados com `INSERT` que deve falhar. O ciclo rodou `up` → `down 1` → `up` no
+desenvolvimento e `up` → `down 1` → `up` → `down -all` → `up` no descartável, e o
+`pg_dump --schema-only` depois de cada `down 1` é idêntico ao de antes da migration. Para
+repetir a conferência de qualquer afirmação daqui:
 
 ```bash
 # quais tabelas existem
@@ -196,7 +206,9 @@ unit_type_members(unit_type_id, unit_id)   -- PK composta — o vínculo é AQUI
 
 `amenities`, `unit_amenities` e `unit_photos` **ainda não existem no banco** — entram
 com a ficha da unidade. **`unit_rooms` existe** desde `20261007170000`: é a unidade
-dividida em cômodos, e vive em §11 porque quem a usa é o inventário. A unicidade é
+dividida em cômodos, e vive em §11 porque quem a usa é o inventário. Desde
+`20261007213000` o cômodo tem `code`, que é para ele o que `units.code` é para a unidade:
+identidade que não se edita, única **na unidade** (§11). A unicidade de `units` e `unit_types` é
 `(property_id, code)` nas duas tabelas, e não
 `code` sozinho como esta página dizia: `property_id` existe em toda tabela justamente
 para caber uma segunda propriedade, e o `AP-01` dela colidiria com o `AP-01` desta.
@@ -642,7 +654,8 @@ Comissão incide sobre diárias, nunca sobre limpeza ou caução. Caução é `r
 ## 11. Operação — inventário de bens por ambiente
 
 Entregue em `20261007170000`; o custo congelado na linha da conferência veio em
-`20261007200000`. **Oito tabelas existem**; três continuam projeto (abaixo).
+`20261007200000`, e a identidade estável do cômodo (`unit_rooms.code`) em
+`20261007213000`. **Oito tabelas existem**; três continuam projeto (abaixo).
 
 Esta seção projetava, desde 20/08/2026, duas tabelas que nunca foram criadas —
 `inventory_items(… min_stock, cost_cents)` e `unit_inventory(unit_id, item_id,
@@ -655,9 +668,10 @@ banco.
 
 ```
 unit_rooms(id, property_id, unit_id → units, name, kind, sort_order, active,
-           created_at, updated_at)                                         -- 9 colunas
+           created_at, updated_at, code)                                  -- 10 colunas
         -- kind: quarto | banheiro | cozinha | sala | area_externa | lavanderia | varanda | outro
-        -- UNIQUE (unit_id, name); unit_id ON DELETE RESTRICT
+        -- UNIQUE (unit_id, name); UNIQUE (unit_id, code); unit_id ON DELETE RESTRICT
+        -- code: ^[a-z0-9]+(-[a-z0-9]+)*$, até 60, não editável pela API
 inventory_items(id, property_id, name, description?, category, unit_measure,
                 replacement_cost_cents?, active, source_ref?, created_at, updated_at)
                                                                           -- 11 colunas
@@ -780,7 +794,53 @@ da casa é uma soma sobre linhas que ninguém audita. É a mesma separação de 
   não se compra constraint no escuro.
 - A migration termina com o mesmo bloco `DO` de `20260827110000`: **aborta** se qualquer
   tabela do módulo passar de 25 colunas. A maior tem 15. `20261007200000` repete o bloco
-  para `inventory_count_lines`, que foi de 11 para 12.
+  para `inventory_count_lines`, que foi de 11 para 12, e `20261007213000` para
+  `unit_rooms`, que foi de 9 para 10.
+
+**`unit_rooms.code` é a identidade do cômodo; `name` é o rótulo** (`20261007213000`). É o
+`units.code` do cômodo: `NOT NULL`, minúsculo, sem acento, separado por hífen
+(`unit_rooms_code_formato`, o mesmo `pattern` de `Ambiente.code` no contrato), até 60
+caracteres (`unit_rooms_code_tamanho`) e único **na unidade** (`unit_rooms_code_unico`). Na
+unidade, e não na propriedade, de propósito: `cozinha` existe em cada um dos 6 duplex, e é
+por esse código que a cópia de inventário casa a cozinha do AP-01 com a do AP-02, mesmo
+depois de alguém renomear uma das duas. `name` continua editável e único na unidade
+(`unit_rooms_nome_unico`). Duas garantias são da API, e não do banco. A primeira: o `code`
+**não muda depois de criado**. `PUT` e `PATCH` não aceitam o campo, mas nada impede um
+`UPDATE` pelo psql, e fechar isso exigiria gatilho para um escritor só (a decisão de
+`expected_qty`). A segunda: a **derivação**, quando o `POST` não traz o código. Não há
+`DEFAULT` nem gatilho que derive, porque `DEFAULT` não lê outra coluna e regra mantida em
+dois lugares acaba divergindo. A migration aplicou a regra uma vez, às linhas que já
+existiam, e a API a repete. As duas implementações têm de dar o mesmo resultado, caractere
+a caractere:
+
+1. Remover os code points U+0300–U+036F (acento combinante, de nome que chega decomposto
+   em NFD, como o macOS às vezes entrega). Sem isso, "Área" viraria `a-rea`.
+2. Trocar caractere por caractere pela tabela, e nada além dela: `ÀÁÂÃÄàáâãä` → `a`,
+   `ÈÉÊËèéêë` → `e`, `ÌÍÎÏìíîï` → `i`, `ÒÓÔÕÖòóôõö` → `o`, `ÙÚÛÜùúûü` → `u`, `Çç` → `c`,
+   `Ññ` → `n`, `A–Z` → `a–z`. Sem `lower()` nem minúscula Unicode: o do Postgres depende do
+   locale, o `strings.ToLower` do Go segue a tabela Unicode, e os dois discordam fora do
+   ASCII. Letra fora da tabela (`ø`, `ß`, `º`) segue para o passo 3 como qualquer símbolo.
+3. Cada sequência **máxima** de caracteres fora de `[a-z0-9]` vira **um** hífen.
+4. Tirar os hífens das duas pontas.
+5. Passando de 60 caracteres, ficar com os 60 primeiros e tirar o hífen do fim, se
+   sobrar. A string já é ASCII aqui, então caractere = byte.
+6. Vazio (nome só de emoji ou de pontuação) vira `comodo`.
+7. O código é o primeiro **livre na unidade**, contra todos os cômodos dela, ativos ou
+   não, na sequência `base`, `base-2`, `base-3`… No candidato com sufixo `-n`, a base é
+   antes cortada em `60 − len("-n")` caracteres e perde o hífen do fim, se sobrar.
+
+"Área da churrasqueira" → `area-da-churrasqueira`; "Suíte 1 (térreo)" → `suite-1-terreo`;
+"Sala" e depois "SALA!" na mesma unidade → `sala` e `sala-2`; "Quarto", "Quarto!" e depois
+"Quarto 2" → `quarto`, `quarto-2` e `quarto-2-2`; "🛏️" → `comodo`. O backfill processou
+cada unidade em ordem de `(created_at, id)`, cada cômodo enxergando os códigos dados aos
+anteriores. Assim o mais antigo ficou com o código sem sufixo, como se a API o tivesse
+derivado no primeiro `POST`. A derivação concorrente é da API: dois `POST` simultâneos
+que derivam o mesmo código esbarram em `unit_rooms_code_unico` (`23505`), e só o código
+**informado** pelo cliente é `409 CODE_IN_USE`. O derivado tenta o próximo sufixo. O
+`down` é **lossy**: os códigos somem, e o `up` seguinte os deriva do `name` **atual**.
+Cômodo renomeado ganha código novo (medido: "Quarto" renomeado para "Suíte Master" volta
+como `suite-master`, não `quarto`). Hoje isso é inofensivo, mas deixa de ser no dia em que
+uma importação real tiver rodado.
 
 **Permissão: dois recursos, e por quê.** O recurso RBAC `inventory` **já estava** no
 catálogo do seed desde `20260820140000`, e a migration não o toca porque `resources` é
@@ -808,25 +868,36 @@ não é opcional: `permissions.test.ts` lê o `catalogoSeed` do Go e reprova enq
 listas divergirem — recurso que o painel não sabe citar é tela que some para todo mundo,
 inclusive o admin, sem nenhum 403 para denunciar. Recurso novo entra no seed primeiro.
 
-**Seed de dados de inventário não existe — e `unit_rooms` não vai ter.** Nenhum ambiente,
-item ou foto é semeado, e no caso do ambiente isso é decisão, não pendência: a única
-chave natural de `unit_rooms` é `(unit_id, name)`, e `name` é exatamente o campo que o
-gestor edita na tela. Seed chaveado num rótulo editável não é idempotente contra
-instalação viva — renomear "Quarto grande" para "Suíte Master" no painel e rodar
-`make seed` recriaria o "Quarto grande" como cômodo a mais, fantasma na lista de
-conferência e na contagem. `units` não tem esse problema porque `code` ("AP-01") não se
-edita e é citado pela composição dos produtos. É também o que o schema já diz: o gancho
-de importação repetível (`source_ref`, único parcial) está em `inventory_items` e **não**
-em `unit_rooms`. A objeção óbvia é `special_periods`, que também é chaveado por um nome
-editável (`UNIQUE (property_id, name)`) e **é** semeado: a diferença é o número de
-escritores. O calendário comercial é declarado pelo dono e o seed é a única fonte dele; o
-ambiente tem um segundo escritor por desenho — a importação do levantamento fotográfico.
-Duas fontes derivando a mesma lista de um mesmo documento escrevem strings diferentes
-("Área da churrasqueira (rooftop)" e "Rooftop"), e `UNIQUE (unit_id, name)` não pega
-quase-duplicado: a casa fica com o mesmo cômodo duas vezes e `room_inventory` partido
-entre as duas metades. Ambiente entra por importação ou pela tela, com uma fonte só; dar a
-`unit_rooms` um `code` ou `source_ref` é o pré-requisito de qualquer seed de ambiente, e
-é migration, não seed.
+**Seed de dados de inventário não existe, e o bloqueio do ambiente acabou em
+`20261007213000`.** Nenhum ambiente, item ou foto é semeado. Até aquela migration, no caso
+do ambiente, isso era decisão e não pendência. A única chave natural de `unit_rooms` era
+`(unit_id, name)`, e `name` é justamente o campo que o gestor edita na tela. Seed ou
+importação chaveados num rótulo editável não são idempotentes contra instalação viva:
+renomear "Quarto grande" para "Suíte Master" no painel e reimportar recriaria o "Quarto
+grande" como cômodo a mais, fantasma na lista de conferência e na contagem. O
+pré-requisito que este parágrafo pedia agora existe, e é **`unit_rooms.code`**, que não se
+edita, como `units.code` ("AP-01"). A importação do levantamento fotográfico (GV-01 e
+CV-01, 36 ambientes e 759 itens) e qualquer seed de ambiente que vier reencontram o cômodo
+por **`(unit_id, code)`**, com `ON CONFLICT (unit_id, code)` sobre `unit_rooms_code_unico`.
+O item continua chaveado por `(property_id, source_ref)`. A cópia de inventário entre
+unidades casa origem e destino pelo mesmo `code`.
+
+O `code` resolve o rename. Não resolve tudo, e duas cautelas continuam valendo:
+
+- **A importação declara o `code`; não o deriva do nome.** O ambiente tem dois escritores
+  por desenho, a tela e a importação, e duas fontes descrevendo o mesmo cômodo escrevem
+  strings diferentes ("Rooftop" na tela, "Área da churrasqueira (rooftop)" no
+  levantamento). Derivados, viram `rooftop` e `area-da-churrasqueira-rooftop`, e a `UNIQUE`
+  pega duplicata exata, não quase-duplicata: a casa ficaria com o mesmo cômodo duas vezes
+  e `room_inventory` partido entre as duas metades. A fonte da importação carrega o próprio
+  código, estável entre passadas, e cada cômodo entra por uma fonte só.
+- **A reimportação não reescreve o que a tela edita.** Depois que o cômodo existe,
+  `name`, `kind`, `sort_order` e `active` são do gestor. Um `DO UPDATE SET name =
+  EXCLUDED.name` desfaria o rename a cada passada, que é o defeito que o `code` veio
+  fechar, só que pelo outro lado. É a regra 3 do seed (§16): corrige divergência de chave,
+  não apaga decisão da gestão. E como `unit_rooms_nome_unico` continua de pé, cômodo
+  importado com `code` novo e `name` já usado na unidade falha com `23505` nessa
+  constraint. Esse é um conflito real, a mostrar, e não a resolver em silêncio.
 
 ### O que ainda não existe (operação)
 
@@ -1030,7 +1101,7 @@ inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta d
 | `inventory_items` | `inventory_items_source_ref_idx` `UNIQUE (property_id, source_ref) WHERE source_ref IS NOT NULL` — é o que torna a importação idempotente · `CHECK (replacement_cost_cents IS NULL OR > 0)` — zero não é sinônimo de "não cotado" · `(property_id, category, name, id)` — a tela do catálogo, filtro e ordenação no mesmo índice |
 | `inventory_count_lines` | `UNIQUE (count_id, room_id, item_id)` — linha duplicada mostraria a divergência em dobro · `CHECK ((counted_qty IS NULL) = (counted_at IS NULL))` · `(count_id, room_id, item_id) WHERE counted_qty IS NULL` — o que falta contar · `inventory_count_lines_custo_positivo` `CHECK (replacement_cost_cents IS NULL OR replacement_cost_cents > 0)` — zero entraria na conta como perda de R$ 0,00. `expected_qty` é **congelada** na abertura e `replacement_cost_cents` no fechamento (regra 7, §11) |
 | `inventory_issues` | `CHECK ((resolution IS NULL) = (resolved_at IS NULL))` — pendência aberta é `resolution IS NULL`, e não há coluna `status` ao lado · `CHECK (qty > 0)` · `(property_id, reported_at DESC, id) WHERE resolution IS NULL` — a lista de pendências, parcial pelo mesmo motivo do índice do kanban · `(reservation_id) WHERE reservation_id IS NOT NULL` — o que cobrar da estadia |
-| `unit_rooms` | `UNIQUE (unit_id, name)` — dois "Suíte 1" fazem contar a mesma cama duas vezes · `CHECK` do vocabulário de `kind` · `(unit_id, sort_order, name, id)` — a lista de conferência sai ordenada do índice, com desempate determinístico |
+| `unit_rooms` | `UNIQUE (unit_id, name)` — dois "Suíte 1" fazem contar a mesma cama duas vezes · `unit_rooms_code_unico` `UNIQUE (unit_id, code)` — a identidade estável que a importação e a cópia usam; único na unidade, e não na propriedade, porque o mesmo `cozinha` em dois duplex é o que casa origem e destino da cópia (§11) · `unit_rooms_code_formato` `CHECK (code ~ '^[a-z0-9]+(-[a-z0-9]+)*$')` e `unit_rooms_code_tamanho` `CHECK (length(code) <= 60)` — separadas para o nome da constraint dizer à API qual regra caiu · `CHECK` do vocabulário de `kind` · `(unit_id, sort_order, name, id)` — a lista de conferência sai ordenada do índice, com desempate determinístico |
 | `inventory_media` | `inventory_media_storage_key_unica` `UNIQUE (storage_key)` · `UNIQUE (thumb_key) WHERE thumb_key IS NOT NULL` e `CHECK (thumb_key <> storage_key)` — as duas chaves moram no mesmo namespace do volume, e a colisão sobrescreveria a foto |
 | `inventory_item_media` | `PRIMARY KEY (item_id, media_id)` — muitos-para-muitos · `(item_id, sort_order, media_id)` — a capa é o menor `sort_order`, desempatado por `media_id` |
 | `room_inventory` | `PRIMARY KEY (room_id, item_id)` · `CHECK (expected_qty >= 0)` · `(item_id)` — "em que ambientes este item está", e é por ele que o `RESTRICT` passa ao tentar apagar um item |
@@ -1091,7 +1162,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261007200000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261007213000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -1113,6 +1184,7 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20261003120000_conteudo_e_midia_do_site` | o banco do menu **Site** (§13b, `docs/site-cms.md`): `site_content` (campo editado do site, chave em `CHECK` de formato, valor jsonb não nulo) e `site_media` (foto/vídeo imutável, `storage_key` única). O recurso RBAC `site` não é migration: entra pelo seed, como todo o catálogo de `resources` |
 | `20261007170000_inventario_de_bens_por_ambiente` | o inventário de bens físicos por ambiente (§11), oito tabelas: `unit_rooms` (o cômodo, conceito novo no banco), `inventory_items` (catálogo da propriedade, com `source_ref` único parcial para importação idempotente), `room_inventory` (a colocação — é o `unit_inventory` projetado, com o cômodo no lugar da unidade), `inventory_media` + `inventory_item_media` (foto própria, muitos-para-muitos; **não** `site_media`, que não tem `property_id` e cai no `down` do CMS), `inventory_counts` + `inventory_count_lines` (conferência, com no máximo uma aberta por unidade e `expected_qty` congelada na abertura) e `inventory_issues` (quebrado/faltando/avariado, com `reservation_id` para cobrar o hóspede). `min_stock` fica para `stock_movements`; `cost_cents` virou `replacement_cost_cents`. O `down` derruba as oito e não deixa sobra |
 | `20261007200000_congela_custo_na_conferencia` | `inventory_count_lines.replacement_cost_cents` (anulável, `CHECK > 0` em `inventory_count_lines_custo_positivo`): o custo de reposição **congelado no fechamento**, de onde sai a perda de cada divergência. Com ele, a conferência fechada devolve lida de volta a perda que apurou, e recotar o item não a reescreve (regra 7, §11). Backfill das conferências já fechadas com o custo **atual** do item: aproximação de desenvolvimento, porque `20261007170000` nunca chegou a produção. A tabela vai de 11 para 12 colunas, conferida pelo bloco `DO` da régua. O `down` derruba a coluna (e com ela o `CHECK` e o comentário) e é **lossy**: o custo congelado some, e o `up` seguinte o refaz com o custo do dia |
+| `20261007213000_codigo_do_comodo` | `unit_rooms.code` (`text NOT NULL`): a identidade estável do cômodo, que a API não deixa editar e que a importação do levantamento fotográfico e a cópia de inventário entre unidades usam como chave (§11). `unit_rooms_code_formato` (`CHECK` do `pattern` do contrato), `unit_rooms_code_tamanho` (`CHECK (length(code) <= 60)`) e `unit_rooms_code_unico` (`UNIQUE (unit_id, code)`). Backfill das linhas existentes, antes do `SET NOT NULL`, pela regra de derivação que a API repete (escrita na migration e em §11): sem acento por tabela explícita (`translate`, sem extensão nova e sem `lower()`), hífen no lugar de cada sequência fora de `[a-z0-9]`, corte em 60, `comodo` para nome que vira vazio e `-2`, `-3`… em colisão na unidade, em ordem de `(created_at, id)`. A tabela vai de 9 para 10 colunas, conferida pelo bloco `DO` da régua. O `down` derruba as três constraints e a coluna sem deixar sobra e é **lossy**: o `up` seguinte re-deriva os códigos do `name` atual |
 
 ## 16. Seeds
 

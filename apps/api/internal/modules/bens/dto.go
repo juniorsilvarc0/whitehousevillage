@@ -88,10 +88,13 @@ const maxInteiro = math.MaxInt32
 // (`/units/{id}/inventory`, `include_inactive`), e os `totals` de lá é que
 // somam o que foi exibido.
 type Ambiente struct {
-	ID               uuid.UUID `json:"id"`
-	UnidadeID        uuid.UUID `json:"unit_id"`
-	UnidadeCodigo    string    `json:"unit_code"`
-	UnidadeNome      string    `json:"unit_name"`
+	ID            uuid.UUID `json:"id"`
+	UnidadeID     uuid.UUID `json:"unit_id"`
+	UnidadeCodigo string    `json:"unit_code"`
+	UnidadeNome   string    `json:"unit_name"`
+	// Codigo é a identidade estável do cômodo na unidade (não editável):
+	// é por ele que a cópia reencontra a cozinha depois de um rename.
+	Codigo           string    `json:"code"`
 	Nome             string    `json:"name"`
 	Tipo             string    `json:"kind"`
 	Ordem            int       `json:"sort_order"`
@@ -438,8 +441,13 @@ type ColocacaoMantida struct {
 // DTOs NÃO declaram esses campos.
 
 // AmbienteCriar é o corpo de `POST /rooms`.
+//
+// `code` é opcional: ausente (ou nulo), o servidor deriva do `name`
+// (BaseDoCodigo) e, se já existir na unidade, acrescenta `-2`, `-3`…
+// Informado, tem de estar no formato do contrato e livre na unidade.
 type AmbienteCriar struct {
 	UnidadeID uuid.UUID `json:"unit_id"`
+	Codigo    *string   `json:"code"`
 	Nome      string    `json:"name"`
 	Tipo      string    `json:"kind"`
 	Ordem     *int      `json:"sort_order"`
@@ -450,6 +458,9 @@ func (c AmbienteCriar) Validar() map[string]string {
 	erros := map[string]string{}
 	if c.UnidadeID == uuid.Nil {
 		erros["unit_id"] = "é obrigatório."
+	}
+	if c.Codigo != nil && !CodigoValido(*c.Codigo) {
+		erros["code"] = "use até 60 caracteres minúsculos sem acento, números e hífen entre eles (ex.: suite-1-terreo)."
 	}
 	exigirNome(erros, "name", c.Nome, maxNomeDoAmbiente)
 	exigirDoVocabulario(erros, "kind", c.Tipo, tiposDeAmbiente)

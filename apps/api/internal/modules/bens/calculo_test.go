@@ -90,25 +90,29 @@ func TestTotalizarContaBemDistintoESeparaONaoCotado(t *testing.T) {
 	}
 }
 
-// A cópia só ACRESCENTA: cômodo de mesmo nome é reaproveitado, colocação que já
-// existe é mantida com a quantidade do destino e vai para `kept`.
+// A cópia só ACRESCENTA: cômodo casado (pelo `code`, ou pelo `name` sem `code`
+// igual) é reaproveitado, colocação que já existe é mantida com a quantidade do
+// destino e vai para `kept`, e o cômodo novo herda o `code` da origem.
 func TestPlanoDaCopiaSoAcrescenta(t *testing.T) {
 	prato, taca := uuid.New(), uuid.New()
-	origemAmb := []ambienteGravado{{Nome: "Cozinha", Tipo: "cozinha"}, {Nome: "Quarto 1", Tipo: "quarto"}}
-	destinoAmb := []ambienteGravado{{Nome: "Cozinha", Tipo: "sala"}}
-	origemCol := []colocacaoDaCopia{
-		{AmbienteNome: "Cozinha", BemID: prato, BemNome: "Prato", Qtd: 12},
-		{AmbienteNome: "Cozinha", BemID: taca, BemNome: "Taça", Qtd: 6},
-		{AmbienteNome: "Quarto 1", BemID: taca, BemNome: "Taça", Qtd: 2},
+	origemAmb := []ambienteGravado{
+		{Codigo: "cozinha", Nome: "Cozinha", Tipo: "cozinha"},
+		{Codigo: "quarto-1", Nome: "Quarto 1", Tipo: "quarto", Ordem: 2},
 	}
-	destinoCol := []colocacaoDaCopia{{AmbienteNome: "Cozinha", BemID: prato, BemNome: "Prato", Qtd: 8}}
+	destinoAmb := []ambienteGravado{{Codigo: "cozinha", Nome: "Cozinha", Tipo: "sala"}}
+	origemCol := []colocacaoDaCopia{
+		{AmbienteCodigo: "cozinha", BemID: prato, BemNome: "Prato", Qtd: 12},
+		{AmbienteCodigo: "cozinha", BemID: taca, BemNome: "Taça", Qtd: 6},
+		{AmbienteCodigo: "quarto-1", BemID: taca, BemNome: "Taça", Qtd: 2},
+	}
+	destinoCol := []colocacaoDaCopia{{AmbienteCodigo: "cozinha", BemID: prato, BemNome: "Prato", Qtd: 8}}
 
 	p := planejarCopia(origemAmb, destinoAmb, origemCol, destinoCol, false)
 
-	if len(p.Ambientes) != 1 || p.Ambientes[0].Nome != "Quarto 1" {
-		t.Fatalf("só o Quarto 1 nasce (a Cozinha é reaproveitada): %+v", p.Ambientes)
+	if len(p.Ambientes) != 1 || p.Ambientes[0].Nome != "Quarto 1" || p.Ambientes[0].Codigo != "quarto-1" || p.Ambientes[0].Ordem != 2 {
+		t.Fatalf("só o Quarto 1 nasce, com o code e a ordem da origem: %+v", p.Ambientes)
 	}
-	if len(p.Colocacoes) != 2 {
+	if len(p.Colocacoes) != 2 || p.Colocacoes[1].AmbienteCodigo != "quarto-1" {
 		t.Fatalf("nascem a taça da cozinha e a do quarto: %+v", p.Colocacoes)
 	}
 	if len(p.Mantidas) != 1 || p.Mantidas[0].QtdAtual != 8 || p.Mantidas[0].QtdOrigem != 12 {
@@ -117,10 +121,10 @@ func TestPlanoDaCopiaSoAcrescenta(t *testing.T) {
 
 	// Rodar de novo, com o destino já copiado, não cria nada.
 	segunda := planejarCopia(origemAmb,
-		append(destinoAmb, ambienteGravado{Nome: "Quarto 1"}), origemCol,
+		append(destinoAmb, ambienteGravado{Codigo: "quarto-1", Nome: "Quarto 1"}), origemCol,
 		append(destinoCol,
-			colocacaoDaCopia{AmbienteNome: "Cozinha", BemID: taca, Qtd: 6},
-			colocacaoDaCopia{AmbienteNome: "Quarto 1", BemID: taca, Qtd: 2}), false)
+			colocacaoDaCopia{AmbienteCodigo: "cozinha", BemID: taca, Qtd: 6},
+			colocacaoDaCopia{AmbienteCodigo: "quarto-1", BemID: taca, Qtd: 2}), false)
 	if len(segunda.Ambientes) != 0 || len(segunda.Colocacoes) != 0 || len(segunda.Mantidas) != 3 {
 		t.Fatalf("a segunda passada deveria só manter: %+v", segunda)
 	}
@@ -128,6 +132,28 @@ func TestPlanoDaCopiaSoAcrescenta(t *testing.T) {
 	soComodos := planejarCopia(origemAmb, destinoAmb, origemCol, destinoCol, true)
 	if len(soComodos.Colocacoes) != 0 || len(soComodos.Mantidas) != 0 || len(soComodos.Ambientes) != 1 {
 		t.Fatalf("rooms_only copia só a planta: %+v", soComodos)
+	}
+}
+
+// O cômodo renomeado no destino continua sendo o mesmo: a cópia o reencontra
+// pelo `code` e não cria um fantasma com o nome antigo.
+func TestPlanoDaCopiaCasaPeloCodigoDepoisDoRename(t *testing.T) {
+	cama := uuid.New()
+	origem := []ambienteGravado{{Codigo: "quarto-grande", Nome: "Quarto grande", Tipo: "quarto"}}
+	destino := []ambienteGravado{{Codigo: "quarto-grande", Nome: "Suíte Master", Tipo: "quarto"}}
+	p := planejarCopia(origem, destino,
+		[]colocacaoDaCopia{{AmbienteCodigo: "quarto-grande", BemID: cama, BemNome: "Cama", Qtd: 1}}, nil, false)
+	if len(p.Ambientes) != 0 {
+		t.Fatalf("casado pelo code, nenhum cômodo nasce: %+v", p.Ambientes)
+	}
+	if len(p.Colocacoes) != 1 || p.Colocacoes[0].AmbienteNome != "Suíte Master" {
+		t.Fatalf("a colocação vai para o cômodo de destino, com o nome de lá: %+v", p.Colocacoes)
+	}
+
+	// Sem code igual, casa pelo nome — e nunca cria o segundo de mesmo nome.
+	destinoAntigo := []ambienteGravado{{Codigo: "quarto-grande-2", Nome: "Quarto grande"}}
+	if q := planejarCopia(origem, destinoAntigo, nil, nil, true); len(q.Ambientes) != 0 {
+		t.Fatalf("sem code igual, casa pelo name: %+v", q.Ambientes)
 	}
 }
 

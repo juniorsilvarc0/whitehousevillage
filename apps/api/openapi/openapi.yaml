@@ -6751,7 +6751,7 @@ paths:
       summary: Copia ambientes e colocações de outra unidade
       description: |
         Seis duplex iguais não se cadastram seis vezes. A cópia traz os
-        **ambientes** (com `name`, `kind` e `sort_order`, para a ordem de
+        **ambientes** (com `code`, `name`, `kind` e `sort_order`, para a ordem de
         caminhada vir junto) e as **colocações** da unidade de origem; o
         catálogo de bens não é copiado porque é da propriedade — o mesmo "Prato
         raso branco" serve às doze unidades. Da origem só entram ambientes e
@@ -6759,8 +6759,11 @@ paths:
 
         ## A cópia só ACRESCENTA — nunca sobrescreve quantidade
 
-        Ambiente de mesmo `name` que já existe no destino é reaproveitado, não
-        duplicado (`unit_rooms_nome_unico`), e **nada** nele é reescrito:
+        O ambiente da origem casa com o do destino **pelo `code`** — a
+        identidade estável, que sobrevive a renomear "Quarto grande" para
+        "Suíte Master" num dos dois. Sem `code` igual, casa pelo `name`, porque
+        `unit_rooms_nome_unico` não deixaria criar o segundo. Ambiente casado é
+        reaproveitado, não duplicado, e **nada** nele é reescrito:
         `kind`, `sort_order` e `active` do destino ficam como estão. Colocação
         que já existe no destino é **mantida com a quantidade que tem**, e a
         divergência em relação à origem aparece na resposta (`kept`), sem ser
@@ -7328,12 +7331,24 @@ paths:
         **Resolver não é apagar**: pendência atendida se fecha com `resolution`
         (`PATCH`), e é assim que ela continua somando no histórico do bem e do
         ambiente. Apagar é para o registro que nunca devia ter nascido.
+
+        **Avaria ligada a conferência `fechada` não se apaga: `409
+        RESOURCE_IN_USE`**, com `details.count_id`. Ela é parte do que a
+        conferência apurou — o `result` de `GET /inventory/counts/{id}` cita o
+        `issue_id` e conta `issues_created` —, e apagá-la reescreveria em
+        silêncio um relatório que já foi fechado e talvez cobrado. Falta que
+        não procede se encerra com `resolution: descartado`, que deixa o rastro.
+        Avaria sem conferência, ou de conferência aberta ou cancelada, continua
+        apagável.
       x-rbac: { recurso: inventory.goods, acao: excluir }
       responses:
         "204": { description: Apagada }
         "401": { $ref: "#/components/responses/Erro" }
         "403": { $ref: "#/components/responses/Erro" }
         "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`RESOURCE_IN_USE` — a avaria pertence a uma conferência fechada (`details.count_id`). Encerre-a com `resolution: descartado` em vez de apagar."
+          $ref: "#/components/responses/Erro"
 
   /inventory/export:
     get:
@@ -10221,13 +10236,24 @@ components:
 
     Ambiente:
       type: object
-      required: [id, unit_id, name, kind, sort_order, active]
+      required: [id, unit_id, code, name, kind, sort_order, active]
       properties:
         id:         { type: string, format: uuid }
         unit_id:    { type: string, format: uuid }
         unit_code:  { type: string, example: AP-01, description: "Só leitura — o rótulo da unidade, para a tela não precisar de outra chamada." }
         unit_name:  { type: string, example: "Duplex 01" }
-        name:       { type: string, example: "Quarto grande", description: "Único na unidade (`unit_rooms_nome_unico`)." }
+        code:
+          type: string
+          example: quarto-grande
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+          description: |
+            **Identidade estável do cômodo na unidade** (`UNIQUE (unit_id,
+            code)`), no espírito de `units.code`: minúsculo, sem acento,
+            separado por hífen. `name` é o rótulo que o gestor edita; `code` não
+            muda depois de criado — é por ele que a importação reencontra o
+            cômodo e que a cópia casa "a cozinha do AP-01" com "a cozinha do
+            AP-02" mesmo depois de alguém renomear uma delas.
+        name:       { type: string, example: "Quarto grande", description: "Único na unidade (`unit_rooms_nome_unico`). Editável — a identidade é `code`." }
         kind:       { $ref: "#/components/schemas/TipoDeAmbiente" }
         sort_order:
           type: integer
@@ -10255,6 +10281,19 @@ components:
       required: [unit_id, name, kind]
       properties:
         unit_id:    { type: string, format: uuid }
+        code:
+          type: string
+          maxLength: 60
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+          description: |
+            Opcional. Ausente, o servidor **deriva do `name`** (minúsculo, sem
+            acento, espaço e pontuação viram hífen: "Área da churrasqueira" →
+            `area-da-churrasqueira`; cortado em 60 caracteres, porque `name`
+            aceita 120; vazio vira `comodo`) e, se já existir na unidade,
+            acrescenta `-2`, `-3`… — quem cria cômodo pelo celular não deve ter
+            de inventar identificador. A regra exata está em `docs/db.md` §11.
+            Informado e já usado na unidade é `409 CODE_IN_USE`; fora do
+            formato é `422`.
         name:       { type: string, minLength: 1, maxLength: 120 }
         kind:       { $ref: "#/components/schemas/TipoDeAmbiente" }
         sort_order: { type: integer, default: 0 }
@@ -10264,7 +10303,7 @@ components:
       type: object
       additionalProperties: false
       required: [name, kind]
-      description: "Corpo do `PUT`. Sem `unit_id`: cômodo não muda de unidade (levaria o histórico junto)."
+      description: "Corpo do `PUT`. Sem `unit_id` (cômodo não muda de unidade: levaria o histórico junto) e sem `code` (a identidade não muda; campo desconhecido, `422`) — o mesmo vale para o `PATCH`."
       properties:
         name:       { type: string, minLength: 1, maxLength: 120 }
         kind:       { $ref: "#/components/schemas/TipoDeAmbiente" }
@@ -10564,7 +10603,7 @@ components:
             code:    { type: string, example: AP-01 }
         rooms_created:
           type: array
-          description: Ambientes que (vão) nascer no destino. Ambiente de mesmo nome que já existe não entra aqui e não é reescrito.
+          description: "Ambientes que (vão) nascer no destino, com o `code` da origem. Ambiente que já casa no destino — pelo `code` e, sem `code` igual, pelo `name` — não entra aqui e não é reescrito."
           items:
             type: object
             properties:
@@ -10710,7 +10749,17 @@ components:
               oneOf:
                 - $ref: "#/components/schemas/ApuracaoDaConferencia"
                 - type: "null"
-              description: "Presente só em conferência `fechada`: o que o `POST /close` apurou, lido de volta com o custo congelado. `null` em aberta e cancelada."
+              description: |
+                Presente só em conferência `fechada`: o que o `POST /close`
+                apurou, lido de volta com o custo congelado. `null` em aberta e
+                cancelada.
+
+                **O que é congelado e o que é vivo.** Quantidades, custo, perda,
+                `issue_id` e `issues_created` são os do fechamento e não mudam.
+                Os **nomes** (`room_name`, `item_name`) e a **ordem** de caminhada
+                vêm do cadastro de hoje, de propósito: corrigir "Prato raso
+                brnaco" corrige em todo lugar, inclusive no relatório de março, e
+                a identidade da linha é o `room_id`/`item_id`, que não muda.
 
     ApuracaoDaConferencia:
       type: object

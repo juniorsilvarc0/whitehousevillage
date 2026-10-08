@@ -460,6 +460,7 @@ func (a *ambiente) reserva(t *testing.T) (uuid.UUID, string) {
 
 type ambienteResp struct {
 	ID               uuid.UUID `json:"id"`
+	Codigo           string    `json:"code"`
 	UnidadeID        uuid.UUID `json:"unit_id"`
 	UnidadeCodigo    string    `json:"unit_code"`
 	Nome             string    `json:"name"`

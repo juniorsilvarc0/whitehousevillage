@@ -122,6 +122,12 @@ func TestCampoForaDoContratoEh422(t *testing.T) {
 			`{"name":"Quarto","kind":"quarto","unit_id":"` + uuid.NewString() + `"}`, "unit_id"},
 		{"room_id no PUT da colocação", http.MethodPut, "/inventory/placements/" + col.ID,
 			`{"expected_qty":3,"room_id":"` + quarto.ID.String() + `"}`, "room_id"},
+		// `code` é a identidade do cômodo: não muda depois de criado.
+		{"code no PATCH do cômodo", http.MethodPatch, "/rooms/" + quarto.ID.String(), `{"code":"suite-master"}`, "code"},
+		{"code no PUT do cômodo", http.MethodPut, "/rooms/" + quarto.ID.String(), `{"name":"Quarto","kind":"quarto","code":"q"}`, "code"},
+		// O encoding/json casa chave sem olhar caixa; o contrato não.
+		{"Expected_Qty com outra caixa no PATCH da colocação", http.MethodPatch, "/inventory/placements/" + col.ID,
+			`{"Expected_Qty":1}`, "Expected_Qty"},
 	}
 	for _, c := range casos {
 		t.Run(c.nome, func(t *testing.T) {
@@ -183,7 +189,7 @@ func TestMisturaDePropriedadesEhRecusada(t *testing.T) {
 
 	var comodoDeLa, bemDeLa uuid.UUID
 	if err := a.pool.QueryRow(a.ctx, `
-		INSERT INTO unit_rooms (property_id, unit_id, name, kind) VALUES ($1, $2, 'Cozinha', 'cozinha') RETURNING id`,
+		INSERT INTO unit_rooms (property_id, unit_id, code, name, kind) VALUES ($1, $2, 'cozinha', 'Cozinha', 'cozinha') RETURNING id`,
 		outraCasa, unidadeDeLa).Scan(&comodoDeLa); err != nil {
 		t.Fatal(err)
 	}

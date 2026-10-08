@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
@@ -34,7 +35,10 @@ func (r *Repository) exec(ctx context.Context) db.DBTX { return db.From(ctx, r.p
 // Constraints cujo nome decide a resposta. Nomeadas porque a string crua
 // espalhada não diz a ninguém qual regra de negócio protege.
 const (
-	nomeUnicoDoAmbiente = "unit_rooms_nome_unico"
+	nomeUnicoDoAmbiente   = "unit_rooms_nome_unico"
+	codigoUnicoDoAmbiente = "unit_rooms_code_unico"
+	formatoDoCodigo       = "unit_rooms_code_formato"
+	tamanhoDoCodigo       = "unit_rooms_code_tamanho"
 )
 
 // errEmUso é o 23503 de um DELETE recusado pelas FKs RESTRICT. O repositório
@@ -384,7 +388,7 @@ func (r *Repository) TravarInventarioDaUnidade(ctx context.Context, unidade uuid
 // `inventory_issues_room_idx`) e a listagem paginada só as avalia para as
 // linhas da página.
 const colunasDoAmbiente = `
-	r.id, r.unit_id, u.code, u.name, r.name, r.kind, r.sort_order, r.active,
+	r.id, r.unit_id, u.code, u.name, r.code, r.name, r.kind, r.sort_order, r.active,
 	(SELECT count(*) FROM room_inventory x WHERE x.room_id = r.id),
 	(SELECT COALESCE(sum(x.expected_qty), 0) FROM room_inventory x WHERE x.room_id = r.id),
 	(SELECT count(*) FROM inventory_issues ii WHERE ii.room_id = r.id AND ii.resolution IS NULL),
@@ -396,7 +400,7 @@ const juncoesDoAmbiente = `
 
 func escanearAmbiente(linha pgx.Row, extras ...any) (Ambiente, error) {
 	var a Ambiente
-	destinos := []any{&a.ID, &a.UnidadeID, &a.UnidadeCodigo, &a.UnidadeNome, &a.Nome, &a.Tipo,
+	destinos := []any{&a.ID, &a.UnidadeID, &a.UnidadeCodigo, &a.UnidadeNome, &a.Codigo, &a.Nome, &a.Tipo,
 		&a.Ordem, &a.Ativo, &a.QtdBens, &a.QtdEsperadaTotal, &a.AvariasAbertas, &a.CriadoEm, &a.AtualizadoEm}
 	err := linha.Scan(append(destinos, extras...)...)
 	return a, err
@@ -457,6 +461,7 @@ func (r *Repository) BuscarAmbiente(ctx context.Context, prop, id uuid.UUID) (Am
 type ambienteGravado struct {
 	ID        uuid.UUID `json:"id"`
 	UnidadeID uuid.UUID `json:"unit_id"`
+	Codigo    string    `json:"code"`
 	Nome      string    `json:"name"`
 	Tipo      string    `json:"kind"`
 	Ordem     int       `json:"sort_order"`
@@ -468,9 +473,9 @@ type ambienteGravado struct {
 func (r *Repository) TravarAmbiente(ctx context.Context, prop, id uuid.UUID) (ambienteGravado, error) {
 	var a ambienteGravado
 	err := r.exec(ctx).QueryRow(ctx, `
-		SELECT id, unit_id, name, kind, sort_order, active
+		SELECT id, unit_id, code, name, kind, sort_order, active
 		  FROM unit_rooms WHERE id = $1 AND property_id = $2
-		   FOR UPDATE`, id, prop).Scan(&a.ID, &a.UnidadeID, &a.Nome, &a.Tipo, &a.Ordem, &a.Ativo)
+		   FOR UPDATE`, id, prop).Scan(&a.ID, &a.UnidadeID, &a.Codigo, &a.Nome, &a.Tipo, &a.Ordem, &a.Ativo)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return a, apperr.NotFound("Ambiente")
 	}
@@ -480,18 +485,30 @@ func (r *Repository) TravarAmbiente(ctx context.Context, prop, id uuid.UUID) (am
 	return a, nil
 }
 
-// CriarAmbiente insere o cômodo. A colisão de nome na unidade é decidida pela
-// constraint (`unit_rooms_nome_unico`), não por SELECT antes.
-func (r *Repository) CriarAmbiente(ctx context.Context, prop uuid.UUID, a ambienteGravado) (uuid.UUID, error) {
+// CriarAmbiente insere o cômodo com o `code` pedido. As colisões são
+// decididas pelas constraints, nunca por SELECT antes:
+//
+//   - `code` já usado na unidade (`unit_rooms_code_unico`) é o ÁRBITRO do
+//     `ON CONFLICT … DO NOTHING`: devolve ok=false e a transação continua viva,
+//     para o service tentar o próximo sufixo (código derivado) ou responder
+//     409 (código informado). Deixar o 23505 estourar abortaria a transação e
+//     tornaria impossível a segunda tentativa nela;
+//   - nome repetido na unidade (`unit_rooms_nome_unico`) continua estourando:
+//     é 409 CODE_IN_USE em `name`, e nenhum sufixo resolve.
+func (r *Repository) CriarAmbiente(ctx context.Context, prop uuid.UUID, a ambienteGravado) (uuid.UUID, bool, error) {
 	var id uuid.UUID
 	err := r.exec(ctx).QueryRow(ctx, `
-		INSERT INTO unit_rooms (property_id, unit_id, name, kind, sort_order, active)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id`, prop, a.UnidadeID, a.Nome, a.Tipo, a.Ordem, a.Ativo).Scan(&id)
-	if err != nil {
-		return uuid.Nil, traduzirAmbiente(err)
+		INSERT INTO unit_rooms (property_id, unit_id, code, name, kind, sort_order, active)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		ON CONFLICT ON CONSTRAINT `+codigoUnicoDoAmbiente+` DO NOTHING
+		RETURNING id`, prop, a.UnidadeID, a.Codigo, a.Nome, a.Tipo, a.Ordem, a.Ativo).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
 	}
-	return id, nil
+	if err != nil {
+		return uuid.Nil, false, traduzirAmbiente(err)
+	}
+	return id, true, nil
 }
 
 // GravarAmbiente é o UPDATE do PUT e do PATCH (o PATCH já chega mesclado).
@@ -560,6 +577,14 @@ func traduzirAmbiente(err error) error {
 			WithMessage("Já existe um ambiente com este nome nesta unidade.").
 			WithCause(err).
 			WithDetails(map[string]string{"name": "já existe um ambiente com este nome nesta unidade."})
+	}
+	// Rede embaixo da validação do DTO: formato e tamanho do `code` são 422 no
+	// campo, e não o 422 genérico com nome de constraint.
+	var pg *pgconn.PgError
+	if errors.As(err, &pg) && (pg.ConstraintName == formatoDoCodigo || pg.ConstraintName == tamanhoDoCodigo) {
+		return apperr.Validation(map[string]string{
+			"code": "use até 60 caracteres minúsculos sem acento, números e hífen entre eles.",
+		}).WithCause(err)
 	}
 	return db.MapError(err)
 }

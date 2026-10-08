@@ -171,9 +171,14 @@ func (s *Service) CopiarInventario(ctx context.Context, destino uuid.UUID, p Ped
 				return err
 			}
 			for _, c := range plano.Colocacoes {
-				ambiente, ok := ids[c.AmbienteNome]
+				ambiente, ok := ids[c.AmbienteCodigo]
 				if !ok {
-					return apperr.Internal.WithCause(fmt.Errorf("bens: cômodo %q sumiu do destino no meio da cópia", c.AmbienteNome))
+					// Outra aba criou, entre o plano e a execução, um cômodo com o
+					// mesmo NOME e outro código: a constraint recusou o nosso, e
+					// não há onde pôr a colocação. É disputa, não defeito.
+					return apperr.CodeInUse.
+						WithMessage("Um ambiente com o mesmo nome acabou de ser criado na unidade de destino. Rode a cópia de novo.").
+						WithDetails(map[string]string{"room": c.AmbienteNome})
 				}
 				if err := s.repo.CriarColocacaoSeAusente(ctx, ambiente, c.BemID, c.Qtd); err != nil {
 					return err

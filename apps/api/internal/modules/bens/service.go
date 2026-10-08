@@ -96,7 +96,7 @@ func (s *Service) CriarAmbiente(ctx context.Context, c AmbienteCriar) (Ambiente,
 		} else if !ok {
 			return apperr.Validation(map[string]string{"unit_id": "unidade não encontrada nesta propriedade."})
 		}
-		id, err := s.repo.CriarAmbiente(ctx, prop, novo)
+		id, err := s.inserirComCodigo(ctx, prop, &novo, c.Codigo)
 		if err != nil {
 			return err
 		}
@@ -107,6 +107,44 @@ func (s *Service) CriarAmbiente(ctx context.Context, c AmbienteCriar) (Ambiente,
 		return audit.Criacao(ctx, s.repo.pool, entidadeAmbiente, audit.VerboCriado, id, novo)
 	})
 	return criado, err
+}
+
+// inserirComCodigo grava o cômodo com o `code` informado ou, sem ele, com o
+// derivado do `name` (BaseDoCodigo), tentando `base`, `base-2`, `base-3`… até
+// achar um livre na unidade. Quem decide "livre" é a constraint
+// `unit_rooms_code_unico` a cada tentativa (CriarAmbiente) — sem SELECT antes,
+// que perderia a corrida para outra aba criando o mesmo "Quarto" no mesmo
+// instante. Código informado e já usado é 409: o cliente escolheu aquele.
+func (s *Service) inserirComCodigo(ctx context.Context, prop uuid.UUID, novo *ambienteGravado, informado *string) (uuid.UUID, error) {
+	if informado != nil {
+		novo.Codigo = *informado
+		id, ok, err := s.repo.CriarAmbiente(ctx, prop, *novo)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if !ok {
+			return uuid.Nil, apperr.CodeInUse.
+				WithMessage("Já existe um ambiente com este código nesta unidade.").
+				WithDetails(map[string]string{"code": "já existe um ambiente com este código nesta unidade."})
+		}
+		return id, nil
+	}
+
+	base := BaseDoCodigo(novo.Nome)
+	for n := 1; n <= tentativasDeSufixo; n++ {
+		novo.Codigo = CandidatoDoCodigo(base, n)
+		id, ok, err := s.repo.CriarAmbiente(ctx, prop, *novo)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if ok {
+			return id, nil
+		}
+	}
+	return uuid.Nil, apperr.CodeInUse.
+		WithMessage("Não achei um código livre para este ambiente nesta unidade; informe um em `code`.").
+		WithDetails(map[string]string{"code": fmt.Sprintf("%s até %s já estão em uso nesta unidade.",
+			base, CandidatoDoCodigo(base, tentativasDeSufixo))})
 }
 
 // SubstituirAmbiente é o PUT: os quatro campos editáveis, ausente volta ao

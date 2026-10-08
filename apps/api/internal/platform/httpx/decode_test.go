@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -223,5 +224,89 @@ func TestFormatoDaMensagemDeCampoDesconhecidoDoGoNaoMudou(t *testing.T) {
 	}
 	if nome := campoDesconhecido(err); nome != "xpto" {
 		t.Fatalf("campoDesconhecido = %q, esperado \"xpto\" — a mensagem do Go mudou: %q", nome, err.Error())
+	}
+}
+
+// ─────────── Chave com outra caixa não é o campo do contrato ───────────
+//
+// O encoding/json casa a chave sem olhar maiúscula, e o DisallowUnknownFields
+// herda a tolerância: medido pelo QA em 07/10/2026, `{"COUNTED_QTY": 5}` no
+// PATCH da linha de conferência respondia 200 e GRAVAVA a contagem.
+
+func TestDecodeRecusaChaveComOutraCaixa(t *testing.T) {
+	casos := map[string]string{
+		"campo comum":    `{"Name":"Ana","email":"ana@wh.com","password":"12345678"}`,
+		"campo Opt":      `{"name":"Ana","email":"ana@wh.com","password":"12345678","EXTRA":"x"}`,
+		"tudo maiúsculo": `{"NAME":"Ana","EMAIL":"ana@wh.com","PASSWORD":"12345678"}`,
+	}
+	for nome, corpo := range casos {
+		t.Run(nome, func(t *testing.T) {
+			_, err := Decode[criarDeTeste](post(corpo))
+			if err == nil {
+				t.Fatalf("chave com outra caixa passou como o campo do contrato: %s", corpo)
+			}
+			d := detalhes(t, err)
+			achou := false
+			for chave, msg := range d {
+				if strings.ToLower(chave) != chave && strings.Contains(msg, "maiúsculas") {
+					achou = true
+				}
+			}
+			if !achou {
+				t.Fatalf("details deveria nomear a chave recusada e dizer o nome certo: %v", d)
+			}
+		})
+	}
+}
+
+func TestDecodeOpcionalTambemRecusaChaveComOutraCaixa(t *testing.T) {
+	_, err := DecodeOpcional[criarDeTeste](post(`{"Extra":"x"}`))
+	if err == nil {
+		t.Fatal("DecodeOpcional aceitou chave com outra caixa")
+	}
+	if msg := detalhes(t, err)["Extra"]; !strings.Contains(msg, `"extra"`) {
+		t.Fatalf("a mensagem deveria apontar o nome do contrato: %q", msg)
+	}
+}
+
+type baseDeTeste struct {
+	Codigo string `json:"code"`
+}
+
+type comEmbutidaESemTag struct {
+	baseDeTeste
+	Apelido  string // sem tag: o nome JSON é o do campo Go
+	Ignorado string `json:"-"`
+	interno  string
+}
+
+// Struct embutida contribui com os campos dela (promovidos), e campo sem tag
+// tem como nome o do campo Go — exatamente como o encoding/json decide.
+func TestNomesExatosSeguemORegimeDoEncodingJSON(t *testing.T) {
+	got, err := Decode[comEmbutidaESemTag](post(`{"code":"AP-01","Apelido":"Duplex"}`))
+	if err != nil {
+		t.Fatalf("corpo com os nomes exatos foi recusado: %v", err)
+	}
+	if got.Codigo != "AP-01" || got.Apelido != "Duplex" {
+		t.Fatalf("decodificado errado: %+v", got)
+	}
+	for _, corpo := range []string{`{"Code":"AP-01"}`, `{"apelido":"Duplex"}`} {
+		if _, err := Decode[comEmbutidaESemTag](post(corpo)); err == nil {
+			t.Errorf("%s deveria ser recusado (caixa diferente do nome exato)", corpo)
+		}
+	}
+	nomes := nomesExatos(reflect.TypeFor[comEmbutidaESemTag]())
+	for _, fora := range []string{"Ignorado", "-", "interno", "baseDeTeste"} {
+		if nomes[fora] {
+			t.Errorf("%q não é nome aceito no topo: %v", fora, nomes)
+		}
+	}
+	_ = comEmbutidaESemTag{}.interno
+}
+
+// Topo em lista (a matriz de permissões) não tem chave de topo a conferir.
+func TestTopoEmListaFicaForaDaRegraDeCaixa(t *testing.T) {
+	if nomes := nomesExatos(reflect.TypeFor[matrizDeTeste]()); nomes != nil {
+		t.Fatalf("lista no topo não tem nomes de chave: %v", nomes)
 	}
 }

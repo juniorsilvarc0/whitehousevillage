@@ -80,6 +80,8 @@ export type Ambiente = {
   unit_id: string;
   unit_code?: string;
   unit_name?: string;
+  /** Identidade estável do cômodo na unidade (`quarto-grande`). Não muda quando o `name` é editado. */
+  code: string;
   name: string;
   kind: TipoDeAmbiente;
   /** Ordem de caminhada pela casa. A API desempata por `name` e `id`. */

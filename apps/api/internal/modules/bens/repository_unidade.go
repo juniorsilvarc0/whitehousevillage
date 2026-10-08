@@ -169,7 +169,7 @@ func (r *Repository) DadosDoArquivo(ctx context.Context, prop uuid.UUID) (slug, 
 // AmbientesParaCopia lista os cômodos da unidade (só os ativos, se pedido), na
 // ordem de caminhada.
 func (r *Repository) AmbientesParaCopia(ctx context.Context, prop, unidade uuid.UUID, soAtivos bool) ([]ambienteGravado, error) {
-	q := `SELECT id, unit_id, name, kind, sort_order, active FROM unit_rooms
+	q := `SELECT id, unit_id, code, name, kind, sort_order, active FROM unit_rooms
 	       WHERE property_id = $1 AND unit_id = $2`
 	if soAtivos {
 		q += ` AND active`
@@ -185,7 +185,7 @@ func (r *Repository) AmbientesParaCopia(ctx context.Context, prop, unidade uuid.
 	out := []ambienteGravado{}
 	for linhas.Next() {
 		var a ambienteGravado
-		if err := linhas.Scan(&a.ID, &a.UnidadeID, &a.Nome, &a.Tipo, &a.Ordem, &a.Ativo); err != nil {
+		if err := linhas.Scan(&a.ID, &a.UnidadeID, &a.Codigo, &a.Nome, &a.Tipo, &a.Ordem, &a.Ativo); err != nil {
 			return nil, db.MapError(err)
 		}
 		out = append(out, a)
@@ -193,13 +193,13 @@ func (r *Repository) AmbientesParaCopia(ctx context.Context, prop, unidade uuid.
 	return out, db.MapError(linhas.Err())
 }
 
-// ColocacoesParaCopia lista as colocações da unidade por NOME de cômodo — que
-// é a chave pela qual a cópia casa origem e destino. Na origem (`soAtivos`)
+// ColocacoesParaCopia lista as colocações da unidade pelo `code` do cômodo —
+// a chave pela qual a cópia casa origem e destino. Na origem (`soAtivos`)
 // entram só cômodo e bem ativos: copiar o que saiu de linha criaria colocação
 // que nenhuma contagem olha.
 func (r *Repository) ColocacoesParaCopia(ctx context.Context, prop, unidade uuid.UUID, soAtivos bool) ([]colocacaoDaCopia, error) {
 	q := `
-		SELECT r.name, ri.item_id, i.name, ri.expected_qty
+		SELECT r.code, r.name, ri.item_id, i.name, ri.expected_qty
 		  FROM room_inventory ri
 		  JOIN unit_rooms r ON r.id = ri.room_id
 		  JOIN inventory_items i ON i.id = ri.item_id
@@ -218,7 +218,7 @@ func (r *Repository) ColocacoesParaCopia(ctx context.Context, prop, unidade uuid
 	out := []colocacaoDaCopia{}
 	for linhas.Next() {
 		var c colocacaoDaCopia
-		if err := linhas.Scan(&c.AmbienteNome, &c.BemID, &c.BemNome, &c.Qtd); err != nil {
+		if err := linhas.Scan(&c.AmbienteCodigo, &c.AmbienteNome, &c.BemID, &c.BemNome, &c.Qtd); err != nil {
 			return nil, db.MapError(err)
 		}
 		out = append(out, c)
@@ -226,21 +226,23 @@ func (r *Repository) ColocacoesParaCopia(ctx context.Context, prop, unidade uuid
 	return out, db.MapError(linhas.Err())
 }
 
-// CriarAmbienteSeAusente cria o cômodo no destino; se o nome já existe (outra
-// aba criou entre o plano e a execução), a constraint decide e nada acontece —
-// a cópia só ACRESCENTA.
+// CriarAmbienteSeAusente cria o cômodo no destino com o `code` e o `name` da
+// origem. Se outra aba criou o mesmo `code` ou o mesmo `name` entre o plano e a
+// execução, a constraint decide e nada acontece — a cópia só ACRESCENTA. Sem
+// árbitro no `ON CONFLICT` de propósito: as duas chaves (`code` e `name`)
+// valem.
 func (r *Repository) CriarAmbienteSeAusente(ctx context.Context, prop, unidade uuid.UUID, a ambienteGravado) error {
 	_, err := r.exec(ctx).Exec(ctx, `
-		INSERT INTO unit_rooms (property_id, unit_id, name, kind, sort_order, active)
-		VALUES ($1, $2, $3, $4, $5, true)
-		ON CONFLICT ON CONSTRAINT `+nomeUnicoDoAmbiente+` DO NOTHING`, prop, unidade, a.Nome, a.Tipo, a.Ordem)
-	return db.MapError(err)
+		INSERT INTO unit_rooms (property_id, unit_id, code, name, kind, sort_order, active)
+		VALUES ($1, $2, $3, $4, $5, $6, true)
+		ON CONFLICT DO NOTHING`, prop, unidade, a.Codigo, a.Nome, a.Tipo, a.Ordem)
+	return traduzirAmbiente(err)
 }
 
-// IDsDosAmbientes devolve nome → id dos cômodos da unidade.
+// IDsDosAmbientes devolve `code` → id dos cômodos da unidade.
 func (r *Repository) IDsDosAmbientes(ctx context.Context, prop, unidade uuid.UUID) (map[string]uuid.UUID, error) {
 	linhas, err := r.exec(ctx).Query(ctx,
-		`SELECT name, id FROM unit_rooms WHERE property_id = $1 AND unit_id = $2`, prop, unidade)
+		`SELECT code, id FROM unit_rooms WHERE property_id = $1 AND unit_id = $2`, prop, unidade)
 	if err != nil {
 		return nil, db.MapError(err)
 	}
@@ -249,13 +251,13 @@ func (r *Repository) IDsDosAmbientes(ctx context.Context, prop, unidade uuid.UUI
 	out := map[string]uuid.UUID{}
 	for linhas.Next() {
 		var (
-			nome string
-			id   uuid.UUID
+			codigo string
+			id     uuid.UUID
 		)
-		if err := linhas.Scan(&nome, &id); err != nil {
+		if err := linhas.Scan(&codigo, &id); err != nil {
 			return nil, db.MapError(err)
 		}
-		out[nome] = id
+		out[codigo] = id
 	}
 	return out, db.MapError(linhas.Err())
 }

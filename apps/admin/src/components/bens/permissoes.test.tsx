@@ -64,6 +64,7 @@ const INVENTARIO: InventarioDaUnidade = {
     {
       id: AMBIENTE,
       unit_id: UNIDADE,
+      code: "cozinha",
       name: "Cozinha",
       kind: "cozinha",
       sort_order: 0,

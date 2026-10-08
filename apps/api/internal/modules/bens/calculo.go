@@ -117,36 +117,43 @@ func totalizar(ambientes []AmbienteDoInventario) TotaisDaUnidade {
 
 // ─────────────────────────── Plano da cópia ─────────────────────────────────
 
-// colocacaoDaCopia é uma colocação vista pela cópia: o cômodo pelo NOME, que
-// é a chave que casa origem e destino (`unit_rooms_nome_unico`).
+// colocacaoDaCopia é uma colocação vista pela cópia. O cômodo vai pelo
+// `code` — a identidade estável, que sobrevive a renomear — e pelo nome, que é
+// só o que a resposta mostra.
 type colocacaoDaCopia struct {
-	AmbienteNome string
-	BemID        uuid.UUID
-	BemNome      string
-	Qtd          int
+	AmbienteCodigo string
+	AmbienteNome   string
+	BemID          uuid.UUID
+	BemNome        string
+	Qtd            int
 }
 
 // planoDeCopia é o que a cópia vai fazer — idêntico na simulação e na
-// execução, porque as duas saem desta mesma função.
+// execução, porque as duas saem desta mesma função. As colocações a criar já
+// vêm com o `code` e o nome do cômodo DE DESTINO.
 type planoDeCopia struct {
 	Ambientes  []ambienteGravado
 	Colocacoes []colocacaoDaCopia
 	Mantidas   []ColocacaoMantida
 }
 
-type chaveDeColocacaoPorNome struct {
-	ambiente string
-	bem      uuid.UUID
+type chaveDeColocacaoNoDestino struct {
+	codigo string
+	bem    uuid.UUID
 }
 
 // planejarCopia decide o que nasce no destino. A cópia só ACRESCENTA:
 //
-//   - cômodo cujo nome já existe no destino é reaproveitado e NADA nele muda
-//     (kind, sort_order e active do destino ficam);
+//   - o cômodo de origem casa com o de destino PELO `code`, que sobrevive a
+//     renomear "Quarto grande" para "Suíte Master" num dos dois; sem `code`
+//     igual, casa pelo `name`, porque `unit_rooms_nome_unico` não deixaria
+//     criar o segundo. Cômodo casado é reaproveitado e NADA nele muda;
+//   - o que não casa nasce no destino com `code`, `name`, `kind` e
+//     `sort_order` da origem — a identidade viaja junto, e a próxima cópia o
+//     reencontra mesmo que alguém o renomeie;
 //   - colocação que já existe no destino é mantida COM A QUANTIDADE QUE TEM e
-//     vai para `kept`, lado a lado com a da origem. Copiar o AP-01 para o AP-02
-//     não pode apagar os 8 pratos que alguém já contou no AP-02 porque o AP-01
-//     tem 12.
+//     vai para `kept`, lado a lado com a da origem. Copiar o AP-01 para o
+//     AP-02 não pode apagar os 8 pratos que alguém já contou no AP-02.
 //
 // Consequência: rodar duas vezes não cria nada na segunda.
 //
@@ -158,32 +165,56 @@ func planejarCopia(origemAmb, destinoAmb []ambienteGravado, origemCol, destinoCo
 		Mantidas:   []ColocacaoMantida{},
 	}
 
-	noDestino := map[string]bool{}
-	for _, a := range destinoAmb {
-		noDestino[a.Nome] = true
+	porCodigo := map[string]ambienteGravado{}
+	porNome := map[string]ambienteGravado{}
+	for _, d := range destinoAmb {
+		porCodigo[d.Codigo] = d
+		porNome[d.Nome] = d
 	}
+	// destino: `code` do cômodo de origem → cômodo no destino (casado ou novo).
+	destino := map[string]ambienteGravado{}
 	for _, a := range origemAmb {
-		if !noDestino[a.Nome] {
-			p.Ambientes = append(p.Ambientes, a)
-			noDestino[a.Nome] = true
+		d, casou := porCodigo[a.Codigo]
+		if !casou {
+			d, casou = porNome[a.Nome]
 		}
+		if !casou {
+			d = ambienteGravado{Codigo: a.Codigo, Nome: a.Nome, Tipo: a.Tipo, Ordem: a.Ordem, Ativo: true}
+			p.Ambientes = append(p.Ambientes, d)
+			porCodigo[d.Codigo], porNome[d.Nome] = d, d
+		}
+		destino[a.Codigo] = d
 	}
 	if soComodos {
 		return p
 	}
 
-	atual := map[chaveDeColocacaoPorNome]int{}
+	atual := map[chaveDeColocacaoNoDestino]int{}
 	for _, c := range destinoCol {
-		atual[chaveDeColocacaoPorNome{c.AmbienteNome, c.BemID}] = c.Qtd
+		atual[chaveDeColocacaoNoDestino{c.AmbienteCodigo, c.BemID}] = c.Qtd
 	}
+	// Dois cômodos de origem podem cair no MESMO cômodo de destino (um casado
+	// pelo `code`, outro pelo `name`): a colocação entra uma vez só.
+	vista := map[chaveDeColocacaoNoDestino]bool{}
 	for _, c := range origemCol {
-		if qtd, existe := atual[chaveDeColocacaoPorNome{c.AmbienteNome, c.BemID}]; existe {
+		d, ok := destino[c.AmbienteCodigo]
+		if !ok {
+			continue
+		}
+		k := chaveDeColocacaoNoDestino{d.Codigo, c.BemID}
+		if vista[k] {
+			continue
+		}
+		vista[k] = true
+		if qtd, existe := atual[k]; existe {
 			p.Mantidas = append(p.Mantidas, ColocacaoMantida{
-				AmbienteNome: c.AmbienteNome, BemNome: c.BemNome, QtdOrigem: c.Qtd, QtdAtual: qtd,
+				AmbienteNome: d.Nome, BemNome: c.BemNome, QtdOrigem: c.Qtd, QtdAtual: qtd,
 			})
 			continue
 		}
-		p.Colocacoes = append(p.Colocacoes, c)
+		p.Colocacoes = append(p.Colocacoes, colocacaoDaCopia{
+			AmbienteCodigo: d.Codigo, AmbienteNome: d.Nome, BemID: c.BemID, BemNome: c.BemNome, Qtd: c.Qtd,
+		})
 	}
 	return p
 }

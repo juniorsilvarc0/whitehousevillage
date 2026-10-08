@@ -227,6 +227,18 @@ func verboDoDesfecho(antes, depois *string) string {
 
 // ApagarAvaria apaga o registro que nunca devia ter nascido. Resolver não é
 // apagar — o rastro de que existiu fica em `audit_log`.
+//
+// Avaria ligada a conferência FECHADA não se apaga (409 RESOURCE_IN_USE): ela
+// é parte do que a conferência apurou — o `result` cita o `issue_id` e conta
+// `issues_created` —, e apagá-la reescreveria em silêncio um relatório já
+// fechado e talvez cobrado. Falta que não procede se encerra com
+// `resolution: descartado`.
+//
+// A decisão não é um SELECT solto: a conferência é travada FOR SHARE, a mesma
+// trava do gesto da contagem. Um fechamento em curso (FOR UPDATE) faz este
+// DELETE esperar e, depois, ler `fechada`; um DELETE em curso faz o fechamento
+// esperar. Não há janela em que a avaria some de uma conferência que acabou de
+// fechar.
 func (s *Service) ApagarAvaria(ctx context.Context, id uuid.UUID) error {
 	prop, err := propriedadeDoAtor(ctx)
 	if err != nil {
@@ -236,6 +248,18 @@ func (s *Service) ApagarAvaria(ctx context.Context, id uuid.UUID) error {
 		antes, err := s.repo.TravarAvaria(ctx, prop, id)
 		if err != nil {
 			return err
+		}
+		if antes.ConferenciaID != nil {
+			conf, err := s.repo.TravarConferencia(ctx, prop, *antes.ConferenciaID, false)
+			if err != nil {
+				return err
+			}
+			if conf.Status == StatusFechada {
+				return apperr.ResourceInUse.
+					WithMessage("Esta avaria faz parte de uma conferência fechada e não pode ser apagada. " +
+						`Se a falta não procede, encerre-a com "resolution": "descartado" (PATCH).`).
+					WithDetails(map[string]any{"count_id": conf.ID})
+			}
 		}
 		if err := s.repo.ApagarAvaria(ctx, prop, id); err != nil {
 			return err

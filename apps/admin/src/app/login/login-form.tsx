@@ -89,7 +89,10 @@ export function LoginForm({ destino }: { destino: string }) {
   }
 
   return (
-    <form noValidate onSubmit={form.handleSubmit(enviar)} className="flex flex-col gap-4">
+    // `method="post"`: antes da hidratação (segundos, no celular com sinal
+    // fraco) um toque em Entrar vira envio NATIVO, e o padrão de <form> é GET —
+    // a senha iria para a URL, o histórico e o log de acesso.
+    <form method="post" noValidate onSubmit={form.handleSubmit(enviar)} className="flex flex-col gap-4">
       {erroGeral ? (
         <p
           role="alert"

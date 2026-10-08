@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 // O custo de reposição é CONGELADO no fechamento (regra 7): fechar, recotar o
@@ -141,4 +143,66 @@ func TestNotaDaLinhaEDoFechamento(t *testing.T) {
 	if n := dado[fechamentoResp](t, r).Conferencia.Nota; n != nil {
 		t.Fatalf("note null no fechamento limpa a observação: %q", *n)
 	}
+}
+
+// Avaria ligada a conferência FECHADA não se apaga: o `result` cita o
+// `issue_id` e conta `issues_created`, e apagar reescreveria um relatório já
+// fechado. O caminho é `resolution: descartado`. Ligada a conferência aberta
+// ou cancelada, ou sem conferência, continua apagável.
+func TestAvariaDeConferenciaFechadaNaoSeApaga(t *testing.T) {
+	a := subir(t)
+	g := a.gestor(t)
+	unidade, _ := a.unidade(t)
+	cozinha := a.comodo(t, g, unidade, "Cozinha", "cozinha", 1)
+	prato := a.bem(t, g, "Prato", ptr[int64](1890))
+	a.colocar(t, g, cozinha.ID, prato.ID, 12)
+
+	// Avaria relatada à mão DURANTE a conferência aberta: apagável enquanto ela
+	// estiver aberta.
+	conf := a.abrir(t, g, unidade)
+	relatar := func(conferencia any) avariaIDResp {
+		r := a.chamar(t, http.MethodPost, "/inventory/issues", g, map[string]any{
+			"room_id": cozinha.ID, "item_id": prato.ID, "kind": "quebrado", "qty": 1, "count_id": conferencia,
+		})
+		exigir(t, r, http.StatusCreated, "relatando")
+		return dado[avariaIDResp](t, r)
+	}
+	daAberta := relatar(conf.ID)
+	exigir(t, a.chamar(t, http.MethodDelete, "/inventory/issues/"+daAberta.ID.String(), g, nil), http.StatusNoContent, "apagando de conferência aberta")
+	manual := relatar(conf.ID)
+
+	exigir(t, a.contar(t, g, conf.ID, conf.linhaDo(t, prato.ID).ID, 9), http.StatusOK, "contando")
+	r := a.chamar(t, http.MethodPost, fmt.Sprintf("/inventory/counts/%s/close", conf.ID), g, nil)
+	exigir(t, r, http.StatusOK, "fechando")
+	fechou := dado[fechamentoResp](t, r)
+	original, _ := json.Marshal(apuracaoResp{Divergencias: fechou.Divergencias, AvariasCriadas: fechou.AvariasCriadas})
+
+	for nome, id := range map[string]string{
+		"nascida no fechamento":                fechou.Divergencias[0].AvariaID.String(),
+		"relatada à mão citando a conferência": manual.ID.String(),
+	} {
+		r = a.chamar(t, http.MethodDelete, "/inventory/issues/"+id, g, nil)
+		exigirErro(t, r, http.StatusConflict, "RESOURCE_IN_USE", "apagando avaria "+nome)
+		if r.detalhes(t)["count_id"] != conf.ID.String() {
+			t.Fatalf("details.count_id deveria levar à conferência fechada: %s", r.Corpo)
+		}
+	}
+	r = a.chamar(t, http.MethodGet, "/inventory/counts/"+conf.ID.String(), g, nil)
+	posterior, _ := json.Marshal(dado[conferenciaResp](t, r).Resultado)
+	if string(posterior) != string(original) {
+		t.Fatalf("o result da conferência fechada mudou:\n antes  %s\n depois %s", original, posterior)
+	}
+	// O caminho que o 409 manda seguir funciona.
+	r = a.chamar(t, http.MethodPatch, "/inventory/issues/"+manual.ID.String(), g, map[string]any{"resolution": "descartado"})
+	exigir(t, r, http.StatusOK, "descartando")
+
+	// Conferência cancelada não segura a avaria.
+	outra := a.abrir(t, g, unidade)
+	daCancelada := relatar(outra.ID)
+	exigir(t, a.chamar(t, http.MethodDelete, "/inventory/counts/"+outra.ID.String(), g, nil), http.StatusNoContent, "cancelando")
+	exigir(t, a.chamar(t, http.MethodDelete, "/inventory/issues/"+daCancelada.ID.String(), g, nil), http.StatusNoContent, "apagando de conferência cancelada")
+}
+
+type avariaIDResp struct {
+	ID uuid.UUID `json:"id"`
 }

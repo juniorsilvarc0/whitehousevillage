@@ -17,7 +17,7 @@ vi.mock("@/lib/bens/acoes", () => ({}));
 
 const INVENTARIO: InventarioDaUnidade = {
   unit: { id: "u1", code: "AP-01", name: "Duplex 01" },
-  rooms: [{ id: "r1", unit_id: "u1", name: "Cozinha", kind: "cozinha", sort_order: 0, active: true, items: [] }],
+  rooms: [{ id: "r1", unit_id: "u1", code: "cozinha", name: "Cozinha", kind: "cozinha", sort_order: 0, active: true, items: [] }],
   totals: { rooms: 1, items: 8, expected_qty: 120, open_issues: 0 },
 };
 
