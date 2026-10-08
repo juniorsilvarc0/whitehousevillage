@@ -29,7 +29,7 @@ var chavesDoContrato = func() []string {
 	add("menu.disponibilidade", "menu.reservar", "menu.falar-com-reservas", "menu.whatsapp-flutuante")
 	add("menu.pular")
 	// 3. Topo (capa)
-	add("inicio.local", "inicio.titulo", "inicio.texto", "inicio.video")
+	add("inicio.local", "inicio.titulo", "inicio.texto", "inicio.video", "inicio.video-celular")
 	add("inicio.numeros", "inicio.botao-disponibilidade", "inicio.botao-acomodacoes", "inicio.rolar")
 	// 4. Faixa de temas
 	add("faixa.itens")
@@ -106,8 +106,8 @@ func TestCatalogoTemExatamenteAsChavesDoContratoNaOrdem(t *testing.T) {
 		t.Fatalf("catálogo diverge do docs/site-cms.md §4.\ncatálogo (%d): %v\ncontrato (%d): %v",
 			len(noCatalogo), noCatalogo, len(chavesDoContrato), chavesDoContrato)
 	}
-	if len(noCatalogo) != 190 {
-		t.Fatalf("esperadas 190 chaves (72 do §4 + 118 do §4b), há %d", len(noCatalogo))
+	if len(noCatalogo) != 191 {
+		t.Fatalf("esperadas 191 chaves (72 do §4 + 118 do §4b + vídeo do celular), há %d", len(noCatalogo))
 	}
 }
 

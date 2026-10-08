@@ -66,7 +66,7 @@ O valor original de cada campo é o texto que está hoje no HTML/JS do site
 
 1. **Google e redes** — `seo.inicio.titulo` (texto), `seo.inicio.descricao` (texto_longo), `seo.disponibilidade.titulo`, `seo.disponibilidade.descricao`.
 2. **Marca** — `marca.logo` (imagem; hoje `/assets/logo.png`).
-3. **Topo (capa)** — `inicio.local` (texto: "Praia do Coqueiro · Luís Correia · Piauí"), `inicio.titulo` (titulo), `inicio.texto` (texto_longo), `inicio.video` (video; hoje `/videos/hero.mp4`), `inicio.numeros` (lista de {valor, rotulo}: 24 hóspedes…, 12 acomodações, 300m…).
+3. **Topo (capa)** — `inicio.local` (texto: "Praia do Coqueiro · Luís Correia · Piauí"), `inicio.titulo` (titulo), `inicio.texto` (texto_longo), `inicio.video` (video; hoje `/videos/hero.mp4`), `inicio.video-celular` (video, opcional, sem original — versão em pé 9:16 para tela em pé; vazio = celular usa `inicio.video`; pedido do dono em 03/10/2026), `inicio.numeros` (lista de {valor, rotulo}: 24 hóspedes…, 12 acomodações, 300m…).
 4. **Faixa de temas** — `faixa.itens` (lista de {texto}).
 5. **A casa** — `casa.rotulo` ("A casa"), `casa.titulo` (titulo), `casa.texto` (texto_longo, dois parágrafos), `casa.foto` (imagem; hoje cena "Pôr do sol"), `casa.numeros` (lista {valor, rotulo}).
 6. **Acomodações** — `acomodacoes.rotulo`, `acomodacoes.titulo`, `acomodacoes.texto`; e por categoria (`duplex`, `suites`, `grand-villa`, `classic-villa`, `completa`): `categoria.<c>.titulo`, `categoria.<c>.selo`, `categoria.<c>.descricao` (texto_longo), `categoria.<c>.itens` (lista {texto} — os "specs"), `categoria.<c>.foto` (imagem). Preço, lotação e disponibilidade **não** são campos: vêm do tarifário (o site pergunta, não calcula).
