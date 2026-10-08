@@ -1031,6 +1031,13 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 	alvos["/crm/opportunities"] = a.oportunidadeDeVarredura(t, propriedade, contato)
 	alvos["/crm/activities"] = a.atividadeDeVarredura(t, propriedade, alvos["/crm/opportunities"])
 
+	// Inventário de bens: os handlers leem o corpo ANTES de procurar o registro,
+	// então um id bem formado basta; se um deles passar a buscar antes, a
+	// varredura acusa 404 em vez de passar verde.
+	for _, prefixo := range []string{"/rooms", "/inventory/items", "/inventory/counts", "/inventory/issues"} {
+		alvos[prefixo] = uuid.New()
+	}
+
 	for prefixo, tabela := range map[string]string{
 		"/rate-tables":      "rate_tables",
 		"/rates":            "rates",
@@ -1067,7 +1074,7 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 		// "campo desconhecido" a recusar, só a parte `file`. A cobertura dele
 		// (tipo pelos bytes, 422 com details.file) mora em
 		// site_integration_test.go.
-		if rota.Path == RotaDeEnvioDeMidia {
+		if rota.Path == RotaDeEnvioDeMidia || rota.Path == RotaDeEnvioDeFotoDeBem {
 			continue
 		}
 
@@ -1075,6 +1082,11 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 		// Campo do site: chave real do catálogo, para a recusa vir do decoder
 		// e não de um 404 de chave inexistente.
 		caminho = strings.ReplaceAll(caminho, "{key}", "inicio.local")
+		// A colocação não tem id próprio: a chave é `room_id_item_id`.
+		if strings.HasPrefix(caminho, "/inventory/placements/{id}") {
+			caminho = strings.Replace(caminho, "{id}", uuid.NewString()+"_"+uuid.NewString(), 1)
+		}
+		caminho = strings.ReplaceAll(caminho, "{lineId}", uuid.NewString())
 		if strings.Contains(caminho, "{id}") {
 			// A chave é o primeiro segmento, MAS o CRM agrupa seis coleções sob
 			// `/crm` — cada uma com o seu alvo. Por isso tenta-se primeiro o

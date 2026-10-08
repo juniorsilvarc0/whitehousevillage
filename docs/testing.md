@@ -464,6 +464,31 @@ O teste continua no lugar como **regressão**: ele é a única coisa que impede 
 
 A tela de login como componente de decisão: a mensagem de erro é **a mesma** para e-mail inexistente, senha errada e bloqueio (o contrato usa um único `INVALID_CREDENTIALS`; distinguir na tela devolveria a enumeração de usuários que a API fecha de propósito), a validação segura o envio antes de gastar uma das cinco tentativas, e a tela reage ao `code`, nunca ao texto que a API mandou.
 
+### `apps/admin/src/app/login/login-form-antes-da-hidratacao.test.tsx` — verde desde o conserto de 07/10/2026
+
+O HTML do login que o servidor entrega, antes da hidratação. O `<form>` não tinha `method`, então um toque em "Entrar" antes de o JavaScript carregar virava envio nativo por **GET**: e-mail e senha iam para a URL, o histórico do navegador e o log de acesso. Medido no E2E de bens, no log do `next dev`: `GET /login?email=gestao%40wh.local&password=whv%402026`. Nasceu vermelho e ficou verde com `method="post"` no formulário; continua como regressão, e aceita qualquer das três saídas (POST, senha sem `name` ou botão desabilitado até hidratar).
+
+### `internal/router/bens_qa_*_integration_test.go` — inventário de bens pela porta da frente (Fase 5)
+
+Router completo de `router.New`, sessões por `/auth/login` com os perfis **do seed**, e as 40 operações da tag `Bens` lidas do **contrato** (com o `x-rbac` de cada uma), nunca de `rotas_inventario_bens.go`. Complementa os 59 testes do módulo, que montam um chi próprio e assinam o token direto no emissor.
+
+- `rbac` — corretor do seed com 403 nas 40, e o 403 aponta o mesmo `recurso:ação` do `x-rbac`; sem sessão, 401 nas 40 (inclusive a foto com id real, token na query e Basic); `usuario` e `admin` percorrem as 40 com o status de sucesso do contrato; perfil só `inventory.goods:ver` lê as 15 leituras e leva 403 nas 25 escritas e em `/units`; perfil só `inventory` leva 403 nas 40. Todo 403 confere que o banco não mudou.
+- `isolamento` — segunda propriedade montada pela API por um usuário dela: colocação, avaria (cômodo, bem, conferência e reserva cruzados), foto, galeria, cópia nos dois sentidos, leituras e escritas nos recursos da outra casa.
+- `isolamento` (vazamento) — nenhuma resposta (nem a planilha) traz nome, e-mail, telefone ou documento do hóspede, nem e-mail ou telefone do operador; nenhuma chave fora da árvore do schema do contrato.
+- `conferencia` — fechada e cancelada recusam as cinco escritas com `COUNT_CLOSED`; o `result` do GET é byte a byte o do `/close` depois de recotar, mudar e apagar colocação e desativar cômodo e bem. Nasceu **vermelho**: apagar a avaria nascida no fechamento reescrevia `issues_created` e `issue_id` da conferência fechada. Verde desde a rodada 3 do módulo: avaria de conferência fechada leva `409 RESOURCE_IN_USE` com `details.count_id` (`TestBensQAAvariaDeConferenciaFechadaNaoSeApaga`).
+- `formato` — envelope das seis listas, envelope e `details` dos erros, `Location` nos seis 201, `ContagemDaLinha` inválida, campo desconhecido com alvo real e corpo válido, CSV para o Excel (`;`, BOM, vírgula decimal, fórmula neutralizada, `Content-Disposition`). Nasceu **vermelho**: chave com outra caixa (`COUNTED_QTY`) era aceita como o campo do contrato, porque o `encoding/json` casa nome sem diferenciar maiúscula. Verde desde que `httpx.Decode` passou a exigir a chave byte a byte igual à tag do DTO — o conserto vale para a API inteira.
+- `upload` — acima de 15 MB, GIF, vídeo, HEIC, SVG/HTML/PDF disfarçados e arquivo vazio dão 422 sem deixar linha; 15.000.000 bytes entram; JPEG com EXIF Orientation=6 gera miniatura em pé (conferido pixel a pixel); PNG gera miniatura JPEG; WebP sai com `thumb_url == url`.
+
+### `tests/e2e/bens-contagem-celular.mjs` — a conferência pelo celular
+
+Jornada do perfil `usuario` em viewport de celular, contra a aplicação **servida**: abrir a conferência na tela da unidade, contar cômodo a cômodo, tentar fechar com pendência, seguir o "Ir contar" da recusa, fechar, conferir a apuração e **recarregar**. Prepara os dados pela API com `admin@wh.local` e desativa a unidade no fim. Espera por condição (rodapé, URL pelo documento, hidratação), nunca por relógio.
+
+```bash
+E2E_PAINEL=http://localhost:3100 E2E_API=http://localhost:8080 node tests/e2e/bens-contagem-celular.mjs
+```
+
+Sem Docker (disco da VM cheio em 07/10/2026) ele rodou com a API compilada no host e o painel em `next dev --webpack` a partir de uma **cópia** no diretório temporário — o Turbopack recusa `node_modules` por symlink fora da raiz, e a cópia evita sobrescrever o `.next` de quem desenvolve.
+
 ## 3. Estado atual
 
 ### 3.0 Medido em 02/10/2026, ao fim da Rodada 5

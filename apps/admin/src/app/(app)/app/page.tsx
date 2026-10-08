@@ -173,11 +173,11 @@ const TEXTO_DO_ALERTA: Record<Alerta["motivo"], { titulo: string; acao: string }
   },
   composicao_incompleta: {
     titulo: "faltando apartamento",
-    acao: "Um dos apartamentos que formam este item está desativado, então ele não pode ser vendido inteiro. Reative o apartamento em Configurações → Inventário.",
+    acao: "Um dos apartamentos que formam este item está desativado, então ele não pode ser vendido inteiro. Reative o apartamento em Configurações → Unidades e produtos.",
   },
   unidade_inativa: {
     titulo: "sem apartamento ativo",
-    acao: "Todos os apartamentos deste item estão desativados. Reative pelo menos um em Configurações → Inventário.",
+    acao: "Todos os apartamentos deste item estão desativados. Reative pelo menos um em Configurações → Unidades e produtos.",
   },
 };
 

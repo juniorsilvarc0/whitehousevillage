@@ -364,7 +364,7 @@ function FalhaDoOrcamento({ falha }: { falha: Falha }) {
             </>
           ) : null}
           . O problema não é a data: <strong>nenhuma data funciona</strong> enquanto faltar apartamento.
-          Reative o apartamento em Configurações → Inventário.
+          Reative o apartamento em Configurações → Unidades e produtos.
         </>
       );
       break;

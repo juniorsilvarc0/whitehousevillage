@@ -108,15 +108,22 @@ describe("o menu é derivado da matriz, não do nome do perfil", () => {
     const visiveis = hrefs("corretor", MATRIZ_DO_CORRETOR);
 
     // A lista encolheu para UM destino, e o encolhimento é a asserção ficando
-    // mais honesta, não mais fraca. `/app/financeiro`, `/app/relatorios`,
-    // `/app/inventario` e `/app/canais` saíram porque essas telas **não
-    // existem** (Fases 2 a 5): a ausência delas do menu não prova nada sobre
-    // permissão — elas somem para o admin também. Um caso que "passa" por falta
-    // de tela é um verde vazio, e ele ficaria verde mesmo no dia em que o
-    // filtro por matriz quebrasse.
+    // mais honesta, não mais fraca. `/app/financeiro`, `/app/relatorios` e
+    // `/app/canais` saíram porque essas telas **não existem** (Fases 2 a 5): a
+    // ausência delas do menu não prova nada sobre permissão — elas somem para o
+    // admin também. Um caso que "passa" por falta de tela é um verde vazio, e
+    // ele ficaria verde mesmo no dia em que o filtro por matriz quebrasse.
     //
     // Configurações é a única tela que EXISTE e que a spec §11 mantém fora do
     // alcance do corretor — é sobre ela, portanto, que a garantia se afirma.
     expect(visiveis).not.toContain("/app/configuracoes");
+
+    // O inventário de bens nasceu em 07/10/2026 (`/app/inventario`, recurso
+    // `inventory.goods`) e é a segunda tela que existe e que o corretor não
+    // alcança: o seed concede `inventory.goods` a admin e usuario, e não a ele
+    // (docs/db.md §11). Enquanto o item ainda estiver marcado `emConstrucao`
+    // em `navigation.ts`, este caso é o verde vazio descrito acima; quando a
+    // marca cair, é a matriz que o mantém verde.
+    expect(visiveis).not.toContain("/app/inventario");
   });
 });

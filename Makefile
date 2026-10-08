@@ -53,7 +53,7 @@ GOLANGCI_LINT_ARGS    := --max-same-issues=0 --max-issues-per-linter=0
 #   make lint-golangci GOLANGCI_LINT_TAGS=integration
 GOLANGCI_LINT_TAGS    ?=
 
-.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed smoke smoke-painel smoke-site smoke-site-imagem smoke-stack worker-vivo esperar check lint lint-golangci golangci-versao fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
+.PHONY: help up down logs logs-api ps migrate migrate-down migrate-version seed importar-bens smoke smoke-painel smoke-site smoke-site-imagem smoke-stack worker-vivo esperar check lint lint-golangci golangci-versao fmt-check vet test test-api test-admin test-integration it-schema it-seed it-suite it-concorrencia build fmt psql backup restore
 
 help: ## Lista os alvos
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -94,6 +94,9 @@ migrate-version: ## Versão aplicada do schema e estado dirty
 
 seed: ## Popula produtos, unidades, tarifas, perfis e usuários de teste
 	$(COMPOSE) run --rm --build seed
+
+importar-bens: ## Importa o levantamento fotográfico de bens (UNIDADE=GV-01 opcional; DRY_RUN=1 só imprime o plano)
+	$(COMPOSE) run --rm --build importar-bens --dir /levantamento $(if $(UNIDADE),--unidade $(UNIDADE)) $(if $(DRY_RUN),--dry-run)
 
 smoke: ## Fumaça de aplicação: painel (navegador, login, telas) e site público
 	# Existe porque a suíte inteira ficou verde enquanto o stack NÃO SUBIA:

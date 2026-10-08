@@ -129,6 +129,22 @@ tags:
   - name: Perfis
   - name: Inventário
     description: Propriedade, produtos (o que se vende) e unidades físicas (o que se ocupa).
+  - name: Bens
+    description: |
+      Bens e enxoval **por ambiente** nas unidades físicas — prato, taça, cama,
+      toalha, eletrodoméstico, móvel —, com conferência, avaria, cópia entre
+      unidades e exportação. Schema em `20261007170000` (`docs/db.md` §11).
+
+      Recurso RBAC: **`inventory.goods`**, e não `inventory` — aquele protege o
+      cadastro comercial (propriedade, produtos, unidades, composição). Num
+      recurso só, `inventory:editar` significaria duas coisas: a permissão que
+      deixa a diarista salvar "contei 9 taças" no celular deixaria apagar um
+      produto que a casa vende.
+
+      Três coisas atravessam o módulo inteiro: **a conferência congela** (a
+      quantidade esperada é copiada na abertura, nunca lida por `JOIN`), **uma
+      conferência aberta por unidade** é garantida por índice único parcial no
+      banco, e **nenhuma rota é pública** — a foto mostra o interior da casa.
   - name: Tarifário
     description: Tarifas, calendário comercial e políticas — tudo dado versionado, e nada reescreve o passado.
   - name: Contatos
@@ -5892,6 +5908,1491 @@ paths:
         "416": { description: Faixa pedida fora do arquivo. }
         "429": { $ref: "#/components/responses/Erro" }
 
+  # ════════════════════════════════════════════════════════════════════
+  # Bens e enxoval por ambiente — módulo `inventario-bens`.
+  #
+  # Schema: `20261007170000` + `20261007200000`, oito tabelas (docs/db.md §11). Recurso RBAC:
+  # `inventory.goods`, e NÃO `inventory` — aquele protege o cadastro comercial
+  # (`/properties`, `/unit-types`, `/units`, composição), e pendurar bens no
+  # mesmo recurso faria `inventory:editar` significar duas coisas: a permissão
+  # que deixa a diarista salvar "contei 9 taças" no celular deixaria apagar um
+  # produto que a casa vende. Um toque de tela de distância.
+  #
+  # DADO PESSOAL NA RESPOSTA (regra do topo deste arquivo): nenhuma rota deste
+  # módulo devolve dado de CONTATO, então nenhuma mascara e nenhuma grava
+  # `pii_access_log`. Os campos `*_by_name` são nome de USUÁRIO do sistema —
+  # quem abriu a conferência, quem contou a linha, quem relatou a avaria —, que
+  # a regra trata à parte ("Usuário do sistema não é contato") e que aqui sai
+  # ainda mais magro: só o nome, nunca e-mail nem telefone. `Avaria`
+  # referencia a reserva pelo `code`, que é identificador operacional, e jamais
+  # pelo hóspede: "o que quebrou nesta estadia" se responde sem dizer quem
+  # dormiu nela.
+  #
+  # NENHUMA ROTA AQUI É PÚBLICA, e a foto é o motivo: `GET /inventory/media/{id}`
+  # devolve o interior da casa — a bancada, o quarto, o cofre aberto, o que há
+  # de valor e onde fica. A mídia do SITE é pública e está certo (é foto de
+  # divulgação); esta não, e a diferença não é de zelo, é de assunto.
+  # ════════════════════════════════════════════════════════════════════
+
+  /rooms:
+    get:
+      tags: [Bens]
+      summary: Lista os ambientes (cômodos) das unidades
+      description: |
+        O ambiente é a dimensão que faltava: o enxoval não está "no AP-01", está
+        na cozinha do AP-01, e quem confere caminha cômodo a cômodo.
+
+        A ordem padrão é a **ordem de caminhada pela casa** (`sort_order`), com
+        desempate por `name` e `id`. O desempate não é zelo: sem ele, dois
+        cômodos com o mesmo `sort_order` trocam de lugar entre duas aberturas da
+        tela e a paginação repete ou perde linha.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: unit_id,  in: query, schema: { type: string, format: uuid }, description: Ambientes de uma unidade física. }
+        - { name: kind,     in: query, schema: { $ref: "#/components/schemas/TipoDeAmbiente" } }
+        - { name: active,   in: query, schema: { type: boolean }, description: "Omitido devolve ativos e inativos; a tela manda `true`." }
+        - { name: q,        in: query, schema: { type: string }, description: Busca por `name`. }
+        - name: sort
+          in: query
+          schema: { type: string, default: sort_order, enum: [sort_order, -sort_order, name, -name, created_at, -created_at] }
+          description: "`sort_order` sai do índice `unit_rooms_listagem_idx` já desempatado por `name` e `id`."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Ambiente" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Bens]
+      summary: Cria um ambiente numa unidade
+      description: |
+        `(unit_id, name)` é a chave natural (`unit_rooms_nome_unico`): dois
+        "Suíte 1" na mesma unidade é o defeito que faz quem confere contar a
+        mesma cama duas vezes e nunca a outra. Colisão é `409 CODE_IN_USE`, e
+        quem decide é a constraint — `SELECT` antes do `INSERT` perde a corrida
+        entre duas abas abertas no mesmo plantão.
+
+        `kind` é vocabulário fechado porque a tela agrupa e ordena por ele;
+        texto livre viraria "Quarto", "quarto " e "Dormitório" no mesmo
+        relatório.
+      x-rbac: { recurso: inventory.goods, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AmbienteCriar" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string, example: /api/v1/rooms/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Ambiente" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`CODE_IN_USE` — já existe um ambiente com este nome nesta unidade."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /rooms/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bens]
+      summary: Detalhe do ambiente
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Ambiente" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Bens]
+      summary: Substitui o ambiente
+      description: |
+        Substitui os campos editáveis: `name`, `kind`, `sort_order` e `active`.
+        **`unit_id` não é editável** e é campo desconhecido aqui (`422`): mudar
+        um cômodo de unidade levaria junto a lista de bens, as linhas de
+        conferência e as avarias — o histórico da cozinha do AP-01 passaria a
+        dizer que era a do AP-02. Cômodo criado na unidade errada se apaga (se
+        ainda não tem histórico) e se cria de novo.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AmbienteSubstituir" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Ambiente" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Bens]
+      summary: Atualiza o ambiente
+      description: |
+        Campo ausente não muda nada; campo com `null` limpa. `active: false` é
+        como se tira de linha um cômodo que tem histórico de conferência — ele
+        sai da lista de contagem e o histórico permanece legível.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AmbienteAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Ambiente" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Bens]
+      summary: Apaga o ambiente — e recusa quando há histórico
+      description: |
+        **Apaga de verdade**, e leva com ele a lista de bens daquele cômodo
+        (`room_inventory` é `ON DELETE CASCADE`: a colocação pertence ao
+        ambiente). Existe porque ambiente é digitado no celular, dentro do
+        apartamento, e "Quarto 2" criado duas vezes tem de poder sair.
+
+        **Recusa com `409 RESOURCE_IN_USE` quando o cômodo já entrou em
+        conferência ou em avaria** — as FKs de `inventory_count_lines` e
+        `inventory_issues` são `ON DELETE RESTRICT`, e é isso que faz a contagem
+        do mês passado continuar legível. `details` diz o que segura
+        (`count_lines`, `issues`) e a mensagem manda o caminho certo:
+        `PATCH {"active": false}`, que tira o cômodo de linha sem apagar o
+        passado.
+
+        É a distinção que o schema já carregava e que o contrato precisa dizer
+        em voz alta: aqui `DELETE` não é sinônimo de desativar. Em `/units` e
+        `/unit-types` ele é, porque unidade e produto nascem na instalação; o
+        cômodo nasce de um dedo numa tela.
+      x-rbac: { recurso: inventory.goods, acao: excluir }
+      responses:
+        "204": { description: Apagado }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — o ambiente tem histórico que o banco recusa
+            apagar. `details`: `count_lines` (linhas de conferência) e `issues`
+            (avarias). Desative em vez de apagar.
+          $ref: "#/components/responses/Erro"
+
+  /inventory/items:
+    get:
+      tags: [Bens]
+      summary: Lista o catálogo de bens da propriedade
+      description: |
+        **Catálogo, não linha por cômodo.** "Prato raso branco" é UM item,
+        esteja ele em dois ambientes ou em seis apartamentos — a quantidade por
+        ambiente vive em `/inventory/placements`. É a mesma separação de
+        `/unit-types` × `/unit-types/{id}/members`: o cadastro num lugar, a
+        composição noutro.
+
+        `cover` é a capa do item: o menor `sort_order` de `inventory_item_media`,
+        desempatado por `media_id`. A grade da tela carrega `thumb_url`, e não
+        `url` — 200 itens com foto de até 15 MB cada, abertos no celular dentro
+        do apartamento, não é tela utilizável.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: category, in: query, schema: { $ref: "#/components/schemas/CategoriaDeBem" } }
+        - { name: active,   in: query, schema: { type: boolean } }
+        - { name: q,        in: query, schema: { type: string }, description: Busca por `name` e `description`. }
+        - { name: unit_id,  in: query, schema: { type: string, format: uuid }, description: Só os itens colocados em algum ambiente desta unidade. }
+        - { name: room_id,  in: query, schema: { type: string, format: uuid }, description: Só os itens colocados neste ambiente. }
+        - { name: has_photo, in: query, schema: { type: boolean }, description: "`false` lista o que ainda precisa de foto — é a fila de trabalho do cadastro." }
+        - name: sort
+          in: query
+          schema: { type: string, default: name, enum: [name, -name, category, -category, replacement_cost_cents, -replacement_cost_cents, created_at, -created_at] }
+          description: "`category` ordena por categoria **e depois** por nome, que é como o índice `inventory_items_catalogo_idx` entrega."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Bem" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Bens]
+      summary: Cadastra um bem no catálogo
+      description: |
+        `replacement_cost_cents` é quanto custa **repor** a peça hoje, em
+        centavos — não o preço de compra histórico. É dele que sai o valor a
+        cobrar de uma avaria. `null` significa "ainda não cotado", que é
+        diferente de "custa zero": zero é recusado (`422`) para não virar um
+        segundo jeito, errado, de escrever "não sei".
+
+        `unit_measure` é a unidade de contagem. O padrão é `un` porque quase
+        tudo se conta em peças; o lençol vai em `jogo` e a fronha em `par`, e
+        contar jogo como peça é o erro que faz a conferência fechar com o dobro.
+
+        **`source_ref` não é aceito aqui** (campo desconhecido, `422`): ele é a
+        chave da importação (`fonte:conversa:mensagem`) e quem o grava é o
+        importador, não a tela. Aceitá-lo deixaria a tela criar um item que a
+        próxima importação sobrescreve.
+      x-rbac: { recurso: inventory.goods, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BemCriar" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string, example: /api/v1/inventory/items/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Bem" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /inventory/items/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bens]
+      summary: Detalhe do bem, com as fotos e onde ele está
+      description: |
+        Traz `photos` (todas, na ordem de exibição) e `placements` (em que
+        ambientes de que unidades ele está, e quanto se espera em cada um) —
+        porque "onde está este prato" é a segunda pergunta de quem abre a ficha,
+        e uma chamada a mais por item inviabilizaria a tela.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/BemCompleto" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Bens]
+      summary: Substitui o bem
+      description: "Substitui os campos editáveis. `source_ref` não entra (ver `POST`); as fotos trocam por `PUT /inventory/items/{id}/photos`."
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BemCriar" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Bem" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Bens]
+      summary: Atualiza o bem
+      description: |
+        Campo ausente não muda nada; campo com `null` limpa — é como se apaga
+        uma `description` ou se devolve `replacement_cost_cents` a "não cotado".
+
+        Corrigir o nome aqui corrige em **todos** os ambientes e em todas as
+        unidades, de uma vez. É a razão de o item ser catálogo: na forma
+        linha-por-cômodo isto seriam seis `UPDATE`, e a primeira esquecida
+        transformaria o prato em dois bens que nenhum relatório soma.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BemAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Bem" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Bens]
+      summary: Apaga o bem — e recusa quando há histórico
+      description: |
+        Mesma regra do ambiente: **apaga de verdade** o item que nunca foi
+        conferido nem deu avaria (o bem cadastrado em duplicidade no celular), e
+        **recusa com `409 RESOURCE_IN_USE`** quando `inventory_count_lines` ou
+        `inventory_issues` o seguram — as duas FKs são `ON DELETE RESTRICT`.
+
+        A colocação também segura (`room_inventory.item_id` é `RESTRICT`), e de
+        propósito: `CASCADE` ali esvaziaria em silêncio a lista de seis cozinhas
+        porque alguém apagou um item do catálogo. `details` separa os três
+        motivos, e a mensagem manda desativar (`PATCH {"active": false}`) quando
+        o que segura é histórico.
+      x-rbac: { recurso: inventory.goods, acao: excluir }
+      responses:
+        "204": { description: Apagado }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — `details`: `placements` (ambientes onde o item
+            está colocado), `count_lines` e `issues`. Desative em vez de apagar.
+          $ref: "#/components/responses/Erro"
+
+  /inventory/items/{id}/photos:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bens]
+      summary: Fotos do bem, na ordem de exibição
+      description: |
+        Ordenadas por `sort_order` e desempatadas por `media_id` — sem o
+        desempate, um item com duas fotos no mesmo `sort_order` troca de capa a
+        cada abertura da tela. A **capa** é a primeira da lista.
+
+        Pôr uma foto num bem são **duas** permissões: enviar o arquivo
+        (`POST /inventory/media`, `criar`) e ligá-lo à galeria
+        (`PUT` aqui, `editar`). Quem só tem `criar` envia um arquivo que fica
+        solto — por isso o painel só oferece o envio a quem tem as duas.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/FotoDoBem" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Bens]
+      summary: Substitui o conjunto de fotos do bem
+      description: |
+        **Substitui**, não acumula — mesma forma de `PUT /unit-types/{id}/members`
+        e de `PUT /roles/{id}/permissions`: a tela manda o estado inteiro da
+        galeria e não precisa calcular diferença. A **ordem do array é a ordem
+        de exibição**, e o primeiro é a capa.
+
+        - Lista **vazia é aceita** (`200`), e aqui está a diferença em relação à
+          composição de produto: bem sem foto é bem mal cadastrado, não é
+          overbooking silencioso. O `has_photo=false` da listagem é justamente a
+          fila de quem ainda precisa de foto.
+        - `media_id` repetido é `422` (a chave é `(item_id, media_id)`), com o
+          índice em `details`.
+        - `media_id` inexistente, ou de outra propriedade, é `422`.
+
+        Desvincular a última foto **não apaga o arquivo**: a linha de
+        `inventory_media` é imutável e pode estar ligada a outros itens da mesma
+        cena — a foto da bancada mostra a travessa, a leiteira e o açucareiro de
+        uma vez.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [media_ids]
+              properties:
+                media_ids:
+                  type: array
+                  maxItems: 24
+                  items: { type: string, format: uuid }
+                  description: Ordem de exibição; o primeiro é a capa.
+      responses:
+        "200":
+          description: Galeria aplicada, como ficou gravada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/FotoDoBem" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /inventory/placements:
+    get:
+      tags: [Bens]
+      summary: Lista as colocações — quanto de cada bem há em cada ambiente
+      description: |
+        A colocação é o par `(ambiente, bem)` com a quantidade **esperada** — o
+        padrão da casa, não a contada. É aqui que mora a quantidade, e é isto
+        que a cópia entre unidades copia.
+
+        `expected_qty` zero é legítimo e significa "este ambiente não tem este
+        item, e isso é intencional": serve ao cômodo que perdeu a peça sem
+        perder a linha de histórico.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: unit_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: room_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: item_id,  in: query, schema: { type: string, format: uuid }, description: Em que ambientes este bem está. }
+        - { name: category, in: query, schema: { $ref: "#/components/schemas/CategoriaDeBem" } }
+        - { name: q,        in: query, schema: { type: string }, description: Busca pelo nome do bem. }
+        - name: sort
+          in: query
+          schema: { type: string, default: room, enum: [room, item, expected_qty, -expected_qty] }
+          description: "`room` é a ordem de caminhada pela casa (ambiente por `sort_order`, depois bem por nome); `item` é alfabética pelo bem."
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Colocacao" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Bens]
+      summary: Coloca um bem num ambiente
+      description: |
+        A chave é `(room_id, item_id)` e é a **chave primária** da tabela.
+        Colocar o mesmo bem duas vezes no mesmo ambiente é `409 CODE_IN_USE`, e
+        quem decide é a constraint: para somar quantidade, edite a colocação que
+        já existe.
+      x-rbac: { recurso: inventory.goods, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ColocacaoCriar" }
+      responses:
+        "201":
+          description: Criada
+          headers:
+            Location:
+              description: "URI da colocação criada — o `id` é a chave composta (ver `ChaveDeColocacao`)."
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Colocacao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`CODE_IN_USE` — este bem já está colocado neste ambiente; `details.expected_qty` traz a quantidade que já está lá."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — ambiente ou bem inexistente, de outra propriedade, ou `expected_qty` negativa."
+          $ref: "#/components/responses/Erro"
+
+  /inventory/placements/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/ChaveDeColocacao" }
+    get:
+      tags: [Bens]
+      summary: Detalhe da colocação
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Colocacao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Bens]
+      summary: Substitui a colocação
+      description: |
+        Substitui `expected_qty` e `note`. **`room_id` e `item_id` não são
+        editáveis**: eles *são* a identidade da linha (chave primária composta),
+        e trocá-los é apagar esta colocação e criar outra. Mandá-los no corpo é
+        `422`.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ColocacaoSubstituir" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Colocacao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Bens]
+      summary: Atualiza a colocação
+      description: |
+        Campo ausente não muda nada; `note: null` limpa a observação.
+
+        **Mudar `expected_qty` aqui NÃO reescreve conferência nenhuma**:
+        `inventory_count_lines.expected_qty` é cópia congelada na abertura.
+        Corrigir o padrão da casa hoje vale da próxima conferência em diante.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ColocacaoAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Colocacao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Bens]
+      summary: Tira o bem do ambiente
+      description: |
+        Apaga a linha de colocação. Nada no banco a segura — avaria e linha de
+        conferência apontam para `(ambiente, bem)` por conta própria, e é por
+        isso que esta tabela não tem `id` nem `active`.
+
+        Apagar a colocação **não** apaga o histórico: a conferência de março
+        continua dizendo que ali se esperavam 12. E não apaga o bem do catálogo
+        — ele continua existindo e pode estar em outros cinco ambientes.
+      x-rbac: { recurso: inventory.goods, acao: excluir }
+      responses:
+        "204": { description: Apagada }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  /inventory/media:
+    post:
+      tags: [Bens]
+      summary: Envia a foto de um bem
+      description: |
+        `multipart/form-data`, campo `file`. O tipo é conferido pelos **bytes**
+        do arquivo, não pela extensão: JPEG, PNG ou WebP até 15 MB. Fora disso,
+        `422 VALIDATION_ERROR` com `details.file` em linguagem do gestor.
+
+        **Gera a miniatura no envio**, gravada como segundo arquivo ao lado do
+        original, e devolve as duas URLs. Não é refinamento: uma grade de 200
+        itens baixando fotos de 15 MB no celular, dentro do apartamento, com o
+        sinal que houver, não é tela utilizável. Se a miniatura falhar, o
+        original continua valendo e `thumb_url` sai igual a `url`.
+
+        A linha é **imutável**: trocar a foto de um bem é enviar outra e apontar
+        a galeria para o novo `id` (`PUT /inventory/items/{id}/photos`).
+
+        **Esta rota fica fora do teto de 50 s por requisição** (ver
+        `rotasDeLongaDuracao` em `internal/router/routes.go`): 15 MB subindo por
+        uma conexão de celular dentro de um apartamento de alvenaria passa do
+        teto com folga, e o teto cancelaria o contexto antes do `INSERT`.
+
+        Vídeo **não** entra: o que identifica um prato é uma foto, e aceitar
+        vídeo aqui traria o volume e o `Range` do CMS sem nenhuma pergunta de
+        negócio por trás.
+      x-rbac: { recurso: inventory.goods, acao: criar }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201":
+          description: Foto guardada
+          headers:
+            Location:
+              description: "URI da entrega autenticada do arquivo (`/inventory/media/{id}`), **não** um endereço público."
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/MidiaDeBem" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /inventory/media/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bens]
+      summary: Arquivo da foto do bem — autenticado, nunca público
+      description: |
+        O arquivo cru, com o `Content-Type` detectado no envio.
+        `?size=thumb` entrega a miniatura; sem o parâmetro, o original.
+
+        **Exige token e `inventory.goods:ver`.** A mídia do site é servida em
+        rota pública e está certo: é foto de divulgação. Esta não. A foto do
+        inventário mostra o **interior** da casa — onde fica a TV, o que há na
+        bancada, quantas garrafas há no bar, como é a fechadura do quarto —, e
+        um `id` aleatório numa rota aberta é um catálogo de o-que-levar para
+        quem conseguir um endereço. O painel busca a prévia por um
+        intermediário autenticado, que é o padrão que ele já usa.
+
+        `Cache-Control: private, max-age=31536000, immutable` — a linha é
+        imutável, então o cache pode ser longo, mas é **`private`**: o id não
+        pode acabar guardado num proxy compartilhado.
+
+        Esta rota também fica **fora do teto de 50 s** (`rotasDeLongaDuracao`),
+        pelo mesmo motivo medido do envio: os mesmos 15 MB descendo pela mesma
+        conexão.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - name: size
+          in: query
+          required: false
+          schema: { type: string, enum: [original, thumb], default: original }
+          description: "`thumb` entrega a miniatura gerada no envio; se não houver, cai no original."
+      responses:
+        "200":
+          description: O arquivo
+          headers:
+            Cache-Control: { schema: { type: string, example: "private, max-age=31536000, immutable" } }
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png:  { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  /inventory/units:
+    get:
+      tags: [Bens]
+      summary: Lista as unidades físicas para o inventário de bens
+      description: |
+        O seletor de unidade das telas de bens. Existe porque `/units` exige
+        `inventory:ver` (o cadastro comercial), e o perfil que só tem
+        `inventory.goods` — o de quem conta, pelo celular — ficava sem ter onde
+        escolher a unidade. Derivar a lista de `GET /rooms` não serve: unidade
+        que ainda não tem ambiente some, e é justamente nela que alguém precisa
+        criar o primeiro cômodo.
+
+        Devolve de cada unidade **só** `id`, `code`, `name` e `active`, mais os
+        números do inventário dela — nada de tarifa, capacidade, composição ou
+        ocupação, pelo mesmo motivo de `GET /units/{id}/inventory`.
+
+        Ordem por `code`, com desempate por `id`.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 100, maximum: 100 } }
+        - { name: active,   in: query, schema: { type: boolean }, description: "Omitido devolve ativas e inativas; a tela manda `true`." }
+        - { name: q,        in: query, schema: { type: string }, description: "Busca por `code` e `name`." }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/UnidadeDoInventario" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+
+  /units/{id}/inventory:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bens]
+      summary: Monta a tela do inventário da unidade numa chamada
+      description: |
+        Ambientes da unidade, e dentro de cada um os bens com foto, descrição e
+        quantidade esperada, mais os totais, a conferência aberta (se houver) e
+        a última fechada. Existe pelo mesmo motivo do `/full` da reserva e do
+        CRM: a tela precisa de cinco consultas, e cinco chamadas encadeadas do
+        navegador significam cinco chances de mostrar meia tela.
+
+        Os ambientes saem na **ordem de caminhada pela casa** e os bens de cada
+        um por nome — é a ordem em que a folha de conferência é impressa e em
+        que o celular pede a contagem.
+
+        **Esta rota exige `inventory.goods:ver` e só isso.** Da unidade ela
+        devolve `id`, `code` e `name`, que são o título da tela, e **nada** de
+        tarifa, capacidade, composição ou ocupação: quem conta taças não ganha
+        por aqui uma janela para o cadastro comercial, que é protegido pelo
+        recurso `inventory`.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - name: include_inactive
+          in: query
+          schema: { type: boolean, default: false }
+          description: Inclui ambientes e bens desativados — a visão de auditoria do histórico.
+        - { name: category, in: query, schema: { $ref: "#/components/schemas/CategoriaDeBem" }, description: "Filtra os bens exibidos em cada ambiente. Ambiente sem bem da categoria **continua** na resposta (vazio) — só o `q` tira ambiente." }
+        - { name: q, in: query, schema: { type: string }, description: Busca pelo nome do bem; ambiente sem resultado sai da resposta. }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/InventarioDaUnidade" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  /units/{id}/inventory/copy:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: Unidade de **destino**. }
+    post:
+      tags: [Bens]
+      summary: Copia ambientes e colocações de outra unidade
+      description: |
+        Seis duplex iguais não se cadastram seis vezes. A cópia traz os
+        **ambientes** (com `code`, `name`, `kind` e `sort_order`, para a ordem de
+        caminhada vir junto) e as **colocações** da unidade de origem; o
+        catálogo de bens não é copiado porque é da propriedade — o mesmo "Prato
+        raso branco" serve às doze unidades. Da origem só entram ambientes e
+        bens **ativos**: o que saiu de linha lá não renasce aqui.
+
+        ## A cópia só ACRESCENTA — nunca sobrescreve quantidade
+
+        O ambiente da origem casa com o do destino **pelo `code`** — a
+        identidade estável, que sobrevive a renomear "Quarto grande" para
+        "Suíte Master" num dos dois. Sem `code` igual, casa pelo `name`, porque
+        `unit_rooms_nome_unico` não deixaria criar o segundo. Ambiente casado é
+        reaproveitado, não duplicado, e **nada** nele é reescrito:
+        `kind`, `sort_order` e `active` do destino ficam como estão. Colocação
+        que já existe no destino é **mantida com a quantidade que tem**, e a
+        divergência em relação à origem aparece na resposta (`kept`), sem ser
+        aplicada.
+
+        É a escolha segura, e o motivo é concreto: "copiar o AP-01 para o AP-02"
+        não pode apagar os 8 pratos que alguém já contou no AP-02 porque o AP-01
+        tem 12. Quem quer igualar a quantidade edita a colocação, item a item,
+        vendo o que está mudando.
+
+        Consequência boa: rodar a cópia duas vezes não cria nada na segunda —
+        ela é idempotente por desenho, e é por isso que **não exige
+        `Idempotency-Key`** (o cabeçalho é obrigatório só em `POST` que cria
+        reserva ou dinheiro).
+
+        ## `?dry_run=1`
+
+        Calcula o plano inteiro e **não grava nada**: `rooms_to_create`,
+        `placements_to_create` e `kept` saem iguais aos da execução. É o que a
+        tela mostra antes de o gestor confirmar, e `dry_run` na resposta diz
+        qual dos dois aconteceu.
+
+        ## Recusas
+
+        - Origem igual ao destino, origem de outra propriedade, ou origem sem
+          nenhum ambiente ativo: `422 VALIDATION_ERROR` com
+          `details.source_unit_id` em linguagem de gestor.
+        - **Destino com conferência aberta: `409 COUNT_ALREADY_OPEN`.** Durante
+          a contagem, `inventory_count_lines` já está congelada; ambiente ou
+          colocação que nascesse agora não teria linha nenhuma na conferência em
+          curso, e a contagem fecharia "completa" sem nunca ter olhado para os
+          bens novos. `details.count_id` leva a tela à conferência que segura.
+
+        A cópia **não** exige que as duas unidades sejam do mesmo produto. O uso
+        normal é duplex → duplex, mas copiar a lista de um banheiro da Grand
+        Villa para a Classic Villa é legítimo, e o `dry_run` é a conferência
+        de quem manda.
+      x-rbac: { recurso: inventory.goods, acao: criar }
+      parameters:
+        - name: dry_run
+          in: query
+          schema: { type: boolean, default: false }
+          description: Simula e devolve o plano sem gravar nada.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeCopiaDeInventario" }
+      responses:
+        "200":
+          description: Plano da cópia (simulado ou executado)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDaCopiaDeInventario" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`COUNT_ALREADY_OPEN` — a unidade de destino tem conferência aberta (`details.count_id`). Feche ou cancele antes de copiar."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /inventory/counts:
+    get:
+      tags: [Bens]
+      summary: Lista as conferências
+      description: Histórico por unidade, da mais recente para a mais antiga. `progress` resume quanto já foi contado e quanto divergiu.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: unit_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: status,   in: query, schema: { $ref: "#/components/schemas/StatusDeConferencia" } }
+        - { name: from,     in: query, schema: { type: string, format: date }, description: "`opened_at` a partir desta data, no fuso America/Fortaleza." }
+        - { name: to,       in: query, schema: { type: string, format: date } }
+        - name: sort
+          in: query
+          schema: { type: string, default: -opened_at, enum: [opened_at, -opened_at] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Conferencia" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Bens]
+      summary: Abre a conferência de uma unidade
+      description: |
+        ## A abertura CONGELA a quantidade esperada
+
+        Abrir gera **uma linha por colocação** dos ambientes ativos da unidade,
+        e cada linha recebe uma **cópia** de `room_inventory.expected_qty` — não
+        um `JOIN`. É a regra 7 do `CLAUDE.md` ("toda entidade financeira congela
+        o que usou") aplicada a bem em vez de dinheiro, e é o mesmo motivo de
+        `reservation_nights` guardar a tarifa aplicada por noite.
+
+        Lida por `JOIN`, a quantidade esperada seria a de **hoje**: mudar o
+        padrão da casa em maio reescreveria o que a contagem de março esperava,
+        e a divergência que foi apurada — e cobrada de um hóspede — deixaria de
+        existir no relatório. Medido no schema: linha congelada em 12,
+        `room_inventory` alterado para 8 depois, a linha continua dizendo 12.
+
+        ## Uma aberta por unidade, garantida pelo banco
+
+        `inventory_counts_aberta_idx` é `UNIQUE (unit_id) WHERE status = 'aberta'`.
+        A segunda abertura é `409 COUNT_ALREADY_OPEN`, decidido pela constraint
+        (`23505`) e nunca por `SELECT` antes do `INSERT` — dois funcionários
+        abrindo a contagem do AP-01 no mesmo plantão é a corrida que o TOCTOU
+        perde, e o fechamento de um sobrescreveria o do outro.
+
+        `details.count_id` traz a conferência que já está aberta, para o segundo
+        toque levar à tela certa em vez de virar beco. É também por isso que
+        esta rota **não** pede `Idempotency-Key`: o `409` que nomeia a
+        conferência aberta é mais útil ao operador do que um `201` repetido.
+
+        Unidade sem nenhuma colocação é `422`: conferência de zero itens é
+        conferência de nada.
+      x-rbac: { recurso: inventory.goods, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConferenciaAbrir" }
+      responses:
+        "201":
+          description: Aberta, com as linhas já congeladas
+          headers:
+            Location:
+              description: URI da conferência criada.
+              schema: { type: string, example: /api/v1/inventory/counts/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ConferenciaCompleta" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`COUNT_ALREADY_OPEN` — esta unidade já tem conferência aberta; `details.count_id` e `details.opened_at` levam a ela."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — unidade inexistente, de outra propriedade, ou sem nenhum bem colocado."
+          $ref: "#/components/responses/Erro"
+
+  /inventory/counts/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bens]
+      summary: A conferência inteira, ambiente por ambiente
+      description: |
+        Cabeçalho, progresso e as linhas agrupadas por ambiente, na ordem de
+        caminhada pela casa — é esta resposta que a tela de contagem do celular
+        consome e é dela que sai a folha de impressão.
+
+        Cada linha traz `expected_qty` (a **congelada**), `counted_qty` e `diff`.
+        `counted_qty: null` é "ainda não contado"; zero é "contei e não achei
+        nenhum". São coisas diferentes, e a diferença é o que a tela de
+        pendências pergunta.
+
+        **Conferência `fechada` traz `result`** — as mesmas divergências e a
+        mesma perda que `POST /close` devolveu, lidas de volta e não
+        recalculadas: o custo de reposição de cada linha é **congelado no
+        fechamento** (`inventory_count_lines.replacement_cost_cents`, regra 7 do
+        CLAUDE.md). Recalcular com o custo de hoje faria a perda apurada em
+        março mudar quando alguém recotasse o prato em junho. Aberta ou
+        cancelada, `result` é `null`.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ConferenciaCompleta" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Bens]
+      summary: Substitui a conferência
+      description: |
+        O corpo editável de uma conferência é **só `note`** — e isso é desenho,
+        não esquecimento. `unit_id` não se troca (a conferência é de uma unidade,
+        e as linhas já estão congeladas nela) e as linhas não se trocam em bloco
+        (cada uma tem o seu gesto, em
+        `PATCH /inventory/counts/{id}/lines/{lineId}`). Para conferir de novo,
+        abre-se outra: contagem refeita é outro fato, com outra data e outro
+        autor.
+
+        Conferência `fechada` ou `cancelada` é `409 COUNT_CLOSED`.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConferenciaSubstituir" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Conferencia" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`COUNT_CLOSED` — conferência encerrada não se edita; `details.status` e `details.closed_at`."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Bens]
+      summary: Atualiza a conferência
+      description: "Campo ausente não muda nada; `note: null` limpa. Conferência encerrada é `409 COUNT_CLOSED`."
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConferenciaAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Conferencia" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Bens]
+      summary: Cancela a conferência aberta
+      description: |
+        **Cancela, não apaga**: `status` vai para `cancelada`, `closed_at`
+        recebe o instante da desistência (é o que o `CHECK
+        inventory_counts_fechamento` exige — aberta sem data de encerramento,
+        encerrada com ela) e `closed_by` recebe quem desistiu. As linhas
+        contadas até ali ficam gravadas: alguém andou pela casa e contou, e esse
+        trabalho é informação.
+
+        É assim que se libera a unidade para uma contagem nova, porque o índice
+        único parcial só olha para `status = 'aberta'`.
+
+        **Conferência já `fechada` ou `cancelada` é `409 COUNT_CLOSED`.** O que
+        está encerrado é história: apagar a contagem de março tiraria o lastro
+        da avaria que ela achou e da cobrança que saiu dela —
+        `inventory_issues.count_id` é `ON DELETE RESTRICT` justamente para isso.
+      x-rbac: { recurso: inventory.goods, acao: excluir }
+      responses:
+        "204": { description: Cancelada }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`COUNT_CLOSED` — conferência encerrada não se cancela nem se apaga; `details.status` e `details.closed_at`."
+          $ref: "#/components/responses/Erro"
+
+  /inventory/counts/{id}/lines/{lineId}:
+    parameters:
+      - { name: id,     in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: lineId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Bens]
+      summary: Lança a contagem de uma linha — o gesto do celular
+      description: |
+        É a chamada que acontece centenas de vezes por conferência, com o
+        aparelho na mão e uma pilha de pratos na frente. Por isso ela é a
+        **menor** do módulo: um número, e a resposta já traz o progresso para a
+        tela atualizar o rodapé sem refazer a chamada da conferência inteira.
+
+        `counted_at` e `counted_by` são do **servidor**, nunca do corpo: a
+        pergunta "quando isto foi conferido, e por quem" não pode depender do
+        relógio nem da boa-fé do aparelho. Mandá-los é `422`.
+
+        `counted_qty: null` **desfaz** a contagem da linha (volta a pendente, e
+        `counted_at` volta a nulo) — é o `Opt[T]` fazendo o que promete: campo
+        **ausente** não muda nada, campo **nulo** limpa. Sem a distinção, quem
+        tocou na linha errada não teria como desfazer, e "zero" ficaria sendo as
+        duas coisas.
+
+        `counted_qty: 0` é "contei e não achei nenhum", que é uma informação — e
+        é diferente de pendente.
+
+        Conferência `fechada` ou `cancelada` é `409 COUNT_CLOSED`: recontar o
+        que já foi encerrado mudaria uma divergência que já virou pendência (e
+        talvez cobrança) sem deixar rastro de que mudou. Linha que não pertence a
+        esta conferência é `404`.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ContagemDaLinha" }
+      responses:
+        "200":
+          description: A linha como ficou, e o progresso da conferência
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/LinhaContada" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`COUNT_CLOSED` — a conferência já foi encerrada e não aceita contagem."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /inventory/counts/{id}/close:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Bens]
+      summary: Fecha a conferência e apura a divergência
+      description: |
+        `status` vai para `fechada`, `closed_at` e `closed_by` são gravados, e a
+        resposta traz a **divergência item a item** — `expected_qty` congelada
+        contra `counted_qty`, por ambiente.
+
+        ## Fechar exige ter contado tudo
+
+        Linha pendente (`counted_qty IS NULL`) é `409 COUNT_HAS_PENDING_LINES`,
+        com `details.pending` e `details.pending_by_room`. Fechar com pendência
+        produziria uma divergência falsa: "esperava 12, contou nada" é indistinguível
+        de "esperava 12, não achei nenhum" no relatório, e a segunda é uma perda
+        de R$ 400 que alguém vai cobrar de um hóspede. Quem não vai terminar a
+        contagem **cancela** (`DELETE`), que é um fato diferente e fica escrito
+        como tal.
+
+        ## As faltas viram pendência de avaria
+
+        Por padrão (`raise_issues: true`), cada linha com `counted_qty <
+        expected_qty` abre uma `inventory_issues` com `kind: "faltando"`,
+        `qty = expected_qty - counted_qty` e `count_id` desta conferência — o
+        vínculo que transforma divergência em cobrança, e que torna "o que
+        quebrou nesta estadia" uma pergunta com resposta.
+
+        Falta é **aritmética**, não opinião, e por isso é automática. **Sobra
+        não abre nada**: contar 14 onde se esperavam 12 quer dizer que o padrão
+        da casa está errado, ou que a peça veio de outro cômodo — é correção de
+        cadastro, não avaria, e sai na divergência para o gestor decidir.
+
+        `raise_issues: false` fecha sem abrir pendência, para a contagem de
+        aferição em que o gestor só quer saber o número.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PedidoDeFechamento" }
+      responses:
+        "200":
+          description: Fechada, com a divergência apurada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ResultadoDoFechamento" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `COUNT_CLOSED` — já encerrada (`details.status`, `details.closed_at`).
+            `COUNT_HAS_PENDING_LINES` — ainda há linha sem contagem.
+            `details.pending` é o total (inteiro) e `details.pending_by_room` é
+            uma **lista** `[{room_id, room_name, pending}]`, na ordem de
+            caminhada pela casa e só com os ambientes que têm pendência — é o
+            que a tela usa para mandar quem conta de volta ao cômodo certo.
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /inventory/issues:
+    get:
+      tags: [Bens]
+      summary: Lista as avarias — quebrado, faltando, avariado
+      description: |
+        **Pendência aberta é `resolution IS NULL`.** Não existe coluna `status`
+        ao lado: ela seria uma segunda fonte da mesma verdade, e o par
+        "aberta com desfecho preenchido" é o estado impossível que alguém
+        acabaria gravando. Use `open=true` para a lista de trabalho.
+
+        `total_cost_cents` é `qty × replacement_cost_cents`, calculado no
+        servidor e em centavos — multiplicar dinheiro no navegador é como se
+        fabrica centavo perdido. Sai `null` quando o bem não tem custo cotado.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: unit_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: room_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: item_id,  in: query, schema: { type: string, format: uuid }, description: O prato que quebra toda semana. }
+        - { name: kind,     in: query, schema: { $ref: "#/components/schemas/TipoDeAvaria" } }
+        - { name: open,     in: query, schema: { type: boolean }, description: "`true` = `resolution IS NULL`; `false` = já resolvidas." }
+        - { name: resolution, in: query, schema: { $ref: "#/components/schemas/DesfechoDeAvaria" } }
+        - { name: reservation_id, in: query, schema: { type: string, format: uuid }, description: O que quebrou nesta estadia — a pergunta do check-out. }
+        - { name: count_id, in: query, schema: { type: string, format: uuid }, description: O que esta conferência achou. }
+        - { name: from,     in: query, schema: { type: string, format: date }, description: "`reported_at` a partir desta data, no fuso America/Fortaleza." }
+        - { name: to,       in: query, schema: { type: string, format: date } }
+        - name: sort
+          in: query
+          schema: { type: string, default: -reported_at, enum: [reported_at, -reported_at, qty, -qty] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/Avaria" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Bens]
+      summary: Registra um bem quebrado, faltando ou avariado
+      description: |
+        `qty` tem de ser maior que zero: avaria de zero peças não é avaria, é
+        linha que aparece na lista de pendências sem nada a resolver.
+
+        `reservation_id` é opcional e é **o vínculo que permite cobrar o
+        hóspede** — desgaste sem hóspede e achado em conferência de rotina não
+        têm reserva. `count_id` registra a conferência que achou.
+
+        A avaria aponta para o **bem do catálogo**, e é por isso que o prejuízo
+        da casa é somável: apontando para a linha-do-cômodo, "quanto se perdeu
+        de louça este ano" seria uma soma sobre linhas que ninguém audita.
+      x-rbac: { recurso: inventory.goods, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AvariaCriar" }
+      responses:
+        "201":
+          description: Registrada
+          headers:
+            Location:
+              description: URI do recurso criado.
+              schema: { type: string, example: /api/v1/inventory/issues/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Avaria" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: "`VALIDATION_ERROR` — ambiente, bem, reserva ou conferência inexistente ou de outra propriedade; `qty` zero ou negativa; bem que não está colocado no ambiente informado."
+          $ref: "#/components/responses/Erro"
+
+  /inventory/issues/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bens]
+      summary: Detalhe da avaria
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Avaria" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Bens]
+      summary: Substitui a avaria
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AvariaSubstituir" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Avaria" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Bens]
+      summary: Atualiza a avaria — e é por aqui que ela se resolve
+      description: |
+        Campo ausente não muda nada; campo com `null` limpa.
+
+        **`resolution` é o desfecho, e é ele que fecha a pendência.** Preenchê-lo
+        grava `resolved_at` e `resolved_by` no servidor (o `CHECK
+        inventory_issues_desfecho` amarra desfecho e instante: um sem o outro é
+        estado impossível). `resolution: null` **reabre** a pendência e limpa o
+        instante — é o que se faz quando o prato "reposto" não chegou.
+
+        `resolved_at` e `resolved_by` não são aceitos no corpo (`422`): quem
+        resolveu e quando é fato do servidor.
+      x-rbac: { recurso: inventory.goods, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AvariaAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/Avaria" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Bens]
+      summary: Apaga a avaria
+      description: |
+        Apaga a linha — avaria digitada errada tem de poder sair, e nada no
+        banco a referencia. Vai para `audit_log`, que é onde fica o rastro de
+        que existiu.
+
+        **Resolver não é apagar**: pendência atendida se fecha com `resolution`
+        (`PATCH`), e é assim que ela continua somando no histórico do bem e do
+        ambiente. Apagar é para o registro que nunca devia ter nascido.
+
+        **Avaria ligada a conferência `fechada` não se apaga: `409
+        RESOURCE_IN_USE`**, com `details.count_id`. Ela é parte do que a
+        conferência apurou — o `result` de `GET /inventory/counts/{id}` cita o
+        `issue_id` e conta `issues_created` —, e apagá-la reescreveria em
+        silêncio um relatório que já foi fechado e talvez cobrado. Falta que
+        não procede se encerra com `resolution: descartado`, que deixa o rastro.
+        Avaria sem conferência, ou de conferência aberta ou cancelada, continua
+        apagável.
+      x-rbac: { recurso: inventory.goods, acao: excluir }
+      responses:
+        "204": { description: Apagada }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`RESOURCE_IN_USE` — a avaria pertence a uma conferência fechada (`details.count_id`). Encerre-a com `resolution: descartado` em vez de apagar."
+          $ref: "#/components/responses/Erro"
+
+  /inventory/export:
+    get:
+      tags: [Bens]
+      summary: Exporta o inventário em planilha
+      description: |
+        Planilha de uma coluna por fato: unidade, ambiente, tipo de ambiente,
+        bem, descrição, categoria, unidade de medida, quantidade esperada, custo
+        de reposição e pendências abertas. Uma linha por colocação, na ordem de
+        caminhada pela casa.
+
+        **É CSV, e com três escolhas feitas para abrir no computador do
+        gestor**: separador `;`, codificação UTF-8 **com BOM** e decimal com
+        vírgula. Sem as três, o Excel em português abre tudo numa coluna só, com
+        "Pôr" escrito errado — e aí o arquivo não serviu para nada. Nenhuma
+        biblioteca nova entra por isto.
+
+        **PDF não é esta rota.** A folha para levar na mão é a tela de impressão
+        do painel com o "salvar como PDF" do navegador — uma folha bem feita, com
+        foto e quantidade. Gerar PDF no servidor traria uma dependência para
+        resolver um problema que o navegador já resolve.
+
+        Sem paginação de propósito: exportação truncada em 25 linhas é pior que
+        exportação nenhuma, porque parece completa. O recorte é pelos filtros.
+      x-rbac: { recurso: inventory.goods, acao: ver }
+      parameters:
+        - { name: unit_id,  in: query, schema: { type: string, format: uuid }, description: Omitido exporta a propriedade inteira. }
+        - { name: room_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: category, in: query, schema: { $ref: "#/components/schemas/CategoriaDeBem" } }
+        - { name: include_inactive, in: query, schema: { type: boolean, default: false } }
+      responses:
+        "200":
+          description: A planilha
+          headers:
+            Content-Disposition:
+              schema: { type: string, example: 'attachment; filename="inventario-gv-01-2026-10-07.csv"' }
+              description: "`inventario-<código da unidade>-<data>.csv` quando filtrado por `unit_id`; sem unidade, o slug da propriedade no lugar do código. A data é a de hoje no fuso da propriedade."
+          content:
+            text/csv:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -5925,6 +7426,7 @@ components:
                            OPPORTUNITY_ALREADY_CLOSED, LOSS_REASON_REQUIRED, QUOTE_REQUIRED_TO_WIN,
                            LEAD_ALREADY_CONVERTED,
                            CONTACT_DUPLICATE, CONTACT_ANONYMIZED, QUOTE_NOT_PENDING,
+                           COUNT_ALREADY_OPEN, COUNT_CLOSED, COUNT_HAS_PENDING_LINES,
                            INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
@@ -8672,6 +10174,819 @@ components:
         mime: { type: string, enum: [image/jpeg, image/png, image/webp, video/mp4, video/webm] }
         bytes: { type: integer, format: int64 }
         url: { type: string }
+
+    # ──────────────── Bens e enxoval por ambiente ────────────────
+    #
+    # Vocabulário fechado espelhando os `CHECK` de `20261007170000`. Enum é
+    # `text` + `CHECK` no banco (convenção de docs/db.md), e acrescentar valor
+    # aqui obriga uma migration de uma linha lá — não um `ALTER TYPE` que trava
+    # a tabela.
+
+    TipoDeAmbiente:
+      type: string
+      enum: [quarto, banheiro, cozinha, sala, area_externa, lavanderia, varanda, outro]
+      description: |
+        Fechado porque a tela agrupa e ordena por ele: a lista de conferência sai
+        na ordem em que se caminha pela casa. Texto livre viraria "Quarto",
+        "quarto " e "Dormitório" no mesmo relatório.
+
+    CategoriaDeBem:
+      type: string
+      enum: [louca, talher, copo, cama, banho, mobilia, eletro, utensilio, decoracao, outro]
+
+    UnidadeDeMedida:
+      type: string
+      enum: [un, par, jogo, kg, l, m]
+      default: un
+      description: |
+        Unidade de **contagem**. `un` é o padrão porque quase tudo se conta em
+        peças; o lençol vai em `jogo` e a fronha em `par`. Contar jogo como peça
+        é o erro que faz a conferência fechar com o dobro.
+
+    StatusDeConferencia:
+      type: string
+      enum: [aberta, fechada, cancelada]
+      description: "`aberta` é a única sem `closed_at` — é o que o `CHECK inventory_counts_fechamento` garante."
+
+    TipoDeAvaria:
+      type: string
+      enum: [quebrado, faltando, avariado, outro]
+
+    DesfechoDeAvaria:
+      type: string
+      enum: [reposto, consertado, cobrado, perda_aceita, descartado]
+      description: "`null` = pendência aberta. Não há coluna `status` ao lado: seria uma segunda fonte da mesma verdade."
+
+    ChaveDeColocacao:
+      type: string
+      pattern: "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      example: 9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11_3a8d5c71-6b2e-4f10-9d44-0c15e7b39a62
+      description: |
+        O `id` de uma colocação é a sua **chave natural**: `room_id` e `item_id`
+        unidos por `_`. `room_inventory` não tem id próprio — a tabela é só o par
+        e a quantidade, e nada a referencia (avaria e linha de conferência
+        apontam para ambiente e bem por conta própria).
+
+        O separador é `_` porque UUID nunca contém `_`, então a leitura é
+        inequívoca. A alternativa — aninhar em `/rooms/{id}/inventory/{itemId}`
+        — foi recusada por um motivo mecânico: a regra dos seis verbos exige que
+        a coleção `X` tenha o item em `X/{id}`, e ali isso seria
+        `/rooms/{id}/inventory/{id}`, com dois parâmetros de mesmo nome no mesmo
+        padrão.
+
+    Ambiente:
+      type: object
+      required: [id, unit_id, code, name, kind, sort_order, active]
+      properties:
+        id:         { type: string, format: uuid }
+        unit_id:    { type: string, format: uuid }
+        unit_code:  { type: string, example: AP-01, description: "Só leitura — o rótulo da unidade, para a tela não precisar de outra chamada." }
+        unit_name:  { type: string, example: "Duplex 01" }
+        code:
+          type: string
+          example: quarto-grande
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+          description: |
+            **Identidade estável do cômodo na unidade** (`UNIQUE (unit_id,
+            code)`), no espírito de `units.code`: minúsculo, sem acento,
+            separado por hífen. `name` é o rótulo que o gestor edita; `code` não
+            muda depois de criado — é por ele que a importação reencontra o
+            cômodo e que a cópia casa "a cozinha do AP-01" com "a cozinha do
+            AP-02" mesmo depois de alguém renomear uma delas.
+        name:       { type: string, example: "Quarto grande", description: "Único na unidade (`unit_rooms_nome_unico`). Editável — a identidade é `code`." }
+        kind:       { $ref: "#/components/schemas/TipoDeAmbiente" }
+        sort_order:
+          type: integer
+          description: |
+            Ordem de caminhada pela casa, usada na lista de conferência. Empate é
+            desfeito por `name` e `id` — a listagem nunca ordena só por esta
+            coluna, senão dois cômodos empatados trocam de lugar entre duas
+            aberturas da tela e a paginação repete ou perde linha.
+        active:     { type: boolean, description: "`false` tira o cômodo da contagem e mantém o histórico legível." }
+        items_count:
+          type: integer
+          description: Quantos bens distintos estão colocados neste ambiente.
+        expected_qty_total:
+          type: integer
+          description: Soma das quantidades esperadas do ambiente — o que se espera contar ali.
+        open_issues_count:
+          type: integer
+          description: Avarias com `resolution IS NULL` neste ambiente.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AmbienteCriar:
+      type: object
+      additionalProperties: false
+      required: [unit_id, name, kind]
+      properties:
+        unit_id:    { type: string, format: uuid }
+        code:
+          type: string
+          maxLength: 60
+          pattern: "^[a-z0-9]+(-[a-z0-9]+)*$"
+          description: |
+            Opcional. Ausente, o servidor **deriva do `name`** (minúsculo, sem
+            acento, espaço e pontuação viram hífen: "Área da churrasqueira" →
+            `area-da-churrasqueira`; cortado em 60 caracteres, porque `name`
+            aceita 120; vazio vira `comodo`) e, se já existir na unidade,
+            acrescenta `-2`, `-3`… — quem cria cômodo pelo celular não deve ter
+            de inventar identificador. A regra exata está em `docs/db.md` §11.
+            Informado e já usado na unidade é `409 CODE_IN_USE`; fora do
+            formato é `422`.
+        name:       { type: string, minLength: 1, maxLength: 120 }
+        kind:       { $ref: "#/components/schemas/TipoDeAmbiente" }
+        sort_order: { type: integer, default: 0 }
+        active:     { type: boolean, default: true }
+
+    AmbienteSubstituir:
+      type: object
+      additionalProperties: false
+      required: [name, kind]
+      description: "Corpo do `PUT`. Sem `unit_id` (cômodo não muda de unidade: levaria o histórico junto) e sem `code` (a identidade não muda; campo desconhecido, `422`) — o mesmo vale para o `PATCH`."
+      properties:
+        name:       { type: string, minLength: 1, maxLength: 120 }
+        kind:       { $ref: "#/components/schemas/TipoDeAmbiente" }
+        sort_order: { type: integer, default: 0 }
+        active:     { type: boolean, default: true }
+
+    AmbienteAtualizar:
+      type: object
+      additionalProperties: false
+      description: Corpo do `PATCH` — campo ausente não muda nada; campo com `null` limpa.
+      properties:
+        name:       { type: string, minLength: 1, maxLength: 120 }
+        kind:       { $ref: "#/components/schemas/TipoDeAmbiente" }
+        sort_order: { type: integer }
+        active:     { type: boolean }
+
+    MidiaDeBem:
+      type: object
+      required: [id, mime, bytes, url, thumb_url]
+      properties:
+        id:        { type: string, format: uuid }
+        mime:      { type: string, enum: [image/jpeg, image/png, image/webp], description: Detectado pelos bytes do arquivo, não pela extensão. }
+        bytes:     { type: integer, format: int64 }
+        width:     { type: [integer, "null"] }
+        height:    { type: [integer, "null"] }
+        original_name: { type: string, description: O nome que o arquivo tinha no aparelho; nunca é usado para montar o caminho no volume. }
+        url:
+          type: string
+          example: /api/v1/inventory/media/0b7c2f4e-0000-4000-8000-000000000000
+          description: Entrega **autenticada** do original. Não é endereço público.
+        thumb_url:
+          type: string
+          example: /api/v1/inventory/media/0b7c2f4e-0000-4000-8000-000000000000?size=thumb
+          description: |
+            A miniatura, que é o que a grade carrega. Igual a `url` quando a
+            geração falhou — a tela não precisa saber da diferença, e a foto
+            original nunca deixa de valer por causa da miniatura.
+        created_at: { type: string, format: date-time }
+
+    FotoDoBem:
+      type: object
+      required: [media, sort_order]
+      properties:
+        media:      { $ref: "#/components/schemas/MidiaDeBem" }
+        sort_order: { type: integer, description: "Ordem de exibição; a capa é o menor, desempatado por `media.id`." }
+
+    Bem:
+      type: object
+      required: [id, name, category, unit_measure, active]
+      properties:
+        id:          { type: string, format: uuid }
+        name:        { type: string, example: "Prato raso branco" }
+        description:
+          type: [string, "null"]
+          example: "Borda dourada, 26 cm"
+          description: O detalhe que distingue dois bens parecidos. Anulável — a maior parte do enxoval é autoexplicativa com nome e foto.
+        category:    { $ref: "#/components/schemas/CategoriaDeBem" }
+        unit_measure: { $ref: "#/components/schemas/UnidadeDeMedida" }
+        replacement_cost_cents:
+          type: [integer, "null"]
+          format: int64
+          example: 1890
+          description: |
+            Quanto custa **repor** a peça hoje, em centavos — não o preço de
+            compra histórico. É a base do valor a cobrar numa avaria. `null` =
+            não cotado; zero é recusado, para não virar um segundo jeito (errado)
+            de escrever "não sei".
+        active:      { type: boolean }
+        source_ref:
+          type: [string, "null"]
+          example: "chatwoot:2184:367988"
+          description: |
+            Só leitura. Origem da importação, no formato
+            `fonte:conversa:mensagem`, única por propriedade quando preenchida —
+            é o que torna a importação repetível sem duplicar o item. Não é
+            aceita em `POST`/`PUT`/`PATCH`.
+        cover:
+          oneOf:
+            - $ref: "#/components/schemas/MidiaDeBem"
+            - type: "null"
+          description: A capa — menor `sort_order` da galeria, desempatado por `media_id`. `null` quando o bem ainda não tem foto.
+        photos_count:     { type: integer }
+        placements_count: { type: integer, description: Em quantos ambientes este bem está colocado. }
+        expected_qty_total:
+          type: integer
+          description: Soma das quantidades esperadas em todos os ambientes — é a resposta de "quantos pratos a casa tem".
+        open_issues_count: { type: integer }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    BemCompleto:
+      allOf:
+        - $ref: "#/components/schemas/Bem"
+        - type: object
+          properties:
+            photos:
+              type: array
+              items: { $ref: "#/components/schemas/FotoDoBem" }
+            placements:
+              type: array
+              description: Onde este bem está, e quanto se espera em cada lugar.
+              items: { $ref: "#/components/schemas/Colocacao" }
+
+    BemCriar:
+      type: object
+      additionalProperties: false
+      required: [name, category]
+      description: "Corpo do `POST` e do `PUT`. `source_ref` não entra: é a chave do importador, não da tela."
+      properties:
+        name:        { type: string, minLength: 1, maxLength: 160 }
+        description: { type: [string, "null"], maxLength: 2000 }
+        category:    { $ref: "#/components/schemas/CategoriaDeBem" }
+        unit_measure: { $ref: "#/components/schemas/UnidadeDeMedida" }
+        replacement_cost_cents:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
+          description: "Centavos, maior que zero. `null` = não cotado."
+        active:      { type: boolean, default: true }
+
+    BemAtualizar:
+      type: object
+      additionalProperties: false
+      description: Corpo do `PATCH` — campo ausente não muda nada; campo com `null` limpa.
+      properties:
+        name:        { type: string, minLength: 1, maxLength: 160 }
+        description: { type: [string, "null"], maxLength: 2000 }
+        category:    { $ref: "#/components/schemas/CategoriaDeBem" }
+        unit_measure: { $ref: "#/components/schemas/UnidadeDeMedida" }
+        replacement_cost_cents: { type: [integer, "null"], format: int64, minimum: 1 }
+        active:      { type: boolean }
+
+    Colocacao:
+      type: object
+      required: [id, room_id, item_id, expected_qty]
+      properties:
+        id:          { $ref: "#/components/schemas/ChaveDeColocacao" }
+        room_id:     { type: string, format: uuid }
+        room_name:   { type: string, example: "Cozinha" }
+        room_kind:   { $ref: "#/components/schemas/TipoDeAmbiente" }
+        unit_id:     { type: string, format: uuid }
+        unit_code:   { type: string, example: AP-01 }
+        item_id:     { type: string, format: uuid }
+        item_name:   { type: string, example: "Prato raso branco" }
+        item_category: { $ref: "#/components/schemas/CategoriaDeBem" }
+        item_unit_measure: { $ref: "#/components/schemas/UnidadeDeMedida" }
+        cover:
+          oneOf:
+            - $ref: "#/components/schemas/MidiaDeBem"
+            - type: "null"
+        expected_qty:
+          type: integer
+          minimum: 0
+          description: |
+            A quantidade **esperada** — o padrão da casa, não a contada. Zero é
+            legítimo e quer dizer "este ambiente não tem este item, e isso é
+            intencional": serve ao cômodo que perdeu a peça sem perder a linha
+            de histórico.
+        note:        { type: [string, "null"] }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    ColocacaoCriar:
+      type: object
+      additionalProperties: false
+      required: [room_id, item_id, expected_qty]
+      properties:
+        room_id:      { type: string, format: uuid }
+        item_id:      { type: string, format: uuid }
+        expected_qty: { type: integer, minimum: 0 }
+        note:         { type: [string, "null"], maxLength: 2000 }
+
+    ColocacaoSubstituir:
+      type: object
+      additionalProperties: false
+      required: [expected_qty]
+      description: "Corpo do `PUT`. Sem `room_id` nem `item_id`: eles são a identidade da linha."
+      properties:
+        expected_qty: { type: integer, minimum: 0 }
+        note:         { type: [string, "null"], maxLength: 2000 }
+
+    ColocacaoAtualizar:
+      type: object
+      additionalProperties: false
+      description: "Corpo do `PATCH` — campo ausente não muda nada; `note: null` limpa."
+      properties:
+        expected_qty: { type: integer, minimum: 0 }
+        note:         { type: [string, "null"], maxLength: 2000 }
+
+    AmbienteDoInventario:
+      allOf:
+        - $ref: "#/components/schemas/Ambiente"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              description: Os bens colocados neste ambiente, por nome.
+              items: { $ref: "#/components/schemas/Colocacao" }
+
+    UnidadeDoInventario:
+      type: object
+      required: [id, code, name, active, rooms, items]
+      description: "A unidade física vista pelo inventário de bens (`GET /inventory/units`). Só identificação e números do inventário — nada do cadastro comercial."
+      properties:
+        id:     { type: string, format: uuid }
+        code:   { type: string, example: GV-01 }
+        name:   { type: string, example: "White House Grand Villa" }
+        active: { type: boolean }
+        rooms:  { type: integer, description: Ambientes ativos da unidade. Zero é a unidade que ainda precisa da planta. }
+        items:  { type: integer, description: Bens distintos colocados em ambientes ativos. }
+        open_count_id:
+          type: [string, "null"]
+          format: uuid
+          description: A conferência aberta desta unidade, se houver — o seletor leva direto a ela.
+        last_closed_at:
+          type: [string, "null"]
+          format: date-time
+          description: Quando a última conferência foi fechada, para a lista dizer "conferida há 40 dias".
+
+    InventarioDaUnidade:
+      type: object
+      required: [unit, rooms, totals]
+      description: |
+        A tela do inventário de uma unidade numa chamada só. Da unidade vêm
+        apenas `id`, `code` e `name` — nada de tarifa, capacidade, composição ou
+        ocupação: esta rota é protegida por `inventory.goods`, e não pode virar
+        uma janela para o cadastro comercial.
+      properties:
+        unit:
+          type: object
+          required: [id, code, name]
+          properties:
+            id:   { type: string, format: uuid }
+            code: { type: string, example: GV-01 }
+            name: { type: string, example: "White House Grand Villa" }
+        rooms:
+          type: array
+          description: Na ordem de caminhada pela casa (`sort_order`, `name`, `id`).
+          items: { $ref: "#/components/schemas/AmbienteDoInventario" }
+        totals:
+          type: object
+          required: [rooms, items, expected_qty, open_issues]
+          description: |
+            Somam **o que a resposta mostra**, depois de `include_inactive`,
+            `category` e `q`. Sem filtro, são os números da unidade inteira; com
+            filtro, são os do recorte — a tela que filtrou "louça" e mostra "120
+            peças" está falando da louça, não do apartamento.
+          properties:
+            rooms:        { type: integer }
+            items:        { type: integer, description: Bens distintos colocados nesta unidade. }
+            expected_qty: { type: integer, description: Total de peças que se espera encontrar na unidade. }
+            open_issues:  { type: integer }
+            replacement_cost_cents:
+              type: [integer, "null"]
+              format: int64
+              description: |
+                Soma de `expected_qty × replacement_cost_cents` dos bens
+                **cotados**. `uncosted_items` diz quantos ficaram de fora — sem
+                isso o número pareceria o valor do enxoval da unidade, e seria
+                só o valor da parte que alguém cotou.
+            uncosted_items: { type: integer, description: Bens sem custo de reposição cotados que ficaram fora da soma acima. }
+        open_count:
+          oneOf:
+            - $ref: "#/components/schemas/Conferencia"
+            - type: "null"
+          description: A conferência aberta desta unidade, se houver — no máximo uma (`inventory_counts_aberta_idx`).
+        last_closed_count:
+          oneOf:
+            - $ref: "#/components/schemas/Conferencia"
+            - type: "null"
+          description: A última conferência encerrada, para a tela dizer "conferido em".
+
+    PedidoDeCopiaDeInventario:
+      type: object
+      additionalProperties: false
+      required: [source_unit_id]
+      properties:
+        source_unit_id:
+          type: string
+          format: uuid
+          description: Unidade de **origem**. Diferente do destino e da mesma propriedade.
+        rooms_only:
+          type: boolean
+          default: false
+          description: Copia só os ambientes, sem as colocações — para quem vai cadastrar os bens à mão e só quer a planta da casa.
+
+    ResultadoDaCopiaDeInventario:
+      type: object
+      required: [dry_run, source, rooms_created, placements_created, kept]
+      properties:
+        dry_run: { type: boolean, description: "`true` = nada foi gravado." }
+        source:
+          type: object
+          properties:
+            unit_id: { type: string, format: uuid }
+            code:    { type: string, example: AP-01 }
+        rooms_created:
+          type: array
+          description: "Ambientes que (vão) nascer no destino, com o `code` da origem. Ambiente que já casa no destino — pelo `code` e, sem `code` igual, pelo `name` — não entra aqui e não é reescrito."
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              kind: { $ref: "#/components/schemas/TipoDeAmbiente" }
+        placements_created:
+          type: array
+          description: Colocações que (vão) nascer, com a quantidade da origem.
+          items:
+            type: object
+            properties:
+              room_name:    { type: string }
+              item_id:      { type: string, format: uuid }
+              item_name:    { type: string }
+              expected_qty: { type: integer }
+        kept:
+          type: array
+          description: |
+            Colocações que **já existiam no destino e não foram tocadas**, com as
+            duas quantidades lado a lado. É a parte da resposta que importa:
+            copiar o AP-01 para o AP-02 não pode apagar os 8 pratos que alguém
+            já contou no AP-02 porque o AP-01 tem 12.
+          items:
+            type: object
+            properties:
+              room_name:    { type: string }
+              item_name:    { type: string }
+              source_qty:   { type: integer }
+              current_qty:  { type: integer }
+
+    Conferencia:
+      type: object
+      required: [id, unit_id, status, opened_at, progress]
+      properties:
+        id:         { type: string, format: uuid }
+        unit_id:    { type: string, format: uuid }
+        unit_code:  { type: string, example: GV-01 }
+        unit_name:  { type: string }
+        status:     { $ref: "#/components/schemas/StatusDeConferencia" }
+        note:       { type: [string, "null"] }
+        opened_by:  { type: [string, "null"], format: uuid }
+        opened_by_name:
+          type: [string, "null"]
+          description: |
+            Nome do USUÁRIO que abriu — não é contato, e por isso não mascara nem
+            grava `pii_access_log` (regra do topo deste arquivo). Sai só o nome:
+            e-mail e telefone de quem opera não têm o que fazer numa tela de
+            inventário.
+        opened_at:  { type: string, format: date-time, description: "É o `created_at` desta conferência: duas colunas para o mesmo instante seriam duas fontes da mesma verdade." }
+        closed_by:  { type: [string, "null"], format: uuid }
+        closed_by_name: { type: [string, "null"] }
+        closed_at:
+          type: [string, "null"]
+          format: date-time
+          description: "Nulo **se e somente se** `status` é `aberta` — é o `CHECK inventory_counts_fechamento`. `cancelada` também tem instante: é quando se desistiu dela."
+        progress:   { $ref: "#/components/schemas/ProgressoDaConferencia" }
+        updated_at: { type: string, format: date-time }
+
+    ProgressoDaConferencia:
+      type: object
+      required: [lines, counted, pending, diverging]
+      description: O rodapé da tela de contagem. Vem junto no `PATCH` de cada linha para o celular não refazer a chamada da conferência inteira a cada toque.
+      properties:
+        lines:     { type: integer, description: Total de linhas congeladas na abertura. }
+        counted:   { type: integer, description: "Linhas com `counted_qty` preenchida (inclui as contadas em zero)." }
+        pending:   { type: integer, description: "Linhas com `counted_qty` nula — ainda não contadas. É diferente de contadas em zero." }
+        diverging: { type: integer, description: "Linhas contadas em que `counted_qty <> expected_qty`." }
+        missing_qty: { type: integer, description: Soma das faltas (`expected − counted`, só onde é positiva). }
+        surplus_qty: { type: integer, description: Soma das sobras. Sobra não abre avaria — é correção de cadastro. }
+
+    LinhaDeConferencia:
+      type: object
+      required: [id, count_id, room_id, item_id, expected_qty, counted_qty]
+      properties:
+        id:        { type: string, format: uuid }
+        count_id:  { type: string, format: uuid }
+        room_id:   { type: string, format: uuid }
+        room_name: { type: string }
+        room_kind: { $ref: "#/components/schemas/TipoDeAmbiente" }
+        item_id:   { type: string, format: uuid }
+        item_name: { type: string }
+        item_description: { type: [string, "null"] }
+        item_category:    { $ref: "#/components/schemas/CategoriaDeBem" }
+        item_unit_measure: { $ref: "#/components/schemas/UnidadeDeMedida" }
+        cover:
+          oneOf:
+            - $ref: "#/components/schemas/MidiaDeBem"
+            - type: "null"
+          description: A foto é o que faz quem conta reconhecer a taça em vez de ler "taça de vinho tinto nº 2". A grade usa `thumb_url`.
+        expected_qty:
+          type: integer
+          description: |
+            **Congelada na abertura** da conferência, copiada de
+            `room_inventory.expected_qty` — não é `JOIN` (regra 7 do CLAUDE.md).
+            Mudar o padrão da casa depois não reescreve o que esta contagem
+            esperava.
+        counted_qty:
+          type: [integer, "null"]
+          description: "`null` = ainda não contado. `0` = contei e não achei nenhum. São coisas diferentes."
+        diff:
+          type: [integer, "null"]
+          description: "`counted_qty − expected_qty`. Nulo enquanto a linha estiver pendente. Negativo é falta; positivo, sobra."
+        note:       { type: [string, "null"] }
+        replacement_cost_cents:
+          type: [integer, "null"]
+          format: int64
+          description: |
+            Custo de reposição **congelado no fechamento** (regra 7 do
+            CLAUDE.md), copiado de `inventory_items.replacement_cost_cents`.
+            `null` enquanto a conferência está aberta ou foi cancelada, e
+            quando o bem não tinha custo cotado no instante do fechamento. É
+            dele — e não do catálogo de hoje — que sai a perda de `result`.
+        counted_by: { type: [string, "null"], format: uuid }
+        counted_by_name: { type: [string, "null"], description: Nome do usuário que contou. }
+        counted_at:
+          type: [string, "null"]
+          format: date-time
+          description: "Gravado pelo servidor. Nulo **se e somente se** `counted_qty` é nula (`CHECK inventory_count_lines_contagem`)."
+
+    AmbienteDaConferencia:
+      type: object
+      required: [room_id, room_name, lines]
+      properties:
+        room_id:   { type: string, format: uuid }
+        room_name: { type: string }
+        room_kind: { $ref: "#/components/schemas/TipoDeAmbiente" }
+        progress:  { $ref: "#/components/schemas/ProgressoDaConferencia" }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/LinhaDeConferencia" }
+
+    ConferenciaCompleta:
+      allOf:
+        - $ref: "#/components/schemas/Conferencia"
+        - type: object
+          required: [rooms]
+          properties:
+            rooms:
+              type: array
+              description: Um ambiente por vez é como o celular conta; a ordem é a de caminhada pela casa.
+              items: { $ref: "#/components/schemas/AmbienteDaConferencia" }
+            result:
+              oneOf:
+                - $ref: "#/components/schemas/ApuracaoDaConferencia"
+                - type: "null"
+              description: |
+                Presente só em conferência `fechada`: o que o `POST /close`
+                apurou, lido de volta com o custo congelado. `null` em aberta e
+                cancelada.
+
+                **O que é congelado e o que é vivo.** Quantidades, custo, perda,
+                `issue_id` e `issues_created` são os do fechamento e não mudam.
+                Os **nomes** (`room_name`, `item_name`) e a **ordem** de caminhada
+                vêm do cadastro de hoje, de propósito: corrigir "Prato raso
+                brnaco" corrige em todo lugar, inclusive no relatório de março, e
+                a identidade da linha é o `room_id`/`item_id`, que não muda.
+
+    ApuracaoDaConferencia:
+      type: object
+      required: [divergences, issues_created]
+      properties:
+        divergences:
+          type: array
+          description: Uma linha por divergência, na ordem de caminhada pela casa. Vazio quer dizer que a casa está como o cadastro diz.
+          items: { $ref: "#/components/schemas/DivergenciaDeConferencia" }
+        issues_created: { type: integer, description: "Avarias `faltando` abertas por este fechamento (as que têm `count_id` desta conferência e nasceram nele)." }
+
+    DivergenciaDeConferencia:
+      type: object
+      required: [room_id, room_name, item_id, item_name, expected_qty, counted_qty, diff]
+      properties:
+        room_id:      { type: string, format: uuid }
+        room_name:    { type: string }
+        item_id:      { type: string, format: uuid }
+        item_name:    { type: string }
+        expected_qty: { type: integer }
+        counted_qty:  { type: integer }
+        diff:         { type: integer, description: Negativo é falta; positivo, sobra. }
+        replacement_cost_cents:
+          type: [integer, "null"]
+          format: int64
+          description: O custo **congelado no fechamento** na linha da conferência — não o do catálogo de hoje.
+        loss_cents:
+          type: [integer, "null"]
+          format: int64
+          description: "Falta × custo congelado, em centavos. `null` quando o bem não tinha custo cotado no fechamento — e nunca zero, que seria dizer que a perda não custou nada. Sobra também é `null`."
+        issue_id:
+          type: [string, "null"]
+          format: uuid
+          description: A avaria aberta por este fechamento, quando houve.
+
+    ConferenciaAbrir:
+      type: object
+      additionalProperties: false
+      required: [unit_id]
+      properties:
+        unit_id: { type: string, format: uuid }
+        note:    { type: [string, "null"], maxLength: 2000 }
+
+    ConferenciaSubstituir:
+      type: object
+      additionalProperties: false
+      description: "Corpo do `PUT`. O único campo editável de uma conferência é a observação — ver a descrição da operação."
+      properties:
+        note: { type: [string, "null"], maxLength: 2000 }
+
+    ConferenciaAtualizar:
+      type: object
+      additionalProperties: false
+      description: "Corpo do `PATCH` — campo ausente não muda nada; `note: null` limpa."
+      properties:
+        note: { type: [string, "null"], maxLength: 2000 }
+
+    ContagemDaLinha:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: |
+        O gesto do celular. `counted_at` e `counted_by` são do servidor e são
+        campo desconhecido aqui (`422`): "quando isto foi conferido, e por quem"
+        não pode depender do relógio do aparelho.
+
+        **Nenhum campo é obrigatório, mas o corpo vazio é `422`.** Campo ausente
+        não mexe (é o `Opt[T]`): `{"note": "lascado"}` anota sem tocar na
+        contagem, e `{"counted_qty": 9}` conta sem apagar a nota.
+      properties:
+        counted_qty:
+          type: [integer, "null"]
+          minimum: 0
+          description: |
+            A quantidade contada. `0` é "contei e não achei nenhum"; `null`
+            **desfaz** a contagem e devolve a linha a pendente — é o `Opt[T]`
+            distinguindo campo ausente (não mexe) de campo nulo (limpa).
+        note: { type: [string, "null"], maxLength: 2000 }
+
+    LinhaContada:
+      type: object
+      required: [line, progress]
+      properties:
+        line:     { $ref: "#/components/schemas/LinhaDeConferencia" }
+        progress: { $ref: "#/components/schemas/ProgressoDaConferencia" }
+
+    PedidoDeFechamento:
+      type: object
+      additionalProperties: false
+      properties:
+        note:
+          type: [string, "null"]
+          maxLength: 2000
+          description: "A observação da conferência. Ausente mantém a que já existe; texto **substitui**; `null` limpa — a mesma regra do `PATCH`."
+        raise_issues:
+          type: boolean
+          default: true
+          description: |
+            Abre uma avaria `faltando` por linha em falta, com `count_id` desta
+            conferência — o vínculo que transforma divergência em cobrança. Falta
+            é aritmética, não opinião. **Sobra nunca abre nada**: contar 14 onde
+            se esperavam 12 é correção de cadastro, e sai na divergência para o
+            gestor decidir. `false` fecha sem abrir pendência (contagem de
+            aferição).
+
+    ResultadoDoFechamento:
+      type: object
+      required: [count, divergences, issues_created]
+      properties:
+        count: { $ref: "#/components/schemas/Conferencia" }
+        divergences:
+          type: array
+          description: |
+            Uma linha por divergência, na ordem de caminhada pela casa. Vazio
+            quer dizer que a casa está como o cadastro diz. É exatamente o que
+            `GET /inventory/counts/{id}` devolve depois em `result` — o custo é
+            congelado na linha no mesmo `UPDATE` do fechamento.
+          items: { $ref: "#/components/schemas/DivergenciaDeConferencia" }
+        issues_created: { type: integer }
+
+    Avaria:
+      type: object
+      required: [id, room_id, item_id, kind, qty, reported_at]
+      properties:
+        id:          { type: string, format: uuid }
+        room_id:     { type: string, format: uuid }
+        room_name:   { type: string }
+        unit_id:     { type: string, format: uuid }
+        unit_code:   { type: string, example: GV-01 }
+        item_id:     { type: string, format: uuid }
+        item_name:   { type: string }
+        item_category: { $ref: "#/components/schemas/CategoriaDeBem" }
+        cover:
+          oneOf:
+            - $ref: "#/components/schemas/MidiaDeBem"
+            - type: "null"
+        kind:        { $ref: "#/components/schemas/TipoDeAvaria" }
+        qty:         { type: integer, minimum: 1, description: "Maior que zero: avaria de zero peças não é avaria." }
+        note:        { type: [string, "null"] }
+        replacement_cost_cents: { type: [integer, "null"], format: int64 }
+        total_cost_cents:
+          type: [integer, "null"]
+          format: int64
+          description: "`qty × replacement_cost_cents`, calculado no servidor, em centavos. `null` quando o bem não tem custo cotado."
+        reservation_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            A reserva durante a qual a avaria aconteceu — **o vínculo que permite
+            cobrar o hóspede**. Anulável: desgaste sem hóspede e achado em
+            conferência de rotina não têm reserva.
+        reservation_code:
+          type: [string, "null"]
+          example: WH-2026-0142
+          description: |
+            Só leitura, e só o código. Esta rota é protegida por
+            `inventory.goods`: "o que quebrou nesta estadia" se responde sem
+            dizer quem dormiu nela, então nada de hóspede, telefone ou valor da
+            venda.
+        count_id:    { type: [string, "null"], format: uuid, description: A conferência que achou. Anulável — a governanta também relata fora de conferência. }
+        resolution:
+          oneOf:
+            - $ref: "#/components/schemas/DesfechoDeAvaria"
+            - type: "null"
+          description: "`null` = pendência **aberta**."
+        reported_by: { type: [string, "null"], format: uuid }
+        reported_by_name: { type: [string, "null"] }
+        reported_at: { type: string, format: date-time, description: "É o `created_at` desta tabela." }
+        resolved_by: { type: [string, "null"], format: uuid }
+        resolved_by_name: { type: [string, "null"] }
+        resolved_at: { type: [string, "null"], format: date-time, description: "Nulo **se e somente se** `resolution` é nula (`CHECK inventory_issues_desfecho`)." }
+        updated_at:  { type: string, format: date-time }
+
+    AvariaCriar:
+      type: object
+      additionalProperties: false
+      required: [room_id, item_id, kind, qty]
+      description: |
+        A reserva entra por **`reservation_id` ou `reservation_code`**, nunca
+        os dois (`422`). O código existe porque é o que a governanta tem na mão
+        ("WH-2026-0142", da folha do check-out), e trocar código por id exigiria
+        `reservations:ver`, que o perfil de contagem não tem. Código que não
+        existe nesta propriedade é `422` com `details.reservation_code`, e a
+        resposta devolve a reserva só pelo `code` — nunca o hóspede.
+
+        `count_id`, quando vem, tem de ser uma conferência da **mesma unidade**
+        do ambiente (`422` com `details.count_id` se não for).
+      properties:
+        room_id:        { type: string, format: uuid }
+        item_id:        { type: string, format: uuid }
+        kind:           { $ref: "#/components/schemas/TipoDeAvaria" }
+        qty:            { type: integer, minimum: 1 }
+        note:           { type: [string, "null"], maxLength: 2000 }
+        reservation_id: { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0142, description: "Alternativa a `reservation_id` — ver a descrição do schema." }
+        count_id:       { type: [string, "null"], format: uuid }
+
+    AvariaSubstituir:
+      type: object
+      additionalProperties: false
+      required: [kind, qty]
+      description: "Corpo do `PUT`. Sem `room_id`/`item_id` (são a identidade do fato) e sem `resolved_at`/`resolved_by` (são do servidor). A reserva vai por `reservation_id` **ou** `reservation_code`, como no `POST`."
+      properties:
+        kind:           { $ref: "#/components/schemas/TipoDeAvaria" }
+        qty:            { type: integer, minimum: 1 }
+        note:           { type: [string, "null"], maxLength: 2000 }
+        reservation_id: { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0142 }
+        resolution:
+          oneOf:
+            - $ref: "#/components/schemas/DesfechoDeAvaria"
+            - type: "null"
+
+    AvariaAtualizar:
+      type: object
+      additionalProperties: false
+      description: "Corpo do `PATCH` — campo ausente não muda nada; campo com `null` limpa (e `resolution: null` **reabre** a pendência). A reserva vai por `reservation_id` **ou** `reservation_code`, nunca os dois; qualquer um dos dois em `null` desvincula."
+      properties:
+        kind:           { $ref: "#/components/schemas/TipoDeAvaria" }
+        qty:            { type: integer, minimum: 1 }
+        note:           { type: [string, "null"], maxLength: 2000 }
+        reservation_id: { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0142 }
+        resolution:
+          oneOf:
+            - $ref: "#/components/schemas/DesfechoDeAvaria"
+            - type: "null"
 
 security:
   - bearerAuth: []

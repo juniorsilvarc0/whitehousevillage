@@ -12,7 +12,7 @@ COPY apps/api/ ./
 # Sem `|| true`: build quebrado tem que derrubar a imagem aqui. Mascarar a
 # falha só a empurra para o runtime, onde ela vira "exec format error" às 2h.
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/ \
-      ./cmd/api ./cmd/worker ./cmd/migrate ./cmd/seed
+      ./cmd/api ./cmd/worker ./cmd/migrate ./cmd/seed ./cmd/importar-bens
 # Diretório das fotos e vídeos do site (docs/site-cms.md §8). Criado aqui porque
 # o runtime distroless não tem shell para um `mkdir`.
 RUN mkdir -p /out-data/midia

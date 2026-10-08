@@ -62,7 +62,7 @@ export function mensagemDoErro(code: CodigoDeErro, padrao = "Não foi possível 
     case "UNIT_NOT_AVAILABLE":
       return "O apartamento escolhido está ocupado nesse período.";
     case "COMPOSITION_INCOMPLETE":
-      return "Este produto não pode ser vendido inteiro porque um dos apartamentos dele está desativado. Reative o apartamento em Configurações → Inventário.";
+      return "Este produto não pode ser vendido inteiro porque um dos apartamentos dele está desativado. Reative o apartamento em Configurações → Unidades e produtos.";
     case "INVALID_STATE_TRANSITION":
       return "A situação atual da reserva não permite esta ação. Recarregue a página para ver como ela está.";
     case "RESERVATION_NOT_CANCELLABLE":
@@ -71,6 +71,12 @@ export function mensagemDoErro(code: CodigoDeErro, padrao = "Não foi possível 
       return "A pré-reserva venceu e as datas foram liberadas.";
     case "HOLD_LIMIT_REACHED":
       return "Esta pré-reserva já foi estendida o máximo de vezes permitido.";
+    case "COUNT_ALREADY_OPEN":
+      return "Esta unidade já tem uma conferência em andamento. Continue por ela em vez de abrir outra.";
+    case "COUNT_CLOSED":
+      return "Esta conferência já foi encerrada e não aceita mais alterações. Recarregue a página para ver como ela ficou.";
+    case "COUNT_HAS_PENDING_LINES":
+      return "Ainda há itens sem contagem. Conte todos antes de fechar — ou cancele a conferência, se ela não vai ser terminada.";
     case "IDEMPOTENCY_MISMATCH":
       return "Esta ação já foi enviada antes com outros dados. Recarregue a página e confira.";
     case "INTERNAL":

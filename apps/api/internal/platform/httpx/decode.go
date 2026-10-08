@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,7 +59,13 @@ func Decode[T any](r *http.Request) (T, error) {
 		return alvo, apperr.Validation(map[string]string{"body": "corpo da requisição é obrigatório."})
 	}
 
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, tamanhoMaximoCorpo))
+	// O corpo é lido inteiro (até 1 MiB) porque a recusa de chave com outra
+	// caixa precisa das chaves como chegaram — o decoder já as perdeu.
+	bruto, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, tamanhoMaximoCorpo))
+	if err != nil {
+		return alvo, erroDeJSON(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(bruto))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&alvo); err != nil {
 		return alvo, erroDeJSON(err)
@@ -67,6 +74,9 @@ func Decode[T any](r *http.Request) (T, error) {
 	// esconde o problema.
 	if err := dec.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		return alvo, apperr.Validation(map[string]string{"body": "corpo deve conter um único documento JSON."})
+	}
+	if err := recusarChaveComOutraCaixa[T](bruto); err != nil {
+		return alvo, err
 	}
 
 	return alvo, Validar(alvo)
@@ -79,7 +89,11 @@ func DecodeOpcional[T any](r *http.Request) (T, error) {
 	if r.Body == nil || r.ContentLength == 0 {
 		return alvo, nil
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, tamanhoMaximoCorpo))
+	bruto, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, tamanhoMaximoCorpo))
+	if err != nil {
+		return alvo, erroDeJSON(err)
+	}
+	dec := json.NewDecoder(bytes.NewReader(bruto))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&alvo); err != nil {
 		if errors.Is(err, io.EOF) {
@@ -87,7 +101,119 @@ func DecodeOpcional[T any](r *http.Request) (T, error) {
 		}
 		return alvo, erroDeJSON(err)
 	}
+	if err := recusarChaveComOutraCaixa[T](bruto); err != nil {
+		return alvo, err
+	}
 	return alvo, Validar(alvo)
+}
+
+// ─────────────── Chave com outra caixa não é o campo do contrato ───────────────
+//
+// O `encoding/json` casa a chave com o campo SEM olhar maiúscula/minúscula, e o
+// `DisallowUnknownFields` herda a mesma tolerância: `counted_qty` escrita toda
+// em maiúsculas e `{"Note": "x"}` respondiam 200 e GRAVAVAM, contra o
+// `additionalProperties: false` do contrato (medido pelo QA nas rotas de bens,
+// 07/10/2026). É o mesmo
+// silêncio que o DisallowUnknownFields existe para acabar — um cliente com a
+// chave "quase certa" passa, e no dia em que o servidor ganhar um campo de
+// nome parecido ninguém sabe qual dos dois chegou.
+//
+// A regra: toda chave do objeto de TOPO tem de ser, byte a byte, o nome JSON de
+// um campo do DTO. O nome é o da tag `json` ou, sem tag, o do campo Go — como
+// o encoding/json faz; struct embutida sem nome na tag contribui com os campos
+// dela (são promovidos); `json:"-"` e campo não exportado não contam. DTO cujo
+// topo não é struct (a matriz de permissões é uma lista) ou que decodifica a si
+// mesmo (`json.Unmarshaler`) fica fora: não há "chave de topo" a conferir.
+
+var (
+	nomesExatosPorTipo  sync.Map // reflect.Type → map[string]bool (nil: fora da regra)
+	tipoUnmarshalerJSON = reflect.TypeFor[json.Unmarshaler]()
+)
+
+// recusarChaveComOutraCaixa roda DEPOIS do decode bem-sucedido: corpo
+// malformado, tipo errado e nome inexistente já saíram com a mensagem deles.
+// O que sobra aqui é só a chave que o decoder aceitou por casar sem caixa.
+func recusarChaveComOutraCaixa[T any](bruto []byte) error {
+	nomes := nomesExatos(reflect.TypeFor[T]())
+	if nomes == nil {
+		return nil
+	}
+	var chaves map[string]json.RawMessage
+	if err := json.Unmarshal(bruto, &chaves); err != nil {
+		// Não é objeto (o `null` de um corpo opcional, por exemplo): o decode
+		// já decidiu, e não há chave a conferir.
+		return nil
+	}
+	detalhes := map[string]string{}
+	for chave := range chaves {
+		if nomes[chave] {
+			continue
+		}
+		msg := "campo desconhecido no corpo da requisição."
+		for nome := range nomes {
+			if strings.EqualFold(nome, chave) {
+				msg = fmt.Sprintf("campo desconhecido no corpo da requisição — os nomes diferenciam maiúsculas: o campo é %q.", nome)
+				break
+			}
+		}
+		detalhes[chave] = msg
+	}
+	if len(detalhes) > 0 {
+		return apperr.Validation(detalhes)
+	}
+	return nil
+}
+
+// nomesExatos devolve os nomes JSON aceitos no topo do tipo, ou nil quando o
+// tipo está fora da regra. Calculado uma vez por tipo.
+func nomesExatos(t reflect.Type) map[string]bool {
+	if v, ok := nomesExatosPorTipo.Load(t); ok {
+		return v.(map[string]bool)
+	}
+	var nomes map[string]bool
+	base := t
+	for base.Kind() == reflect.Pointer {
+		base = base.Elem()
+	}
+	if base.Kind() == reflect.Struct && !base.Implements(tipoUnmarshalerJSON) &&
+		!reflect.PointerTo(base).Implements(tipoUnmarshalerJSON) {
+		nomes = map[string]bool{}
+		coletarNomes(base, nomes, map[reflect.Type]bool{})
+	}
+	nomesExatosPorTipo.Store(t, nomes)
+	return nomes
+}
+
+func coletarNomes(t reflect.Type, nomes map[string]bool, vistos map[reflect.Type]bool) {
+	if vistos[t] {
+		return
+	}
+	vistos[t] = true
+	for i := range t.NumField() {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		if tag == "-" {
+			continue
+		}
+		nome, _, _ := strings.Cut(tag, ",")
+		if f.Anonymous && nome == "" {
+			embutido := f.Type
+			if embutido.Kind() == reflect.Pointer {
+				embutido = embutido.Elem()
+			}
+			if embutido.Kind() == reflect.Struct {
+				coletarNomes(embutido, nomes, vistos)
+				continue
+			}
+		}
+		if !f.IsExported() {
+			continue
+		}
+		if nome == "" {
+			nome = f.Name
+		}
+		nomes[nome] = true
+	}
 }
 
 // Validar roda as tags do validator e, depois, o gancho Validador. As duas

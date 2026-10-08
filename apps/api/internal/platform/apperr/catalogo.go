@@ -64,6 +64,9 @@ const (
 	CodeContactDuplicate          = "CONTACT_DUPLICATE"
 	CodeContactAnonymized         = "CONTACT_ANONYMIZED"
 	CodeQuoteNotPending           = "QUOTE_NOT_PENDING"
+	CodeCountAlreadyOpen          = "COUNT_ALREADY_OPEN"
+	CodeCountClosed               = "COUNT_CLOSED"
+	CodeCountHasPendingLines      = "COUNT_HAS_PENDING_LINES"
 	CodeInternal                  = "INTERNAL"
 )
 
@@ -244,4 +247,50 @@ var (
 	// ContactAnonymized — o titular exerceu o direito de eliminação: a ficha
 	// não recebe dado pessoal novo nem proposta.
 	ContactAnonymized = definir(CodeContactAnonymized, "Este contato foi anonimizado e não aceita mais dados pessoais.", http.StatusConflict)
+)
+
+// Erros da conferência de inventário de bens (20261007170000, docs/db.md §11).
+//
+// Os três nasceram junto com o contrato das rotas de `/inventory/*`
+// (`internal/router/rotas_inventario_bens.go`) e **antes** do módulo que os
+// emite, de propósito: o enum da OpenAPI e o literal em Go têm de entrar no
+// mesmo commit, senão `contrato_de_erros_test.go` reprova de um lado ou do
+// outro — e o sintoma em produção é o painel recebendo um `code` que ele
+// traduz para "erro interno".
+var (
+	// CountAlreadyOpen — a unidade já tem conferência aberta. Decidido pelo
+	// índice único PARCIAL `inventory_counts_aberta_idx`
+	// (`UNIQUE (unit_id) WHERE status = 'aberta'`), traduzindo o `23505`:
+	// `SELECT` antes do `INSERT` é TOCTOU e perde a corrida entre dois
+	// funcionários abrindo a contagem do AP-01 no mesmo plantão — cada um
+	// contaria metade e o fechamento de um sobrescreveria o do outro.
+	//
+	// `details.count_id` e `details.opened_at` existem para o segundo toque
+	// levar à conferência que já está aberta, em vez de virar beco. Sai também
+	// de `POST /units/{id}/inventory/copy`: copiar ambiente ou colocação com a
+	// contagem em curso criaria bem sem linha congelada, e a conferência
+	// fecharia "completa" sem nunca ter olhado para ele.
+	CountAlreadyOpen = definir(CodeCountAlreadyOpen,
+		"Esta unidade já tem uma conferência aberta. Termine ou cancele a que está em andamento.",
+		http.StatusConflict)
+
+	// CountClosed — conferência `fechada` ou `cancelada` não aceita contagem,
+	// edição, novo fechamento nem cancelamento. O que está encerrado é
+	// história: recontar mudaria em silêncio uma divergência que já virou
+	// pendência (e talvez cobrança), e apagar tiraria o lastro dela —
+	// `inventory_issues.count_id` é `ON DELETE RESTRICT` justamente por isso.
+	// `details.status` e `details.closed_at`.
+	CountClosed = definir(CodeCountClosed,
+		"Esta conferência já foi encerrada: para contar de novo, abra uma nova conferência.",
+		http.StatusConflict)
+
+	// CountHasPendingLines — `/close` com linha sem contagem
+	// (`counted_qty IS NULL`). Fechar assim produziria divergência falsa:
+	// "esperava 12, contou nada" fica indistinguível de "esperava 12, não achei
+	// nenhum" no relatório, e a segunda é uma perda que alguém vai cobrar de um
+	// hóspede. Quem não vai terminar CANCELA, que é outro fato.
+	// `details.pending` e `details.pending_by_room`.
+	CountHasPendingLines = definir(CodeCountHasPendingLines,
+		"Ainda há itens sem contagem nesta conferência. Conte o que falta ou cancele a conferência.",
+		http.StatusConflict)
 )

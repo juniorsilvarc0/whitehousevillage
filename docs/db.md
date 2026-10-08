@@ -21,8 +21,31 @@ contra um Postgres descartável com todas as migrations até `20261002180000`
 aplicados e alternados. Ainda em **03/10/2026**, §2, §13b, §14, §15 e §16 foram
 conferidos em `20261003120000` (`site_content`, `site_media` e o recurso RBAC `site`),
 com `up` → `down 1` → `up`, `down -all` → `up` e os dois catálogos semeados duas vezes
-cada. Para repetir a conferência de
-qualquer afirmação daqui:
+cada. Em **07/10/2026**, §3, §11, §14 e §15 foram conferidos em `20261007170000` (as oito
+tabelas do inventário de bens por ambiente): as colunas, as constraints e os índices
+foram lidos de `pg_constraint`/`pg_indexes`, cada `CHECK` e cada chave parcial foi
+provada com `INSERT` que deve falhar, e o ciclo rodou `up` → `down 1` → `up` no banco de
+desenvolvimento e `up` → `down -all` → `up` num Postgres descartável — o `down` não deixa
+tabela, índice, constraint, função nem sequência para trás. Ainda em **07/10/2026**, §11,
+§14 e §15 foram conferidos em `20261007200000` (`inventory_count_lines.replacement_cost_cents`,
+o custo congelado no fechamento): coluna, `CHECK` e comentário foram lidos de
+`information_schema`/`pg_constraint`; o `CHECK` foi provado com `INSERT` e `UPDATE` de
+custo zero e negativo, que falham com `23514`; o backfill foi provado com conferências
+fechada, cancelada e aberta numa transação desfeita; e o ciclo rodou `up` → `down 1` →
+`up` no banco de desenvolvimento (PG 16) e `up` → `down 1` → `up` → `down -all` → `up`
+num Postgres descartável (PG 17, no host, porque a VM do Docker estava sem disco). O
+`pg_dump --schema-only` depois de `up` + `down 1` é idêntico ao de um banco que nunca viu
+a migration. Ainda em **07/10/2026**, §3, §11, §14 e §15 foram conferidos em
+`20261007213000` (`unit_rooms.code`, a identidade estável do cômodo). A coluna, as três
+constraints e o comentário foram lidos de `information_schema`/`pg_constraint`. O backfill
+foi provado com 24 cômodos em três unidades (acento composto e decomposto, colisão, nome
+que vira vazio, corte em 60, ordem por `created_at`), primeiro numa transação desfeita e
+depois comitado e migrado pelo `cmd/migrate`, no PG 16 do desenvolvimento (`en_US.utf8`) e
+num PG 17 descartável em `locale C`, com resultado idêntico. Formato, tamanho e `UNIQUE`
+foram provados com `INSERT` que deve falhar. O ciclo rodou `up` → `down 1` → `up` no
+desenvolvimento e `up` → `down 1` → `up` → `down -all` → `up` no descartável, e o
+`pg_dump --schema-only` depois de cada `down 1` é idêntico ao de antes da migration. Para
+repetir a conferência de qualquer afirmação daqui:
 
 ```bash
 # quais tabelas existem
@@ -182,7 +205,11 @@ unit_type_members(unit_type_id, unit_id)   -- PK composta — o vínculo é AQUI
 ```
 
 `amenities`, `unit_amenities` e `unit_photos` **ainda não existem no banco** — entram
-com a ficha da unidade. A unicidade é `(property_id, code)` nas duas tabelas, e não
+com a ficha da unidade. **`unit_rooms` existe** desde `20261007170000`: é a unidade
+dividida em cômodos, e vive em §11 porque quem a usa é o inventário. Desde
+`20261007213000` o cômodo tem `code`, que é para ele o que `units.code` é para a unidade:
+identidade que não se edita, única **na unidade** (§11). A unicidade de `units` e `unit_types` é
+`(property_id, code)` nas duas tabelas, e não
 `code` sozinho como esta página dizia: `property_id` existe em toda tabela justamente
 para caber uma segunda propriedade, e o `AP-01` dela colidiria com o `AP-01` desta.
 
@@ -624,14 +651,259 @@ Comissão incide sobre diárias, nunca sobre limpeza ou caução. Caução é `r
 
 ---
 
-## 11. Operação
+## 11. Operação — inventário de bens por ambiente
 
-> **Ainda não existe no banco.** Nenhuma das cinco tabelas foi criada. O recurso RBAC
-> `inventory` já está no catálogo.
+Entregue em `20261007170000`; o custo congelado na linha da conferência veio em
+`20261007200000`, e a identidade estável do cômodo (`unit_rooms.code`) em
+`20261007213000`. **Oito tabelas existem**; três continuam projeto (abaixo).
+
+Esta seção projetava, desde 20/08/2026, duas tabelas que nunca foram criadas —
+`inventory_items(… min_stock, cost_cents)` e `unit_inventory(unit_id, item_id,
+standard_qty)` — e faltavam nelas as duas dimensões de que o módulo precisava: o
+**ambiente** (o enxoval não está "no AP-01", está na cozinha do AP-01: quem confere
+caminha cômodo a cômodo) e a **foto** (quem recebe a lista reconhece a taça, não lê
+"taça de vinho tinto nº 2"). Por isso `unit_inventory` virou `room_inventory`, pendurada
+no cômodo, e o cômodo é `unit_rooms` — conceito que não existia em lugar nenhum deste
+banco.
 
 ```
-inventory_items(id, property_id, name, category, unit_measure, min_stock, cost_cents)
-unit_inventory(unit_id, item_id, standard_qty)               -- PK composta
+unit_rooms(id, property_id, unit_id → units, name, kind, sort_order, active,
+           created_at, updated_at, code)                                  -- 10 colunas
+        -- kind: quarto | banheiro | cozinha | sala | area_externa | lavanderia | varanda | outro
+        -- UNIQUE (unit_id, name); UNIQUE (unit_id, code); unit_id ON DELETE RESTRICT
+        -- code: ^[a-z0-9]+(-[a-z0-9]+)*$, até 60, não editável pela API
+inventory_items(id, property_id, name, description?, category, unit_measure,
+                replacement_cost_cents?, active, source_ref?, created_at, updated_at)
+                                                                          -- 11 colunas
+        -- category: louca | talher | copo | cama | banho | mobilia | eletro | utensilio
+        --           | decoracao | outro
+        -- unit_measure: un (padrão) | par | jogo | kg | l | m
+room_inventory(room_id → unit_rooms, item_id → inventory_items, expected_qty, note?,
+               created_at, updated_at)                      -- PK composta, 6 colunas
+inventory_media(id, property_id, mime, bytes, width?, height?, original_name,
+                storage_key UNIQUE, thumb_key?, created_at, created_by?)  -- 11 colunas
+inventory_item_media(item_id, media_id, sort_order, created_at)
+                                                             -- PK composta, 4 colunas
+inventory_counts(id, property_id, unit_id, status, note?, opened_by?, opened_at,
+                 closed_by?, closed_at?, updated_at)                      -- 10 colunas
+        -- status: aberta | fechada | cancelada
+inventory_count_lines(id, count_id, room_id, item_id, expected_qty, counted_qty?,
+                      note?, counted_by?, counted_at?, created_at, updated_at,
+                      replacement_cost_cents?)                            -- 12 colunas
+        -- UNIQUE (count_id, room_id, item_id)
+inventory_issues(id, property_id, room_id, item_id, kind, qty, note?, reservation_id?,
+                 count_id?, resolution?, reported_by?, reported_at, resolved_by?,
+                 resolved_at?, updated_at)                                -- 15 colunas
+        -- kind: quebrado | faltando | avariado | outro
+        -- resolution: reposto | consertado | cobrado | perda_aceita | descartado
+```
+
+**O item é CATÁLOGO da propriedade; a quantidade é COLOCAÇÃO por ambiente.** A
+alternativa óbvia — uma linha por `(cômodo, bem)`, com nome, foto e custo na própria
+linha — foi medida contra a casa real e custa isto: "Prato raso branco" está em 6 das 12
+unidades, e nessa forma são 6 linhas independentes do mesmo objeto. Corrigir nome ou
+custo é um `UPDATE` × 6, e a primeira esquecida transforma o prato em dois bens
+diferentes que nenhum relatório soma — "quantos pratos a casa tem" deixa de ter resposta
+conferível. A foto é pior: ela pertence ao **objeto**, não à prateleira, e linha por
+cômodo pede o mesmo arquivo enviado 6 vezes. E a avaria ("3 quebrados") precisa apontar
+para o objeto para ser cobrável do hóspede; apontando para a linha-do-cômodo, o prejuízo
+da casa é uma soma sobre linhas que ninguém audita. É a mesma separação de `unit_types` ×
+`unit_type_members` (§3): o cadastro num lugar, a composição noutro.
+
+- **`min_stock` não entrou** — estoque mínimo é reposição, e reposição é
+  `stock_movements`, que continua projeto. E `cost_cents` virou
+  **`replacement_cost_cents`**: o número que a operação usa é o de **repor** o prato
+  quebrado hoje, não o de comprá-lo em 2019. `NULL` = não cotado; o `CHECK` é `> 0` e
+  não `>= 0`, para zero não virar um segundo jeito (errado) de escrever "não sei".
+- **`source_ref`** guarda a origem da importação no formato `fonte:conversa:mensagem`
+  (`chatwoot:2184:367988`) e é **único quando preenchido, por propriedade**
+  (`inventory_items_source_ref_idx`, índice único **parcial**). É o que torna a
+  importação repetível: a segunda passada reencontra a própria linha com
+  `ON CONFLICT (property_id, source_ref) WHERE source_ref IS NOT NULL` em vez de criar
+  um segundo "Prato raso branco". Escopado por propriedade pelo mesmo motivo de
+  `units(property_id, code)` — a chave global impediria uma segunda propriedade de
+  importar a mesma mensagem de origem.
+- **Mídia própria, e não `site_media`.** `site_media` (§13b) parece servir e não serve,
+  por dois motivos de schema: ela **não tem `property_id`** (é configuração da vitrine,
+  exceção consciente à regra) e o **`down` de `20261003120000` a derruba** — pendurar a
+  foto do inventário lá deixaria aquele `down` quebrado ou, pior, apagando bens em
+  cascata. `inventory_media` é tabela de negócio: tem `property_id` e cai só com
+  `20261007170000`. Imutável como a outra (trocar a foto é enviar arquivo novo), sem
+  `CHECK` de lista em `mime` nem teto de tamanho — limite é regra da API, não migration.
+  `thumb_key` é a miniatura que o upload gera: anulável (a geração pode falhar sem
+  invalidar o original), **única quando presente** e com `CHECK` de que difere de
+  `storage_key`, porque as duas moram no mesmo namespace do volume e a colisão
+  sobrescreveria a foto.
+- **Item × foto é muitos-para-muitos** (`inventory_item_media`), não uma coluna
+  `media_id` no item: a foto da bancada mostra a travessa, a leiteira e o açucareiro de
+  uma vez, e o mesmo item quer a foto de catálogo **e** a do defeito. As duas pontas são
+  `ON DELETE CASCADE` porque a ligação não tem vida própria. A **capa** do item é o
+  menor `sort_order`, desempatado por `media_id`.
+- **No máximo UMA conferência aberta por unidade**, e é índice único **parcial**
+  (`inventory_counts_aberta_idx ON (unit_id) WHERE status = 'aberta'`). Sem ela, dois
+  funcionários abrem a contagem do AP-01 no mesmo plantão, cada um conta metade e o
+  fechamento de um sobrescreve o do outro — conferir com `SELECT` antes de `INSERT` é
+  TOCTOU e não vale sob concorrência. Parcial porque a unidade acumula conferências
+  **fechadas** para sempre, e é por isso que uma `UNIQUE` comum não serviria.
+  `opened_at` é o `created_at` desta tabela; duas colunas para o mesmo instante seriam
+  duas fontes da mesma verdade. `inventory_counts_fechamento` é o
+  `CHECK ((status = 'aberta') = (closed_at IS NULL))`, mesma forma de
+  `crm_opportunities`.
+- **A linha da conferência congela as duas metades da conta** (regra 7 do CLAUDE.md):
+  `expected_qty` na **abertura**, copiada de `room_inventory.expected_qty`, e
+  `replacement_cost_cents` no **fechamento** (`20261007200000`), copiada de
+  `inventory_items.replacement_cost_cents` no mesmo `UPDATE` que fecha a conferência.
+  Mesmo motivo de `reservation_nights` guardar a tarifa aplicada: lida por `JOIN`, mudar
+  o padrão da casa hoje reescreveria o que a contagem de março esperava, e a divergência
+  que foi apurada e cobrada deixaria de existir no relatório. Medido: com a linha
+  congelada em 12 e `room_inventory` alterado para 8 depois, a linha continua dizendo 12.
+  O custo segue a mesma lógica. A perda de cada divergência é `falta × replacement_cost_cents`
+  **da linha**, e o contrato exige que `GET /inventory/counts/{id}` de uma conferência
+  `fechada` a devolva lida de volta, não recalculada: recotar o prato em junho não muda a
+  perda apurada em março. Medido: custo congelado em 2590, item recotado para 3990, e a
+  perda de uma falta de 3 continua 7770 (recalculada seria 11970). O custo fica `NULL` em
+  conferência aberta, em cancelada e quando o bem não tinha custo cotado no instante do
+  fechamento. Zero é recusado por `inventory_count_lines_custo_positivo`, como em
+  `inventory_items`, porque entraria na conta como perda de R$ 0,00. Duas garantias são
+  da API, e não do banco: "`NULL` em aberta e em cancelada" e "não muda depois de
+  fechada". `CHECK` não enxerga o status do pai, e o mesmo vale para `expected_qty`. O
+  backfill da migration deu às conferências já fechadas o custo **atual** do item, uma
+  aproximação aceitável só porque `20261007170000` nunca chegou a produção.
+  **`counted_qty` `NULL` é "não contado"; zero é "contei e não achei nenhum"** — são
+  coisas diferentes, e é a diferença que a tela de pendências pergunta
+  (`inventory_count_lines_pendentes_idx`, parcial em `counted_qty IS NULL`).
+  `inventory_count_lines_contagem` amarra `counted_qty` e `counted_at`: um sem o outro é
+  estado impossível.
+- **Pendência de avaria é `resolution IS NULL`.** Não há coluna `status` ao lado de
+  propósito — ela seria uma segunda fonte da mesma verdade, e o par
+  "`status='aberta'` com `resolution` preenchida" é um estado impossível que alguém
+  acabaria gravando. `inventory_issues_desfecho` amarra `resolution` e `resolved_at`.
+  `reservation_id` é anulável (desgaste sem hóspede, achado em conferência de rotina) e
+  **`ON DELETE RESTRICT`**: é este vínculo que permite cobrar o hóspede, e perdê-lo em
+  silêncio apagaria o lastro da cobrança.
+- **Soft delete é `active`** em `unit_rooms` e `inventory_items`, não `deleted_at`: as
+  FKs de conferência e avaria são `RESTRICT`, então cômodo ou item com histórico não
+  some — sai de linha desativado. É a decisão de `brokers.active` (§10).
+- **`room_inventory`, `inventory_item_media` e `inventory_count_lines` não têm
+  `property_id`**: penduram nos pais, como `rates` pendura em `rate_tables` (§4), e
+  repetir a coluna seria uma segunda fonte da mesma verdade. A consequência, dita para
+  ninguém achar que a FK a fechou: numa segunda propriedade, nada no banco impede colocar
+  um item da propriedade A num cômodo da propriedade B — a conferência é da API, que
+  filtra tudo por `property_id`. Fechar exigiria `UNIQUE (property_id, id)` nos pais e FK
+  composta (o padrão de `users.broker_id`, §2); lá havia exploit medido, aqui não há, e
+  não se compra constraint no escuro.
+- A migration termina com o mesmo bloco `DO` de `20260827110000`: **aborta** se qualquer
+  tabela do módulo passar de 25 colunas. A maior tem 15. `20261007200000` repete o bloco
+  para `inventory_count_lines`, que foi de 11 para 12, e `20261007213000` para
+  `unit_rooms`, que foi de 9 para 10.
+
+**`unit_rooms.code` é a identidade do cômodo; `name` é o rótulo** (`20261007213000`). É o
+`units.code` do cômodo: `NOT NULL`, minúsculo, sem acento, separado por hífen
+(`unit_rooms_code_formato`, o mesmo `pattern` de `Ambiente.code` no contrato), até 60
+caracteres (`unit_rooms_code_tamanho`) e único **na unidade** (`unit_rooms_code_unico`). Na
+unidade, e não na propriedade, de propósito: `cozinha` existe em cada um dos 6 duplex, e é
+por esse código que a cópia de inventário casa a cozinha do AP-01 com a do AP-02, mesmo
+depois de alguém renomear uma das duas. `name` continua editável e único na unidade
+(`unit_rooms_nome_unico`). Duas garantias são da API, e não do banco. A primeira: o `code`
+**não muda depois de criado**. `PUT` e `PATCH` não aceitam o campo, mas nada impede um
+`UPDATE` pelo psql, e fechar isso exigiria gatilho para um escritor só (a decisão de
+`expected_qty`). A segunda: a **derivação**, quando o `POST` não traz o código. Não há
+`DEFAULT` nem gatilho que derive, porque `DEFAULT` não lê outra coluna e regra mantida em
+dois lugares acaba divergindo. A migration aplicou a regra uma vez, às linhas que já
+existiam, e a API a repete. As duas implementações têm de dar o mesmo resultado, caractere
+a caractere:
+
+1. Remover os code points U+0300–U+036F (acento combinante, de nome que chega decomposto
+   em NFD, como o macOS às vezes entrega). Sem isso, "Área" viraria `a-rea`.
+2. Trocar caractere por caractere pela tabela, e nada além dela: `ÀÁÂÃÄàáâãä` → `a`,
+   `ÈÉÊËèéêë` → `e`, `ÌÍÎÏìíîï` → `i`, `ÒÓÔÕÖòóôõö` → `o`, `ÙÚÛÜùúûü` → `u`, `Çç` → `c`,
+   `Ññ` → `n`, `A–Z` → `a–z`. Sem `lower()` nem minúscula Unicode: o do Postgres depende do
+   locale, o `strings.ToLower` do Go segue a tabela Unicode, e os dois discordam fora do
+   ASCII. Letra fora da tabela (`ø`, `ß`, `º`) segue para o passo 3 como qualquer símbolo.
+3. Cada sequência **máxima** de caracteres fora de `[a-z0-9]` vira **um** hífen.
+4. Tirar os hífens das duas pontas.
+5. Passando de 60 caracteres, ficar com os 60 primeiros e tirar o hífen do fim, se
+   sobrar. A string já é ASCII aqui, então caractere = byte.
+6. Vazio (nome só de emoji ou de pontuação) vira `comodo`.
+7. O código é o primeiro **livre na unidade**, contra todos os cômodos dela, ativos ou
+   não, na sequência `base`, `base-2`, `base-3`… No candidato com sufixo `-n`, a base é
+   antes cortada em `60 − len("-n")` caracteres e perde o hífen do fim, se sobrar.
+
+"Área da churrasqueira" → `area-da-churrasqueira`; "Suíte 1 (térreo)" → `suite-1-terreo`;
+"Sala" e depois "SALA!" na mesma unidade → `sala` e `sala-2`; "Quarto", "Quarto!" e depois
+"Quarto 2" → `quarto`, `quarto-2` e `quarto-2-2`; "🛏️" → `comodo`. O backfill processou
+cada unidade em ordem de `(created_at, id)`, cada cômodo enxergando os códigos dados aos
+anteriores. Assim o mais antigo ficou com o código sem sufixo, como se a API o tivesse
+derivado no primeiro `POST`. A derivação concorrente é da API: dois `POST` simultâneos
+que derivam o mesmo código esbarram em `unit_rooms_code_unico` (`23505`), e só o código
+**informado** pelo cliente é `409 CODE_IN_USE`. O derivado tenta o próximo sufixo. O
+`down` é **lossy**: os códigos somem, e o `up` seguinte os deriva do `name` **atual**.
+Cômodo renomeado ganha código novo (medido: "Quarto" renomeado para "Suíte Master" volta
+como `suite-master`, não `quarto`). Hoje isso é inofensivo, mas deixa de ser no dia em que
+uma importação real tiver rodado.
+
+**Permissão: dois recursos, e por quê.** O recurso RBAC `inventory` **já estava** no
+catálogo do seed desde `20260820140000`, e a migration não o toca porque `resources` é
+semeado, não migrado (§16). Só que ele **já estava ocupado**:
+`internal/modules/inventario` (`dto.go`, `const Recurso = "inventory"`) o usa para o CRUD
+de **propriedade, produtos, unidades e composição** — todas as linhas de
+`internal/router/rotas_inventario.go`. Pendurar as oito tabelas deste módulo no mesmo
+recurso faria `inventory:editar` significar duas coisas: a permissão que deixa quem limpa
+salvar "contei 9 taças" no celular deixaria apagar um produto que a casa vende, e o
+inverso — um toque na tela de distância. Decidido em 07/10/2026, no `catalogoSeed` de
+`cmd/seed/acesso.go` (nenhuma mudança de schema: `resources.code` é texto livre):
+
+- **`inventory`** — rótulo corrigido para **"Cadastro de unidades e produtos"**. Dizia
+  "Inventário e enxoval" e mentia: não há uma peça de enxoval nas rotas que ele protege.
+  Grupo "Operação", as quatro ações, `supports_own = false`, `sort_order` 13.
+- **`inventory.goods`** ("Bens e enxoval por ambiente", grupo "Operação", as quatro ações,
+  `supports_own = false` — cômodo não tem dono no sentido do RBAC, `sort_order` 14, e
+  `channels` foi para 15) é o recurso das oito tabelas deste módulo. Namespace com ponto
+  como `crm.*` e `finance.*`. Concedido em `all` ao `admin` (catálogo inteiro) e ao perfil
+  de operação `usuario`; **não** ao `corretor` nem à conta de serviço `vitrine` — nenhum
+  dos dois tem o que fazer com bens.
+
+O espelho do painel (`apps/admin/src/lib/auth/recursos.ts`) carrega a mesma linha, e isso
+não é opcional: `permissions.test.ts` lê o `catalogoSeed` do Go e reprova enquanto as duas
+listas divergirem — recurso que o painel não sabe citar é tela que some para todo mundo,
+inclusive o admin, sem nenhum 403 para denunciar. Recurso novo entra no seed primeiro.
+
+**Seed de dados de inventário não existe, e o bloqueio do ambiente acabou em
+`20261007213000`.** Nenhum ambiente, item ou foto é semeado. Até aquela migration, no caso
+do ambiente, isso era decisão e não pendência. A única chave natural de `unit_rooms` era
+`(unit_id, name)`, e `name` é justamente o campo que o gestor edita na tela. Seed ou
+importação chaveados num rótulo editável não são idempotentes contra instalação viva:
+renomear "Quarto grande" para "Suíte Master" no painel e reimportar recriaria o "Quarto
+grande" como cômodo a mais, fantasma na lista de conferência e na contagem. O
+pré-requisito que este parágrafo pedia agora existe, e é **`unit_rooms.code`**, que não se
+edita, como `units.code` ("AP-01"). A importação do levantamento fotográfico (GV-01 e
+CV-01, 36 ambientes e 759 itens) e qualquer seed de ambiente que vier reencontram o cômodo
+por **`(unit_id, code)`**, com `ON CONFLICT (unit_id, code)` sobre `unit_rooms_code_unico`.
+O item continua chaveado por `(property_id, source_ref)`. A cópia de inventário entre
+unidades casa origem e destino pelo mesmo `code`.
+
+O `code` resolve o rename. Não resolve tudo, e duas cautelas continuam valendo:
+
+- **A importação declara o `code`; não o deriva do nome.** O ambiente tem dois escritores
+  por desenho, a tela e a importação, e duas fontes descrevendo o mesmo cômodo escrevem
+  strings diferentes ("Rooftop" na tela, "Área da churrasqueira (rooftop)" no
+  levantamento). Derivados, viram `rooftop` e `area-da-churrasqueira-rooftop`, e a `UNIQUE`
+  pega duplicata exata, não quase-duplicata: a casa ficaria com o mesmo cômodo duas vezes
+  e `room_inventory` partido entre as duas metades. A fonte da importação carrega o próprio
+  código, estável entre passadas, e cada cômodo entra por uma fonte só.
+- **A reimportação não reescreve o que a tela edita.** Depois que o cômodo existe,
+  `name`, `kind`, `sort_order` e `active` são do gestor. Um `DO UPDATE SET name =
+  EXCLUDED.name` desfaria o rename a cada passada, que é o defeito que o `code` veio
+  fechar, só que pelo outro lado. É a regra 3 do seed (§16): corrige divergência de chave,
+  não apaga decisão da gestão. E como `unit_rooms_nome_unico` continua de pé, cômodo
+  importado com `code` novo e `name` já usado na unidade falha com `23505` nessa
+  constraint. Esse é um conflito real, a mostrar, e não a resolver em silêncio.
+
+### O que ainda não existe (operação)
+
+> **Ainda não existe no banco.** Nenhuma das três foi criada.
+
+```
 stock_movements(id, item_id, qty, kind, reservation_id?, unit_id?, at, created_by)
 housekeeping_tasks(id, unit_id, reservation_id?, scheduled_for, status, checklist jsonb, assignee_id)
 maintenance_orders(id, unit_id, title, description, priority, status,
@@ -825,6 +1097,14 @@ inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta d
 | `crm_opportunities` | **não tem `quote_id`** desde `20260827150000`; o orçamento vigente é `quotes.opportunity_id` (§7) |
 | `site_content` | `PRIMARY KEY (key)` · `site_content_key_formato` `CHECK (key ~ '^[a-z0-9]+([.-][a-z0-9]+)*$')` · `site_content_value_nao_nulo` `CHECK (jsonb_typeof(value) <> 'null')` · `(updated_by)` (§13b) |
 | `site_media` | `site_media_storage_key_unica` `UNIQUE (storage_key)` · `CHECK (kind IN ('imagem','video'))` · `CHECK (bytes > 0)` · `mime` e `storage_key` não vazios · `(created_by)` (§13b) |
+| `inventory_counts` | `inventory_counts_aberta_idx` `UNIQUE (unit_id) WHERE status = 'aberta'` — no máximo **uma** conferência aberta por unidade; parcial porque a unidade acumula fechadas para sempre (§11) · `CHECK ((status = 'aberta') = (closed_at IS NULL))` · `(unit_id, opened_at DESC, id)` e `(property_id, opened_at DESC, id)` — histórico ordenado com desempate |
+| `inventory_items` | `inventory_items_source_ref_idx` `UNIQUE (property_id, source_ref) WHERE source_ref IS NOT NULL` — é o que torna a importação idempotente · `CHECK (replacement_cost_cents IS NULL OR > 0)` — zero não é sinônimo de "não cotado" · `(property_id, category, name, id)` — a tela do catálogo, filtro e ordenação no mesmo índice |
+| `inventory_count_lines` | `UNIQUE (count_id, room_id, item_id)` — linha duplicada mostraria a divergência em dobro · `CHECK ((counted_qty IS NULL) = (counted_at IS NULL))` · `(count_id, room_id, item_id) WHERE counted_qty IS NULL` — o que falta contar · `inventory_count_lines_custo_positivo` `CHECK (replacement_cost_cents IS NULL OR replacement_cost_cents > 0)` — zero entraria na conta como perda de R$ 0,00. `expected_qty` é **congelada** na abertura e `replacement_cost_cents` no fechamento (regra 7, §11) |
+| `inventory_issues` | `CHECK ((resolution IS NULL) = (resolved_at IS NULL))` — pendência aberta é `resolution IS NULL`, e não há coluna `status` ao lado · `CHECK (qty > 0)` · `(property_id, reported_at DESC, id) WHERE resolution IS NULL` — a lista de pendências, parcial pelo mesmo motivo do índice do kanban · `(reservation_id) WHERE reservation_id IS NOT NULL` — o que cobrar da estadia |
+| `unit_rooms` | `UNIQUE (unit_id, name)` — dois "Suíte 1" fazem contar a mesma cama duas vezes · `unit_rooms_code_unico` `UNIQUE (unit_id, code)` — a identidade estável que a importação e a cópia usam; único na unidade, e não na propriedade, porque o mesmo `cozinha` em dois duplex é o que casa origem e destino da cópia (§11) · `unit_rooms_code_formato` `CHECK (code ~ '^[a-z0-9]+(-[a-z0-9]+)*$')` e `unit_rooms_code_tamanho` `CHECK (length(code) <= 60)` — separadas para o nome da constraint dizer à API qual regra caiu · `CHECK` do vocabulário de `kind` · `(unit_id, sort_order, name, id)` — a lista de conferência sai ordenada do índice, com desempate determinístico |
+| `inventory_media` | `inventory_media_storage_key_unica` `UNIQUE (storage_key)` · `UNIQUE (thumb_key) WHERE thumb_key IS NOT NULL` e `CHECK (thumb_key <> storage_key)` — as duas chaves moram no mesmo namespace do volume, e a colisão sobrescreveria a foto |
+| `inventory_item_media` | `PRIMARY KEY (item_id, media_id)` — muitos-para-muitos · `(item_id, sort_order, media_id)` — a capa é o menor `sort_order`, desempatado por `media_id` |
+| `room_inventory` | `PRIMARY KEY (room_id, item_id)` · `CHECK (expected_qty >= 0)` · `(item_id)` — "em que ambientes este item está", e é por ele que o `RESTRICT` passa ao tentar apagar um item |
 | quase todas | índice em toda FK — **não é "todas"**, e a diferença é medível |
 
 A linha anterior dizia `todas`. A consulta abaixo devolve hoje **17** chaves
@@ -882,7 +1162,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261003120000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261007213000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -902,10 +1182,13 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20261002180000_brokers_e_fk_do_corretor` | `brokers` (9 colunas, §10) e as FKs `reservations_broker_id_fkey` e `users_broker_id_fkey` — esta **composta**, `(broker_id, id) → brokers(id, user_id)` (§2). Anula, com linha em `audit_log` e `RAISE WARNING`, todo `broker_id` órfão que encontrar; o `down` não os devolve (§5). `commission_rule_id` fica para o F2-10, junto com `commission_rules` |
 | `20261003100000_catalogo_real_vitrine_minimo_e_pacotes` | o que o catálogo real precisa (§3, §4): `unit_types.public_name` (nome de vitrine, `NULL` = `name`, nunca em branco), `unit_type_min_nights` (estadia mínima por produto, sobrepõe `min_nights_rules`) e `rate_packages` (preço por duração, com o vocabulário de `date_types` em `CHECK`). O `down` derruba as duas tabelas e a coluna |
 | `20261003120000_conteudo_e_midia_do_site` | o banco do menu **Site** (§13b, `docs/site-cms.md`): `site_content` (campo editado do site, chave em `CHECK` de formato, valor jsonb não nulo) e `site_media` (foto/vídeo imutável, `storage_key` única). O recurso RBAC `site` não é migration: entra pelo seed, como todo o catálogo de `resources` |
+| `20261007170000_inventario_de_bens_por_ambiente` | o inventário de bens físicos por ambiente (§11), oito tabelas: `unit_rooms` (o cômodo, conceito novo no banco), `inventory_items` (catálogo da propriedade, com `source_ref` único parcial para importação idempotente), `room_inventory` (a colocação — é o `unit_inventory` projetado, com o cômodo no lugar da unidade), `inventory_media` + `inventory_item_media` (foto própria, muitos-para-muitos; **não** `site_media`, que não tem `property_id` e cai no `down` do CMS), `inventory_counts` + `inventory_count_lines` (conferência, com no máximo uma aberta por unidade e `expected_qty` congelada na abertura) e `inventory_issues` (quebrado/faltando/avariado, com `reservation_id` para cobrar o hóspede). `min_stock` fica para `stock_movements`; `cost_cents` virou `replacement_cost_cents`. O `down` derruba as oito e não deixa sobra |
+| `20261007200000_congela_custo_na_conferencia` | `inventory_count_lines.replacement_cost_cents` (anulável, `CHECK > 0` em `inventory_count_lines_custo_positivo`): o custo de reposição **congelado no fechamento**, de onde sai a perda de cada divergência. Com ele, a conferência fechada devolve lida de volta a perda que apurou, e recotar o item não a reescreve (regra 7, §11). Backfill das conferências já fechadas com o custo **atual** do item: aproximação de desenvolvimento, porque `20261007170000` nunca chegou a produção. A tabela vai de 11 para 12 colunas, conferida pelo bloco `DO` da régua. O `down` derruba a coluna (e com ela o `CHECK` e o comentário) e é **lossy**: o custo congelado some, e o `up` seguinte o refaz com o custo do dia |
+| `20261007213000_codigo_do_comodo` | `unit_rooms.code` (`text NOT NULL`): a identidade estável do cômodo, que a API não deixa editar e que a importação do levantamento fotográfico e a cópia de inventário entre unidades usam como chave (§11). `unit_rooms_code_formato` (`CHECK` do `pattern` do contrato), `unit_rooms_code_tamanho` (`CHECK (length(code) <= 60)`) e `unit_rooms_code_unico` (`UNIQUE (unit_id, code)`). Backfill das linhas existentes, antes do `SET NOT NULL`, pela regra de derivação que a API repete (escrita na migration e em §11): sem acento por tabela explícita (`translate`, sem extensão nova e sem `lower()`), hífen no lugar de cada sequência fora de `[a-z0-9]`, corte em 60, `comodo` para nome que vira vazio e `-2`, `-3`… em colisão na unidade, em ordem de `(created_at, id)`. A tabela vai de 9 para 10 colunas, conferida pelo bloco `DO` da régua. O `down` derruba as três constraints e a coluna sem deixar sobra e é **lossy**: o `up` seguinte re-deriva os códigos do `name` atual |
 
 ## 16. Seeds
 
-`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 24 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`) e, desde 03/10/2026, a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo).
+`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 25 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`) e, desde 03/10/2026, a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo).
 
 **O corretor de desenvolvimento** (etapa `corretores_de_desenvolvimento`, `cmd/seed/corretores.go`). Sem ele, `corretor@wh.local` entra no painel com `broker_id` nulo, e a partir do F2-13 isso tem efeito: em escopo `own` o corretor só atribui venda ao próprio `users.broker_id`, e a API não tem como criar o vínculo (o CRUD de `/brokers` é do F2-17/Fase 3). São três escritas por conta de perfil `corretor` em `usuariosSeed`, na ordem que as FKs exigem: a ficha em `contacts` (chave natural: telefone; `+5585900000010`, base `contrato`, sem opt-in), o cadastro em `brokers` (chave natural: `UNIQUE (user_id)`) e o vínculo em `users.broker_id`. O `DO UPDATE` do cadastro corrige só `contact_id`; `goal_cents` e `active` são decisão da gestão e o seed não os reescreve — a mesma regra das contas, que não têm a senha reescrita. A etapa segue a trava das **contas** de desenvolvimento (`SEED_DEV_USERS`), não a dos contatos de demonstração: o cadastro é da conta. E termina com uma pós-condição conferida no banco — conta de corretor sem cadastro que aponte de volta para ela é erro, e o seed inteiro volta atrás —, porque os `JOIN`s da etapa descartariam em silêncio um e-mail digitado errado e a contagem diria "inalterada".
 
@@ -925,7 +1208,7 @@ O de teste é **congelado**: é byte a byte o que o seed semeava até 03/10/2026
 
 **Um banco nunca fica com os dois catálogos vendendo.** Semear um catálogo **desativa** (`active = false`; nunca apaga — unidade tem histórico em `stay_blocks`) as unidades, os produtos, os feriados e os períodos **do outro catálogo** que não existem no escolhido; o que a gestão cadastrou pela tela não é de catálogo nenhum e não é tocado. E reativa os próprios, que o outro tinha desativado. Para os produtos do catálogo escolhido, a composição, as tarifas, os mínimos por produto e os pacotes ficam **exatamente** iguais à lista: o que falta entra e o que sobra é **removido** — sem isso a Completa real herdaria a `COB-01` e as diárias da Completa de teste. Antes de mexer, o seed confere venda viva (`hold`, `confirmed`, `checked_in`): se a troca mudasse a composição ou o `consumes` de um produto com reserva de pé, ele aborta com a mensagem nomeando produto, unidades e reservas (`o catálogo não pode ser trocado com venda viva: a composição mudaria — completa perderia AP-04, … (reservas: WH-2026-0001)`), e a transação inteira volta. Os gatilhos adiados do §5 reprovariam o mesmo no `COMMIT`, mas falando de invariante, não de seed.
 
-Contagens medidas em 03/10/2026 num banco recém-migrado. Catálogo `teste`: primeira execução `previstas 310, criadas 309, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 310`. Catálogo `real`: primeira `previstas 436, criadas 435, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 436`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; e 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
+Contagens num banco recém-migrado. Catálogo `teste`: primeira execução `previstas 319, criadas 318, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 319`. Catálogo `real`: primeira `previstas 445, criadas 444, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 445`. A medição com banco limpo é de 03/10/2026 e deu 310 e 436; os números acima somam as **9 linhas** de `inventory.goods` (07/10/2026). Dessas somas, só `previstas 445` e o `nada mudou` da segunda execução foram reconferidos no banco em 07/10 — o recorte de `criadas` da primeira execução e os números do catálogo `teste` são **derivados**, não medidos de novo. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`; e 310 e 436 até `inventory.goods` (07/10/2026), que soma 9: o recurso e as quatro ações para `admin` e para `usuario`.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
 
 **A conta de serviço da vitrine** (etapas `perfil_da_vitrine` e `conta_da_vitrine`, `cmd/seed/vitrine.go`). `POST /public/holds` (B1 de `docs/unificacao-site-crm.md`) roda o **mesmo** serviço de reserva e de contato do painel, e esses serviços exigem um usuário autenticado no contexto — dele saem escopo, `owner_id`/`created_by` e auditoria. Em vez de abrir um atalho "sem usuário" no domínio, o handler público carrega esta conta com `CarregarSessao` e chama o serviço como qualquer ator; o que o site grava aparece como "Site (vitrine)" na trilha.
 
