@@ -66,6 +66,27 @@ services:
       postgres:
         condition: service_healthy
 
+  # Importa o levantamento fotográfico de bens (docs/db.md §11). Roda AQUI, e
+  # não do host, porque as fotos precisam cair no MESMO volume `midia` que a
+  # API serve: rodado do host, o banco ficaria certo e toda foto daria 404 no
+  # painel. Repetível — reexecutar só acrescenta o que falta, e é também como
+  # se recompõe um volume que perdeu arquivos.
+  importar-bens:
+    <<: *imagem-api
+    profiles: ["tools"]
+    entrypoint: ["/app/importar-bens"]
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL}
+      MEDIA_DIR: /data/midia
+      TZ: ${TZ:-America/Fortaleza}
+    volumes:
+      - midia:/data/midia
+      - ${LEVANTAMENTO_DIR:-../scratch/levantamento-inventario}:/levantamento:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     <<: *imagem-api
     environment:

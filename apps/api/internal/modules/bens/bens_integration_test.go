@@ -69,6 +69,10 @@ type ambiente struct {
 	reservas     []uuid.UUID
 	contatos     []uuid.UUID
 	produtos     []uuid.UUID
+	// O importador não passa pela API nem tem autor: o que ele cria é achado
+	// pelo prefixo da origem (itens) e da chave de volume (fotos).
+	origensImportadas []string
+	chavesImportadas  []string
 }
 
 func subir(t *testing.T) *ambiente {
@@ -133,6 +137,18 @@ func (a *ambiente) limpar(t *testing.T) {
 		a.executar(t, `DELETE FROM inventory_counts WHERE unit_id = $1`, u)
 		a.executar(t, `DELETE FROM unit_rooms WHERE unit_id = $1`, u)
 	}
+	for _, prefixo := range a.origensImportadas {
+		a.executar(t, `DELETE FROM inventory_issues WHERE item_id IN
+		                 (SELECT id FROM inventory_items WHERE source_ref LIKE $1 || '%')`, prefixo)
+		a.executar(t, `DELETE FROM inventory_count_lines WHERE item_id IN
+		                 (SELECT id FROM inventory_items WHERE source_ref LIKE $1 || '%')`, prefixo)
+		a.executar(t, `DELETE FROM room_inventory WHERE item_id IN
+		                 (SELECT id FROM inventory_items WHERE source_ref LIKE $1 || '%')`, prefixo)
+		a.executar(t, `DELETE FROM inventory_items WHERE source_ref LIKE $1 || '%'`, prefixo)
+	}
+	for _, prefixo := range a.chavesImportadas {
+		a.executar(t, `DELETE FROM inventory_media WHERE storage_key LIKE $1 || '%'`, prefixo)
+	}
 	for _, i := range a.itens {
 		a.executar(t, `DELETE FROM inventory_issues WHERE item_id = $1`, i)
 		a.executar(t, `DELETE FROM inventory_count_lines WHERE item_id = $1`, i)
@@ -150,6 +166,9 @@ func (a *ambiente) limpar(t *testing.T) {
 		a.executar(t, `DELETE FROM unit_types WHERE id = $1`, p)
 	}
 	for _, u := range a.unidades {
+		// A trilha da cópia e da importação tem `entity_id` = unidade; a da
+		// importação não tem ator, então não sai pela limpeza de usuário.
+		a.executar(t, `DELETE FROM audit_log WHERE entity = 'units' AND entity_id = $1`, u)
 		a.executar(t, `DELETE FROM units WHERE id = $1`, u)
 	}
 	for _, uid := range a.usuarios {
