@@ -99,6 +99,7 @@ const NOME_DA_AREA: Record<string, string> = {
   "crm.opportunities": "Funil de vendas",
   inventory: "Cadastro de unidades e produtos",
   "inventory.goods": "Inventário de bens",
+  maintenance: "Ordens de manutenção",
   quotes: "Orçamentos",
   reservations: "Reservas",
   settings: "Configurações",

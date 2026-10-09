@@ -547,14 +547,18 @@ func (r *Repository) ApagarAmbiente(ctx context.Context, prop, id uuid.UUID) err
 type VinculosDoAmbiente struct {
 	LinhasDeConferencia int `json:"count_lines"`
 	Avarias             int `json:"issues"`
+	// OrdensDeManutencao são as ordens que citam o cômodo
+	// (`maintenance_orders_room_id_fkey`, RESTRICT).
+	OrdensDeManutencao int `json:"maintenance_orders"`
 }
 
 func (r *Repository) VinculosDoAmbiente(ctx context.Context, id uuid.UUID) (VinculosDoAmbiente, error) {
 	var v VinculosDoAmbiente
 	err := r.exec(ctx).QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM inventory_count_lines WHERE room_id = $1),
-		       (SELECT count(*) FROM inventory_issues WHERE room_id = $1)`, id).
-		Scan(&v.LinhasDeConferencia, &v.Avarias)
+		       (SELECT count(*) FROM inventory_issues WHERE room_id = $1),
+		       (SELECT count(*) FROM maintenance_orders WHERE room_id = $1)`, id).
+		Scan(&v.LinhasDeConferencia, &v.Avarias, &v.OrdensDeManutencao)
 	return v, db.MapError(err)
 }
 
@@ -768,6 +772,9 @@ type VinculosDoBem struct {
 	Colocacoes          int `json:"placements"`
 	LinhasDeConferencia int `json:"count_lines"`
 	Avarias             int `json:"issues"`
+	// OrdensDeManutencao são as ordens que citam o bem
+	// (`maintenance_orders.item_id`, RESTRICT).
+	OrdensDeManutencao int `json:"maintenance_orders"`
 }
 
 func (r *Repository) VinculosDoBem(ctx context.Context, id uuid.UUID) (VinculosDoBem, error) {
@@ -775,8 +782,9 @@ func (r *Repository) VinculosDoBem(ctx context.Context, id uuid.UUID) (VinculosD
 	err := r.exec(ctx).QueryRow(ctx, `
 		SELECT (SELECT count(*) FROM room_inventory WHERE item_id = $1),
 		       (SELECT count(*) FROM inventory_count_lines WHERE item_id = $1),
-		       (SELECT count(*) FROM inventory_issues WHERE item_id = $1)`, id).
-		Scan(&v.Colocacoes, &v.LinhasDeConferencia, &v.Avarias)
+		       (SELECT count(*) FROM inventory_issues WHERE item_id = $1),
+		       (SELECT count(*) FROM maintenance_orders WHERE item_id = $1)`, id).
+		Scan(&v.Colocacoes, &v.LinhasDeConferencia, &v.Avarias, &v.OrdensDeManutencao)
 	return v, db.MapError(err)
 }
 

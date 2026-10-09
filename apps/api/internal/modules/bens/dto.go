@@ -390,6 +390,10 @@ type Avaria struct {
 	ResolvidaPorNome      *string    `json:"resolved_by_name"`
 	ResolvidaEm           *time.Time `json:"resolved_at"`
 	AtualizadaEm          time.Time  `json:"updated_at"`
+	// OrdemAbertaID é a ordem de manutenção NÃO ENCERRADA da avaria (no máximo
+	// uma, pelo índice parcial). Só o id: o conteúdo da ordem pede
+	// `maintenance:ver`, e quem só tem `inventory.goods:ver` vê que ela existe.
+	OrdemAbertaID *uuid.UUID `json:"open_maintenance_order_id"`
 }
 
 // ResultadoDaCopia é a resposta de `POST /units/{id}/inventory/copy`.

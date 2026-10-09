@@ -49,6 +49,12 @@ export type CodigoDeErro =
   | "COUNT_ALREADY_OPEN"
   | "COUNT_CLOSED"
   | "COUNT_HAS_PENDING_LINES"
+  // Ordens de manutenção (spec §12). Os dois são 409 — sem eles aqui,
+  // `normalizarCodigo` os jogaria em `INTERNAL`, e o segundo toque em "Abrir
+  // ordem de manutenção" perderia `details.maintenance_order_id`, que é o
+  // caminho até a ordem que já existe.
+  | "MAINTENANCE_ORDER_CLOSED"
+  | "MAINTENANCE_ORDER_ALREADY_OPEN"
   | "INTERNAL"
   // Fora do contrato: a API não respondeu (caiu, DNS, timeout). É do BFF, não
   // do servidor, e por isso não pode se disfarçar de INTERNAL — a tela precisa
@@ -64,6 +70,7 @@ const CONHECIDOS: readonly string[] = [
   "INVALID_STATE_TRANSITION", "RESERVATION_NOT_CANCELLABLE", "UNIT_NOT_AVAILABLE",
   "COMPOSITION_INCOMPLETE", "HOLD_LIMIT_REACHED",
   "COUNT_ALREADY_OPEN", "COUNT_CLOSED", "COUNT_HAS_PENDING_LINES",
+  "MAINTENANCE_ORDER_CLOSED", "MAINTENANCE_ORDER_ALREADY_OPEN",
   "INTERNAL",
 ];
 

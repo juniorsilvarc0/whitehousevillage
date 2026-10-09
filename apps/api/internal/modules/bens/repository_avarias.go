@@ -3,6 +3,7 @@ package bens
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,7 +20,7 @@ const colunasDaAvaria = `
 	ii.id, ii.room_id, r.name, r.unit_id, u.code, ii.item_id, i.name, i.category, ` + colunasDaCapa + `,
 	ii.kind, ii.qty, ii.note, i.replacement_cost_cents, ii.reservation_id, res.code, ii.count_id,
 	ii.resolution, ii.reported_by, rb.name, ii.reported_at, ii.resolved_by, sb.name, ii.resolved_at,
-	ii.updated_at`
+	ii.updated_at, mo.id`
 
 const juncoesDaAvaria = `
 	  FROM inventory_issues ii
@@ -29,7 +30,11 @@ const juncoesDaAvaria = `
 	  JOIN properties pr ON pr.id = ii.property_id
 	  LEFT JOIN reservations res ON res.id = ii.reservation_id
 	  LEFT JOIN users rb ON rb.id = ii.reported_by
-	  LEFT JOIN users sb ON sb.id = ii.resolved_by` + lateralDaCapa
+	  LEFT JOIN users sb ON sb.id = ii.resolved_by
+	  -- A ordem NÃO ENCERRADA da avaria: no máximo uma, pelo índice parcial
+	  -- maintenance_orders_avaria_aberta_idx (que serve esta junção) — então a
+	  -- junção não multiplica linha nem estraga o count(*) da paginação.
+	  LEFT JOIN maintenance_orders mo ON mo.issue_id = ii.id AND mo.status IN ('aberta','em_andamento')` + lateralDaCapa
 
 func escanearAvaria(linha pgx.Row, extras ...any) (Avaria, error) {
 	var (
@@ -41,7 +46,7 @@ func escanearAvaria(linha pgx.Row, extras ...any) (Avaria, error) {
 	destinos = append(destinos, cap.destinos()...)
 	destinos = append(destinos, &a.Tipo, &a.Qtd, &a.Nota, &a.CustoDeReposicaoCents, &a.ReservaID,
 		&a.ReservaCodigo, &a.ConferenciaID, &a.Desfecho, &a.RelatadaPor, &a.RelatadaPorNome, &a.RelatadaEm,
-		&a.ResolvidaPor, &a.ResolvidaPorNome, &a.ResolvidaEm, &a.AtualizadaEm)
+		&a.ResolvidaPor, &a.ResolvidaPorNome, &a.ResolvidaEm, &a.AtualizadaEm, &a.OrdemAbertaID)
 	if err := linha.Scan(append(destinos, extras...)...); err != nil {
 		return Avaria{}, err
 	}
@@ -198,6 +203,11 @@ func (r *Repository) GravarAvaria(ctx context.Context, prop uuid.UUID, a avariaG
 // banco a referencia.
 func (r *Repository) ApagarAvaria(ctx context.Context, prop, id uuid.UUID) error {
 	tag, err := r.exec(ctx).Exec(ctx, `DELETE FROM inventory_issues WHERE id = $1 AND property_id = $2`, id, prop)
+	if db.IsForeignKeyViolation(err, fkDaOrdemNaAvaria) {
+		// Citada por uma ordem de manutenção (RESTRICT): o service monta o 409
+		// com a ordem, numa leitura nova — esta transação já abortou.
+		return fmt.Errorf("%w: %w", errEmUso, err)
+	}
 	if err != nil {
 		return db.MapError(err)
 	}
@@ -205,6 +215,29 @@ func (r *Repository) ApagarAvaria(ctx context.Context, prop, id uuid.UUID) error
 		return apperr.NotFound("Avaria")
 	}
 	return nil
+}
+
+// fkDaOrdemNaAvaria é a FK composta `maintenance_orders → inventory_issues`,
+// ON DELETE RESTRICT: a ordem diz o que foi consertado.
+const fkDaOrdemNaAvaria = "maintenance_orders_issue_id_fkey"
+
+// OrdemDaAvaria devolve a ordem de manutenção que cita a avaria — a não
+// encerrada, se houver (no máximo uma), senão a mais recente. É o
+// `details.maintenance_order_id` do 409, lido DEPOIS de a FK decidir.
+func (r *Repository) OrdemDaAvaria(ctx context.Context, prop, id uuid.UUID) (*uuid.UUID, error) {
+	var ordem uuid.UUID
+	err := r.exec(ctx).QueryRow(ctx, `
+		SELECT id FROM maintenance_orders
+		 WHERE issue_id = $1 AND property_id = $2
+		 ORDER BY (status IN ('aberta','em_andamento')) DESC, opened_at DESC, id
+		 LIMIT 1`, id, prop).Scan(&ordem)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, db.MapError(err)
+	}
+	return &ordem, nil
 }
 
 // ReservaDaPropriedade diz se a reserva é desta casa. Só existência: o código e

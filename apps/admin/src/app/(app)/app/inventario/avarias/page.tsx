@@ -26,6 +26,11 @@ export const metadata = { title: "Avarias" };
  * unidade, a tela também carrega os cômodos e bens dela, que é de onde o
  * formulário de registro escolhe — a avaria precisa apontar para um bem que
  * está colocado no ambiente informado.
+ *
+ * A ponte com as ordens de manutenção é de **outro recurso** (`maintenance`):
+ * com `maintenance:criar`, cada pendência ganha "Abrir ordem de manutenção";
+ * com `maintenance:ver`, a que já tem ordem aberta (`open_maintenance_order_id`,
+ * na própria avaria) mostra o link para ela.
  */
 export default async function AvariasPage({ searchParams }: { searchParams: Promise<ParametrosCrus> }) {
   const { permissions } = await requireSession();
@@ -34,6 +39,11 @@ export default async function AvariasPage({ searchParams }: { searchParams: Prom
   const cru = await searchParams;
   const { filtros, avisos } = lerFiltrosDeAvarias(cru);
   const permissoes = permissoesDoInventario(permissions);
+
+  const manutencao = {
+    podeAbrir: can(permissions, "maintenance", "criar"),
+    podeVerOrdens: can(permissions, "maintenance", "ver"),
+  };
 
   const [lista, unidades, inventario] = await Promise.all([
     tentar(() => apiList<Avaria>("/inventory/issues", { query: consultaDeAvarias(filtros) })),
@@ -103,6 +113,7 @@ export default async function AvariasPage({ searchParams }: { searchParams: Prom
             avarias={lista.data.data}
             permissoes={permissoes}
             temFiltro={temFiltro}
+            manutencao={manutencao}
             unidade={
               inventario && inventario.ok ? { code: inventario.data.unit.code, ambientes: inventario.data.rooms } : null
             }

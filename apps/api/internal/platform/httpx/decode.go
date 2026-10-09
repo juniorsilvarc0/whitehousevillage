@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"bytes"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -113,78 +114,156 @@ func DecodeOpcional[T any](r *http.Request) (T, error) {
 // `DisallowUnknownFields` herda a mesma tolerância: `counted_qty` escrita toda
 // em maiúsculas e `{"Note": "x"}` respondiam 200 e GRAVAVAM, contra o
 // `additionalProperties: false` do contrato (medido pelo QA nas rotas de bens,
-// 07/10/2026). É o mesmo
-// silêncio que o DisallowUnknownFields existe para acabar — um cliente com a
-// chave "quase certa" passa, e no dia em que o servidor ganhar um campo de
-// nome parecido ninguém sabe qual dos dois chegou.
+// 07/10/2026). É o mesmo silêncio que o DisallowUnknownFields existe para
+// acabar — um cliente com a chave "quase certa" passa, e no dia em que o
+// servidor ganhar um campo de nome parecido ninguém sabe qual dos dois chegou.
 //
-// A regra: toda chave do objeto de TOPO tem de ser, byte a byte, o nome JSON de
-// um campo do DTO. O nome é o da tag `json` ou, sem tag, o do campo Go — como
-// o encoding/json faz; struct embutida sem nome na tag contribui com os campos
-// dela (são promovidos); `json:"-"` e campo não exportado não contam. DTO cujo
-// topo não é struct (a matriz de permissões é uma lista) ou que decodifica a si
-// mesmo (`json.Unmarshaler`) fica fora: não há "chave de topo" a conferir.
+// E não basta o TOPO (medido pelo QA nas ordens de manutenção, 09/10/2026):
+// `"block": {"From": …, "To": …}` respondia 201 e bloqueava a casa, e
+// `"block": {"from": D+20, "From": D+21, …}` gravava D+21 — o encoding/json
+// fica com a ÚLTIMA chave que casou sem caixa, enquanto qualquer leitor que
+// siga o contrato lê `from` = D+20. Cliente e servidor discordando da data do
+// bloqueio, sem erro em lugar nenhum.
+//
+// A regra, em TODO nível do corpo: cada chave de um objeto que vira struct tem
+// de ser, byte a byte, o nome JSON de um campo DAQUELE struct. O nome é o da
+// tag `json` ou, sem tag, o do campo Go — como o encoding/json faz; struct
+// embutida sem nome na tag contribui com os campos dela (são promovidos);
+// `json:"-"` e campo não exportado não contam. A conferência DESCE:
+//
+//   - em struct e ponteiro para struct;
+//   - em `Opt[struct]`, pelo tipo do valor (o Opt decodifica a si mesmo, mas
+//     o que chega dentro dele é um objeto do contrato como outro qualquer);
+//   - em slice e array, elemento a elemento — inclusive no topo (a matriz de
+//     permissões é uma lista de objetos).
+//
+// Ficam FORA: map (a chave de um map é dado, não nome de campo — e nenhum DTO
+// de entrada usa map de struct hoje), `any`, e tipo que decodifica a si mesmo
+// (`json.Unmarshaler` ou `encoding.TextUnmarshaler`: `time.Time`, `uuid.UUID`,
+// a `Data` do tarifário) — ele já decide o próprio formato. A recusa nomeia o
+// CAMINHO da chave (`block.From`, `tiers[1].Label`), para o painel grudar o
+// erro no campo certo.
 
 var (
-	nomesExatosPorTipo  sync.Map // reflect.Type → map[string]bool (nil: fora da regra)
-	tipoUnmarshalerJSON = reflect.TypeFor[json.Unmarshaler]()
+	camposExatosPorTipo  sync.Map // reflect.Type → map[string]reflect.Type
+	tipoUnmarshalerJSON  = reflect.TypeFor[json.Unmarshaler]()
+	tipoUnmarshalerTexto = reflect.TypeFor[encoding.TextUnmarshaler]()
+	tipoOpcional         = reflect.TypeFor[opcional]()
 )
+
+// opcional é o que todo Opt[T] sabe dizer: o tipo do valor que ele carrega.
+// Interface com método não exportado — só Opt a satisfaz.
+type opcional interface{ tipoDoValor() reflect.Type }
+
+func (Opt[T]) tipoDoValor() reflect.Type { return reflect.TypeFor[T]() }
 
 // recusarChaveComOutraCaixa roda DEPOIS do decode bem-sucedido: corpo
 // malformado, tipo errado e nome inexistente já saíram com a mensagem deles.
 // O que sobra aqui é só a chave que o decoder aceitou por casar sem caixa.
 func recusarChaveComOutraCaixa[T any](bruto []byte) error {
-	nomes := nomesExatos(reflect.TypeFor[T]())
-	if nomes == nil {
-		return nil
-	}
-	var chaves map[string]json.RawMessage
-	if err := json.Unmarshal(bruto, &chaves); err != nil {
-		// Não é objeto (o `null` de um corpo opcional, por exemplo): o decode
-		// já decidiu, e não há chave a conferir.
-		return nil
-	}
 	detalhes := map[string]string{}
-	for chave := range chaves {
-		if nomes[chave] {
-			continue
-		}
-		msg := "campo desconhecido no corpo da requisição."
-		for nome := range nomes {
-			if strings.EqualFold(nome, chave) {
-				msg = fmt.Sprintf("campo desconhecido no corpo da requisição — os nomes diferenciam maiúsculas: o campo é %q.", nome)
-				break
-			}
-		}
-		detalhes[chave] = msg
-	}
+	conferirCaixa(reflect.TypeFor[T](), bruto, "", detalhes)
 	if len(detalhes) > 0 {
 		return apperr.Validation(detalhes)
 	}
 	return nil
 }
 
-// nomesExatos devolve os nomes JSON aceitos no topo do tipo, ou nil quando o
-// tipo está fora da regra. Calculado uma vez por tipo.
-func nomesExatos(t reflect.Type) map[string]bool {
-	if v, ok := nomesExatosPorTipo.Load(t); ok {
-		return v.(map[string]bool)
+// conferirCaixa confere o valor JSON `bruto` contra o tipo `t`, descendo nos
+// objetos e listas. `caminho` é o endereço do valor no corpo ("" no topo).
+// Valor que não tem a forma esperada (o `null` de um corpo opcional ou de um
+// campo anulável) não tem chave a conferir: o decode já decidiu sobre ele.
+func conferirCaixa(t reflect.Type, bruto []byte, caminho string, detalhes map[string]string) {
+	t = alvoDaConferencia(t)
+	if t == nil {
+		return
 	}
-	var nomes map[string]bool
-	base := t
-	for base.Kind() == reflect.Pointer {
-		base = base.Elem()
+	switch t.Kind() {
+	case reflect.Struct:
+		var chaves map[string]json.RawMessage
+		if err := json.Unmarshal(bruto, &chaves); err != nil {
+			return
+		}
+		campos := camposExatos(t)
+		for chave, valor := range chaves {
+			if tipo, ok := campos[chave]; ok {
+				conferirCaixa(tipo, valor, juntarCaminho(caminho, chave), detalhes)
+				continue
+			}
+			detalhes[juntarCaminho(caminho, chave)] = mensagemDeCaixa(campos, chave)
+		}
+	case reflect.Slice, reflect.Array:
+		if alvoDaConferencia(t.Elem()) == nil {
+			return
+		}
+		var itens []json.RawMessage
+		if err := json.Unmarshal(bruto, &itens); err != nil {
+			return
+		}
+		for i, item := range itens {
+			conferirCaixa(t.Elem(), item, fmt.Sprintf("%s[%d]", caminho, i), detalhes)
+		}
 	}
-	if base.Kind() == reflect.Struct && !base.Implements(tipoUnmarshalerJSON) &&
-		!reflect.PointerTo(base).Implements(tipoUnmarshalerJSON) {
-		nomes = map[string]bool{}
-		coletarNomes(base, nomes, map[reflect.Type]bool{})
-	}
-	nomesExatosPorTipo.Store(t, nomes)
-	return nomes
 }
 
-func coletarNomes(t reflect.Type, nomes map[string]bool, vistos map[reflect.Type]bool) {
+// alvoDaConferencia devolve o tipo cujas chaves são conferidas — atravessando
+// ponteiro e Opt —, ou nil quando não há o que conferir.
+func alvoDaConferencia(t reflect.Type) reflect.Type {
+	for {
+		switch {
+		case t.Kind() == reflect.Pointer:
+			t = t.Elem()
+			continue
+		case t.Implements(tipoOpcional):
+			t = reflect.Zero(t).Interface().(opcional).tipoDoValor()
+			continue
+		}
+		if decodificaASi(t) {
+			return nil
+		}
+		switch t.Kind() {
+		case reflect.Struct, reflect.Slice, reflect.Array:
+			return t
+		}
+		return nil
+	}
+}
+
+func decodificaASi(t reflect.Type) bool {
+	p := reflect.PointerTo(t)
+	return t.Implements(tipoUnmarshalerJSON) || p.Implements(tipoUnmarshalerJSON) ||
+		t.Implements(tipoUnmarshalerTexto) || p.Implements(tipoUnmarshalerTexto)
+}
+
+func juntarCaminho(caminho, chave string) string {
+	if caminho == "" {
+		return chave
+	}
+	return caminho + "." + chave
+}
+
+func mensagemDeCaixa(campos map[string]reflect.Type, chave string) string {
+	for nome := range campos {
+		if strings.EqualFold(nome, chave) {
+			return fmt.Sprintf("campo desconhecido no corpo da requisição — os nomes diferenciam maiúsculas: o campo é %q.", nome)
+		}
+	}
+	return "campo desconhecido no corpo da requisição."
+}
+
+// camposExatos devolve, de um struct, nome JSON exato → tipo do campo.
+// Calculado uma vez por tipo.
+func camposExatos(t reflect.Type) map[string]reflect.Type {
+	if v, ok := camposExatosPorTipo.Load(t); ok {
+		return v.(map[string]reflect.Type)
+	}
+	campos := map[string]reflect.Type{}
+	coletarCampos(t, campos, map[reflect.Type]bool{})
+	camposExatosPorTipo.Store(t, campos)
+	return campos
+}
+
+func coletarCampos(t reflect.Type, campos map[string]reflect.Type, vistos map[reflect.Type]bool) {
 	if vistos[t] {
 		return
 	}
@@ -202,7 +281,7 @@ func coletarNomes(t reflect.Type, nomes map[string]bool, vistos map[reflect.Type
 				embutido = embutido.Elem()
 			}
 			if embutido.Kind() == reflect.Struct {
-				coletarNomes(embutido, nomes, vistos)
+				coletarCampos(embutido, campos, vistos)
 				continue
 			}
 		}
@@ -212,7 +291,7 @@ func coletarNomes(t reflect.Type, nomes map[string]bool, vistos map[reflect.Type
 		if nome == "" {
 			nome = f.Name
 		}
-		nomes[nome] = true
+		campos[nome] = f.Type
 	}
 }
 

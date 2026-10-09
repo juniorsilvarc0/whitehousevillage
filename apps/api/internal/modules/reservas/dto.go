@@ -565,7 +565,7 @@ type BloqueioCriar struct {
 // constraint enquanto a transação inteira é verificada.
 const tetoDeUnidadesPorBloqueio = 100
 
-// OS DOIS TETOS DA JANELA — o MÉDIO da segunda revisão.
+// Validar aplica os DOIS TETOS DA JANELA — o MÉDIO da segunda revisão.
 //
 // MEDIDO ANTES: um POST /blocks do CORRETOR (o menor privilégio do sistema)
 // com as oito unidades e `from=2040-01-01 to=2050-01-01` respondeu 201 e tirou
@@ -586,21 +586,20 @@ const tetoDeUnidadesPorBloqueio = 100
 //   - unidade que sai do catálogo: `units.active = false` no módulo de
 //     inventário. Tirar do mercado para sempre é decisão de INVENTÁRIO, não de
 //     calendário — e o calendário não tem como distinguir uma da outra.
-const (
-	// tetoDeNoitesPorBloqueio: manutenção e uso do proprietário se medem em
-	// dias ou semanas. Um ano é folgado para a temporada mais longa que a casa
-	// consegue justificar, e acima dele o que se está fazendo é retirar a
-	// unidade do catálogo.
-	tetoDeNoitesPorBloqueio = 365
-	// horizonteMaximoDoBloqueio: `from` no máximo três anos além de HOJE na
-	// casa. É o que impede a década numa tecla — 2040 fica a catorze anos, e
-	// nem o tarifário nem a política comercial alcançam lá. Três anos cobre
-	// com folga o horizonte de venda real (a suíte já exercita bloqueio a 840
-	// dias) e o `from` no passado continua livre: registrar manutenção que já
-	// aconteceu é legítimo.
-	horizonteMaximoDoBloqueio = 3 * 365
-)
-
+//
+// Os dois números moram em `internal/domain/calendar` (MaxBlockNights,
+// BlockHorizonDays) desde 09/10/2026: o bloqueio de uma ordem de manutenção é
+// a mesma ocupação, e dois tetos fariam da ordem a porta dos fundos deste.
+//
+//   - duração: manutenção e uso do proprietário se medem em dias ou semanas;
+//     acima de um ano o que se está fazendo é retirar a unidade do catálogo;
+//   - horizonte: `from` no máximo três anos além de HOJE na casa — 2040 fica a
+//     catorze anos, e nem o tarifário nem a política comercial alcançam lá. O
+//     `from` no passado continua livre aqui: registrar manutenção que já
+//     aconteceu é legítimo.
+//
+// A duração é conferida aqui (DTO puro); o horizonte depende de HOJE e fica no
+// service (conferirHorizonteDoBloqueio).
 func (b BloqueioCriar) Validar() map[string]string {
 	falhas := map[string]string{}
 	validarData(falhas, "from", b.De)
@@ -612,12 +611,12 @@ func (b BloqueioCriar) Validar() map[string]string {
 		switch noites := de.Nights(ate); {
 		case noites <= 0:
 			falhas["to"] = "deve ser posterior a `from` (o intervalo é half-open: `to` não entra)."
-		case noites > tetoDeNoitesPorBloqueio:
+		case noites > calendar.MaxBlockNights:
 			// O erro cai em `to` porque é a data que o operador encurta.
 			falhas["to"] = fmt.Sprintf(
 				"o bloqueio cobre %d noites; o máximo é %d (um ano). Parta em bloqueios menores, "+
 					"ou desative a unidade no inventário se ela sai do catálogo.",
-				noites, tetoDeNoitesPorBloqueio)
+				noites, calendar.MaxBlockNights)
 		}
 	}
 
