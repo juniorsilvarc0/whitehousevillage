@@ -383,6 +383,16 @@ A API passou a devolver, na coleção, o schema `ContatoNaLista`: documento, tel
 
 ---
 
+### D12 — Filtro booleano ilegível vira "sem filtro" em toda a API → aberta em 09/10/2026
+
+**Achada pelo `qa-testes`** na fatia de ordens de manutenção: `GET /maintenance-orders?open=sim` devolvia a lista inteira, abertas e encerradas misturadas, como se tivesse filtrado. A causa é de plataforma — `httpx.ParseBool` devolve nulo para valor que não é `true`/`false`, e o handler trata nulo como "não filtrar". São **23 leituras em 8 módulos** (`bens` 6, `crm` 5, `contatos` 3, `inventario` 3, `tarifario` 3, `manutencao` 1, `reservas` 1, `users` 1).
+
+**O que já foi feito**: só o `open` das ordens de manutenção passou a dar `422` em `details.open` (`strconv.ParseBool` no próprio handler), porque o contrato da fatia nova já dizia que filtro inválido não finge que filtrou.
+
+**Definitivo**: `httpx.ParseBool` passa a devolver erro para valor ilegível, e cada chamada vira `422` no parâmetro — com uma varredura que chame toda rota de lista com `?<param>=talvez` e exija `422`. **Por que não agora**: muda o comportamento de 22 leituras que o painel e o site usam, e o painel só manda `true`/`false`; o risco hoje é de integração ou de URL digitada à mão, não de dado errado gravado.
+
+---
+
 ## Decisões pendentes do dono do negócio
 
 Nenhuma delas é técnica, e nenhuma pode ser adivinhada por quem implementa. Cada linha diz **o que fica parado** enquanto ela não vier. As seis primeiras da unificação estão detalhadas em [`unificacao-site-crm.md`](unificacao-site-crm.md) §8.

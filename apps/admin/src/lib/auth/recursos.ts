@@ -29,6 +29,10 @@ export const RECURSOS_DO_CATALOGO = [
   "agenda",
   "inventory",
   "inventory.goods",
+  // Ordens de manutenção (spec §12). Recurso próprio, e não uma ação a mais em
+  // `inventory.goods`: a ordem pode tirar a unidade da venda (bloqueio em
+  // `stay_blocks`), e quem conta taça não precisa poder fazer isso.
+  "maintenance",
   "channels",
 
   "quotes",

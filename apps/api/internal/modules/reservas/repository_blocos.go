@@ -26,10 +26,10 @@ const colunasDoBloco = `
 	lower(sb.period)::text, upper(sb.period)::text,
 	sb.reservation_id, sb.expires_at, sb.note, sb.created_at`
 
-func lerBloco(linha pgx.Row) (Bloqueio, error) {
+func lerBloco(linha pgx.Row, extras ...any) (Bloqueio, error) {
 	var b Bloqueio
-	err := linha.Scan(&b.ID, &b.UnitID, &b.UnitCode, &b.Origem, &b.Status,
-		&b.De, &b.Ate, &b.ReservaID, &b.ExpiraEm, &b.Observacao, &b.CriadoEm)
+	err := linha.Scan(append([]any{&b.ID, &b.UnitID, &b.UnitCode, &b.Origem, &b.Status,
+		&b.De, &b.Ate, &b.ReservaID, &b.ExpiraEm, &b.Observacao, &b.CriadoEm}, extras...)...)
 	return b, err
 }
 
@@ -539,14 +539,22 @@ func (r *Repository) CriarBloqueioOperacional(ctx context.Context, propriedade u
 // Dono errado devolve 404, e não 403, pela mesma razão que a reserva alheia
 // devolve 404: 403 confirmaria que o bloqueio existe.
 func (r *Repository) LiberarBloqueio(ctx context.Context, propriedade, id uuid.UUID, somenteMeus bool, usuario uuid.UUID) (Bloqueio, error) {
+	// `manutencaoTerminada` é decidido NA LEITURA TRAVADA, com "hoje" no fuso
+	// da propriedade: bloqueio de manutenção cujo período já terminou
+	// (`to <= hoje`) é o histórico do conserto — inclusive o antigo de uma
+	// remarcação, que nenhuma ordem cita mais — e noite que já passou não muda.
 	qLer := `
-		SELECT ` + colunasDoBloco + `
-		  FROM stay_blocks sb JOIN units u ON u.id = sb.unit_id
+		SELECT ` + colunasDoBloco + `,
+		       (sb.source = 'maintenance' AND upper(sb.period) <= (now() AT TIME ZONE p.timezone)::date)
+		  FROM stay_blocks sb
+		  JOIN units u ON u.id = sb.unit_id
+		  JOIN properties p ON p.id = sb.property_id
 		 WHERE sb.id = $1 AND sb.property_id = $2
 		   AND ($3::boolean = false OR sb.owner_id = $4::uuid)
 		   FOR UPDATE OF sb`
 
-	antes, err := lerBloco(r.exec(ctx).QueryRow(ctx, qLer, id, propriedade, somenteMeus, usuario))
+	var manutencaoTerminada bool
+	antes, err := lerBloco(r.exec(ctx).QueryRow(ctx, qLer, id, propriedade, somenteMeus, usuario), &manutencaoTerminada)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Bloqueio{}, apperr.NotFound("Bloqueio")
 	}
@@ -559,6 +567,24 @@ func (r *Repository) LiberarBloqueio(ctx context.Context, propriedade, id uuid.U
 			"hint":           "bloqueio de reserva se solta por /cancel, /check-out ou pelo job de expiração.",
 		})
 	}
+	// Bloqueio de ordem de manutenção também não se solta por aqui: quem o
+	// solta é a ordem (`DELETE /maintenance-orders/{id}/block`, ou o
+	// encerramento dela). Soltá-lo por fora deixaria a ordem dizendo
+	// "bloqueado até sexta" com a unidade à venda. Não há corrida nesta
+	// leitura: a ordem só aponta para linha que ela mesma criou, na transação
+	// em que a criou — um bloqueio que já existe não passa a ser de ordem.
+	ordem, err := r.ordemDoBloqueio(ctx, id)
+	if err != nil {
+		return antes, err
+	}
+	if ordem != nil {
+		return antes, apperr.InvalidStateTransition.
+			WithMessage("Este bloqueio é de uma ordem de manutenção: solte-o pela própria ordem.").
+			WithDetails(map[string]any{
+				"maintenance_order_id": ordem.String(),
+				"hint":                 "DELETE /maintenance-orders/{id}/block, ou conclua/cancele a ordem.",
+			})
+	}
 	// Bloco terminal não se libera duas vezes. `completed` em especial: liberá-lo
 	// seria dizer que a estadia não aconteceu.
 	if BlocoTerminal(antes.Status) {
@@ -569,12 +595,35 @@ func (r *Repository) LiberarBloqueio(ctx context.Context, propriedade, id uuid.U
 				"allowed": []string{BlocoHold, BlocoConfirmado},
 			})
 	}
+	if manutencaoTerminada {
+		return antes, apperr.InvalidStateTransition.
+			WithMessage("Este bloqueio de manutenção já terminou: é o histórico do conserto, e noite que já passou não muda.").
+			WithDetails(map[string]any{
+				"status": antes.Status,
+				"period": periodo(antes.De, antes.Ate),
+			})
+	}
 
 	const qLiberar = `UPDATE stay_blocks SET status = 'cancelled', expires_at = NULL WHERE id = $1`
 	if _, err := r.exec(ctx).Exec(ctx, qLiberar, id); err != nil {
 		return antes, db.MapError(err)
 	}
 	return antes, nil
+}
+
+// ordemDoBloqueio devolve a ordem de manutenção que aponta para o bloqueio
+// (`maintenance_orders.stay_block_id`, único), ou nil.
+func (r *Repository) ordemDoBloqueio(ctx context.Context, bloco uuid.UUID) (*uuid.UUID, error) {
+	var ordem uuid.UUID
+	err := r.exec(ctx).QueryRow(ctx,
+		`SELECT id FROM maintenance_orders WHERE stay_block_id = $1`, bloco).Scan(&ordem)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, db.MapError(err)
+	}
+	return &ordem, nil
 }
 
 // ─────────────────────────── Expiração ──────────────────────────────

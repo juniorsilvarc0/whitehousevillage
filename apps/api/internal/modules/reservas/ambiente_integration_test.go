@@ -346,6 +346,11 @@ func (a *ambiente) usuario(t *testing.T, perfilID uuid.UUID) (uuid.UUID, string)
 	// o referencia. Soltar as reservas dele primeiro evita o 23503.
 	t.Cleanup(func() {
 		a.executar(t, `DELETE FROM reservations WHERE created_by = $1 OR owner_id = $1`, id)
+		// Ordem de manutenção que aponta para um bloqueio dele (ou que ele abriu)
+		// segura a linha por FK RESTRICT: sai antes do bloqueio.
+		a.executar(t, `DELETE FROM maintenance_orders
+		                WHERE stay_block_id IN (SELECT id FROM stay_blocks WHERE created_by = $1 OR owner_id = $1)
+		                   OR opened_by = $1 OR closed_by = $1`, id)
 		// `stay_blocks` nascidos de bloqueio operacional não caem por cascade de
 		// reserva (não têm reserva) e referenciam o usuário por created_by/owner_id.
 		a.executar(t, `DELETE FROM stay_blocks WHERE created_by = $1 OR owner_id = $1`, id)

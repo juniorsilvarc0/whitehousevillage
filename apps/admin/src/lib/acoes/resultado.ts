@@ -77,6 +77,10 @@ export function mensagemDoErro(code: CodigoDeErro, padrao = "Não foi possível 
       return "Esta conferência já foi encerrada e não aceita mais alterações. Recarregue a página para ver como ela ficou.";
     case "COUNT_HAS_PENDING_LINES":
       return "Ainda há itens sem contagem. Conte todos antes de fechar — ou cancele a conferência, se ela não vai ser terminada.";
+    case "MAINTENANCE_ORDER_CLOSED":
+      return "Esta ordem de manutenção já foi encerrada. Recarregue a página para ver como ela ficou — retrabalho é uma ordem nova.";
+    case "MAINTENANCE_ORDER_ALREADY_OPEN":
+      return "Esta avaria já tem uma ordem de manutenção em aberto. Continue por ela em vez de abrir outra.";
     case "IDEMPOTENCY_MISMATCH":
       return "Esta ação já foi enviada antes com outros dados. Recarregue a página e confira.";
     case "INTERNAL":

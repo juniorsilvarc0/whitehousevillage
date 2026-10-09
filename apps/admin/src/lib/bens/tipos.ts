@@ -281,7 +281,9 @@ export type Avaria = {
   id: string;
   room_id: string;
   room_name?: string;
-  unit_id?: string;
+  /** Obrigatório no contrato desde 09/10/2026: é dele que a ação "Abrir
+   *  ordem de manutenção" tira a unidade da ordem. */
+  unit_id: string;
   unit_code?: string;
   item_id: string;
   item_name?: string;
@@ -296,6 +298,12 @@ export type Avaria = {
   reservation_id?: string | null;
   reservation_code?: string | null;
   count_id?: string | null;
+  /**
+   * A ordem de manutenção **não encerrada** desta avaria, se houver (no máximo
+   * uma). Vem também para quem só tem `inventory.goods:ver` — é um id, não a
+   * ordem: abri-la continua pedindo `maintenance:ver`.
+   */
+  open_maintenance_order_id?: string | null;
   /** `null` = pendência **aberta**. */
   resolution?: DesfechoDeAvaria | null;
   reported_by?: string | null;
