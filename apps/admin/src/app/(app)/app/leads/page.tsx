@@ -53,6 +53,7 @@ export default async function LeadsPage({ searchParams }: { searchParams: Promis
   const permissoes = {
     editar: can(permissions, "crm.leads", "editar"),
     excluir: can(permissions, "crm.leads", "excluir"),
+    verFicha: can(permissions, "contacts", "ver"),
   };
 
   return (

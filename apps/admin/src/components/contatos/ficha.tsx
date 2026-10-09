@@ -25,7 +25,7 @@ import {
 import { apagarContato, exportarContato } from "@/app/(app)/app/contatos/acoes";
 import { AvisosDeContatos, notificar, notificarSucesso } from "@/components/contatos/avisos";
 import { ModalDeAnonimizacao } from "@/components/contatos/modal-de-anonimizacao";
-import { ModalDeContato } from "@/components/contatos/modal-de-contato";
+import { ModalDeContato, type AberturaDoContato } from "@/components/contatos/modal-de-contato";
 
 /** Uma linha do bloco de dados. `—` explícito: campo vazio que some da tela vira
  *  "esqueci de perguntar" indistinguível de "não tem". */
@@ -63,7 +63,7 @@ export function FichaDoContato({
   permissoes: { editar: boolean; excluir: boolean };
 }) {
   const router = useRouter();
-  const edicao = useControleDeModal<ContatoCompleto | null>();
+  const edicao = useControleDeModal<AberturaDoContato>();
   const anonimizacao = useControleDeModal<null>();
 
   const [exportando, setExportando] = React.useState(false);
@@ -144,8 +144,10 @@ export function FichaDoContato({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* A ficha desta tela já veio de `GET /contacts/{id}` (cheia e com
+              rastro): é ela que preenche o formulário, sem segunda leitura. */}
           {permissoes.editar && !anonimizado ? (
-            <Button size="sm" variant="outline" onClick={() => edicao.abrir(contato)}>
+            <Button size="sm" variant="outline" onClick={() => edicao.abrir({ ficha: contato })}>
               <Pencil aria-hidden="true" />
               Editar
             </Button>

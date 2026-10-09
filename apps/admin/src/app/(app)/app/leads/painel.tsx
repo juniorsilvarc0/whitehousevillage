@@ -7,6 +7,7 @@ import {
   ArrowRightCircle, CalendarRange, Loader2, Phone, Sparkles, TriangleAlert, UserX,
 } from "lucide-react";
 
+import { BotaoDeLigar } from "@/components/contatos/botao-de-ligar";
 import { AvisosDoCrm, descricaoDaFalha, notificarSucesso } from "@/components/crm/avisos";
 import { useControleDeModal, type ControleDeModal } from "@/components/layout/controle-de-modal";
 import { EstadoVazio } from "@/components/layout/estados";
@@ -21,7 +22,6 @@ import { Select } from "@/components/ui/select";
 import type { Produto } from "@/lib/api/comercial";
 import type { FalhaCrm } from "@/lib/crm/api";
 import { codigoGeral } from "@/lib/crm/codigos";
-import { formatarTelefone } from "@/lib/contatos/telefone";
 import { ConversaoFormulario } from "@/lib/crm/esquemas";
 import type { EstadoDoLead, EtapaDoFunil, Funil, Lead } from "@/lib/crm/tipos";
 import { formatarData, formatarDataCurta, noitesEntre } from "@/lib/datas";
@@ -38,6 +38,14 @@ import { converterLead, descartarLead } from "./acoes";
  * `contacts`, um registro por pessoa. É essa separação que deixa o WhatsApp
  * reconhecer quem já existe em vez de criar um segundo cadastro a cada
  * mensagem — e é por isso que a lista mostra o contato, mas não o edita.
+ *
+ * ## O telefone do lead é mascarado, e ligar é pela ficha (dívida D11)
+ *
+ * `contact_phone_e164` vem **sempre** mascarado (`+*********0000`), na lista e
+ * no detalhe: não é E.164 e não serve para `tel:`. O card mostra a máscara como
+ * texto — ela basta para conferir o final do número com quem está na linha — e
+ * o botão "Ligar" busca a ficha do contato e disca o número dela
+ * (`BotaoDeLigar`). Sem telefone (a máscara de `null` é `null`), não há botão.
  */
 
 const ROTULO_DO_ESTADO: Record<EstadoDoLead, string> = {
@@ -48,7 +56,13 @@ const ROTULO_DO_ESTADO: Record<EstadoDoLead, string> = {
   descartado: "Descartado",
 };
 
-export type PermissoesDeLeads = { editar: boolean; excluir: boolean };
+export type PermissoesDeLeads = {
+  editar: boolean;
+  excluir: boolean;
+  /** `contacts:ver` — ligar lê a ficha do contato. Esconde o botão de quem não
+   *  a alcança; quem barra de verdade é a API. */
+  verFicha: boolean;
+};
 
 export function PainelDeLeads({
   leads,
@@ -88,6 +102,7 @@ export function PainelDeLeads({
             key={lead.id}
             lead={lead}
             podeEditar={permissoes.editar}
+            podeLigar={permissoes.verFicha}
             aoConverter={() => conversao.abrir(lead)}
             aoDescartar={() => setDescartando(lead)}
           />
@@ -129,11 +144,13 @@ export function PainelDeLeads({
 function CartaoDeLead({
   lead,
   podeEditar,
+  podeLigar,
   aoConverter,
   aoDescartar,
 }: {
   lead: Lead;
   podeEditar: boolean;
+  podeLigar: boolean;
   aoConverter: () => void;
   aoDescartar: () => void;
 }) {
@@ -160,11 +177,12 @@ function CartaoDeLead({
         </div>
 
         <p className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+          {/* A máscara, como texto: nunca `tel:` — não é E.164. */}
           {lead.contact_phone_e164 ? (
-            <a href={`tel:${lead.contact_phone_e164}`} className="flex items-center gap-1.5 hover:text-foreground">
+            <span className="flex items-center gap-1.5 font-mono">
               <Phone className="size-3.5" aria-hidden="true" />
-              {formatarTelefone(lead.contact_phone_e164)}
-            </a>
+              {lead.contact_phone_e164}
+            </span>
           ) : null}
           <span>{lead.interest_unit_type_name ?? "Produto não informado"}</span>
           {lead.desired_check_in && lead.desired_check_out ? (
@@ -181,6 +199,10 @@ function CartaoDeLead({
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center gap-2">
+        {podeLigar && lead.contact_phone_e164 ? (
+          <BotaoDeLigar contatoId={lead.contact_id} nome={lead.contact_name} />
+        ) : null}
+
         {convertido && lead.opportunity_id ? (
           <Link
             href={`/app/oportunidades/${lead.opportunity_id}`}

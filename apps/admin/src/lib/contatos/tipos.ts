@@ -63,6 +63,12 @@ export const ROTULO_DO_DOCUMENTO: Record<TipoDeDocumento, string> = {
   passaporte: "Passaporte",
 };
 
+/**
+ * **A ficha**, com os valores cheios. Só sai em resposta de UM registro
+ * (`GET`/`PATCH /contacts/{id}`, que gravam `pii_access_log`; `POST`/`PUT`; e
+ * `/anonymize`). A coleção é `ContatoNaLista` — mascarada e sem
+ * `birth_date`/`notes`.
+ */
 export type Contato = {
   id: string;
   name: string;
@@ -86,6 +92,55 @@ export type Contato = {
   /** Preenchido pelo `/anonymize`. Enquanto for `null` a ficha é normal;
    *  preenchido, ela é uma casca que existe só para sustentar os registros
    *  financeiros que apontam para este `id`. */
+  anonymized_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * A linha de `GET /contacts` — **não é a ficha**, e o tipo existe para o `tsc`
+ * não deixar ninguém confundir as duas (dívida D11 do roadmap).
+ *
+ * Desde o F2-23 a coleção devolve o schema `ContatoNaLista` da OpenAPI:
+ * documento, telefone e e-mail **mascarados**, e **sem** as chaves `birth_date`
+ * e `notes` (nem como `null`). Os campos mantêm os nomes da ficha para a tela
+ * trocar de fonte sem trocar de vocabulário — mas o conteúdo é outro.
+ *
+ * ## O que esta linha não pode fazer
+ *
+ * - **Preencher formulário.** O `PUT` manda a ficha inteira: a máscara voltaria
+ *   como entrada (`422` em campo que ninguém tocou) e `notes`/`birth_date`, que
+ *   não vieram, iriam vazios — num contato só com nome e anotação, nada recusa e
+ *   **a anotação some**. Editar a partir da lista busca a ficha
+ *   (`GET /contacts/{id}`, que grava `pii_access_log`) e só então monta o
+ *   formulário: ver `AberturaDoContato` em `components/contatos/modal-de-contato`.
+ * - **Ligar nem chamar no WhatsApp.** `+*********0000` não é E.164.
+ *
+ * As duas chaves ausentes são o que torna a linha **inatribuível** a `Contato`:
+ * passar a linha onde se espera a ficha é erro de compilação, e
+ * `tipos.test.ts` prova que continua sendo. Não as acrescente aqui como
+ * opcionais "para facilitar" — é exatamente o atalho que reabre a perda.
+ */
+export type ContatoNaLista = {
+  id: string;
+  /** Cheio — o nome não é mascarado em coleção nenhuma. */
+  name: string;
+  /** **Mascarado**: `fernanda.lima@gmail.com` → `f***@gmail.com`. */
+  email: string | null;
+  /** **Mascarado**: `+5585999990000` → `+*********0000`. Não é E.164: não
+   *  serve para `tel:` nem para WhatsApp. `null` continua `null` — a máscara
+   *  não inventa dado, então a presença do valor diz se a ficha tem telefone. */
+  phone_e164: string | null;
+  doc_type: TipoDeDocumento | null;
+  /** **Mascarado** e já pontuado pela API: CPF sai `***.***.777-35`, CNPJ
+   *  sai com os dígitos 9 a 14 e o resto em asteriscos, passaporte
+   *  `******567`. A tela mostra como veio. */
+  doc_number: string | null;
+  city: string | null;
+  state: string | null;
+  lgpd_basis: BaseLegalLGPD | null;
+  marketing_opt_in: boolean;
+  consent_at: string | null;
   anonymized_at: string | null;
   created_at: string;
   updated_at: string;

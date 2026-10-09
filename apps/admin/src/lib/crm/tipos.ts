@@ -54,6 +54,11 @@ export type MotivoDePerda = {
 
 // ── Contato e lead ─────────────────────────────────────────────────────────
 
+/**
+ * O contato embutido em `GET /crm/opportunities/{id}/full` — telefone e e-mail
+ * **cheios**, e por isso aquela leitura grava `pii_access_log`
+ * (`reason: "opportunity"`). Não confundir com `ContatoNaLista`, que é mascarado.
+ */
 export type ContatoResumo = {
   id: string;
   name: string;
@@ -69,6 +74,12 @@ export type Lead = {
   id: string;
   contact_id: string;
   contact_name: string;
+  /**
+   * **Sempre mascarado** (`+*********0000`), na lista, no detalhe e na resposta
+   * das escritas. Não é E.164: não serve para `tel:` nem para WhatsApp. Ligar
+   * é pela ficha do contato (`BotaoDeLigar`), que registra a leitura. `null`
+   * continua `null`, então a presença do valor diz se o contato tem telefone.
+   */
   contact_phone_e164: string | null;
   source: string;
   campaign_id: string | null;
