@@ -1,7 +1,8 @@
 import * as React from "react";
 import Link from "next/link";
-import { BedDouble, Globe, Lock, Mail, MessageCircle, PartyPopper, Phone, Undo2, UserRound, Users } from "lucide-react";
+import { BedDouble, Globe, Lock, Mail, MessageCircle, PartyPopper, Undo2, UserRound, Users } from "lucide-react";
 
+import { TelefoneClicavel } from "@/components/contatos/botao-whatsapp";
 import { EstadoVazio } from "@/components/layout/estados";
 import { Nota } from "@/components/layout/tela";
 import { AcoesDaReserva } from "@/components/reservas/acoes-da-reserva";
@@ -12,7 +13,6 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import type { Produto, UnidadeDaComposicao } from "@/lib/api/comercial";
 import { classeDoTipo, rotuloDoTipo } from "@/lib/comercial/tipos-de-data";
-import { formatarTelefone } from "@/lib/contatos/telefone";
 import { linkDoWhatsApp, mensagemDaReserva } from "@/lib/contatos/whatsapp";
 import { formatarData, formatarDataCurta, formatarInstante } from "@/lib/datas";
 import { formatarBRL, formatarPct } from "@/lib/dinheiro";
@@ -416,13 +416,10 @@ function Hospedes({ completo }: { completo: ReservaCompleta }) {
               </span>
               {hospede.phone_e164 ? (
                 <span className="flex items-center gap-3">
-                  <a
-                    href={`tel:${hospede.phone_e164}`}
-                    className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    <Phone className="size-3.5" aria-hidden="true" />
-                    {formatarTelefone(hospede.phone_e164)}
-                  </a>
+                  <TelefoneClicavel
+                    telefone={hospede.phone_e164}
+                    className="text-xs text-muted-foreground"
+                  />
                   <LinkDoWhatsApp
                     telefone={hospede.phone_e164}
                     texto={mensagemDaReserva(hospede.name, completo.reservation.code)}
@@ -468,10 +465,7 @@ function Cliente({ completo }: { completo: ReservaCompleta }) {
           <p className="truncate text-base font-medium">{nome}</p>
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
             {telefone ? (
-              <a href={`tel:${telefone}`} className="flex items-center gap-1.5 font-mono hover:text-foreground">
-                <Phone className="size-3.5" aria-hidden="true" />
-                {formatarTelefone(telefone)}
-              </a>
+              <TelefoneClicavel telefone={telefone} />
             ) : (
               <span>Sem telefone na ficha</span>
             )}

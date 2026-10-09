@@ -1,7 +1,7 @@
 import { apiFetch, apiList, isApiError, type ApiFetchInit, type Query } from "@/lib/api/client";
 import type { Lista } from "@/lib/api/types";
 import { ehCodigoDeContatos, type CodigoContato } from "@/lib/contatos/codigos";
-import type { Contato } from "@/lib/contatos/tipos";
+import type { ContatoNaLista } from "@/lib/contatos/tipos";
 
 /**
  * A fronteira do cadastro de contatos com a API — **servidor-only**, como todo o
@@ -130,11 +130,15 @@ export async function paginarContatos<T>(
  * Devolve `null` sem reclamar quando não dá para descobrir (campo desconhecido,
  * lista que falhou): a tela ainda tem o `contact_id` para oferecer o link. Um
  * nome é melhor que um id; um id é muito melhor que nada.
+ *
+ * O que volta é a **linha da lista** (`ContatoNaLista`), mascarada e sem
+ * `birth_date`/`notes`: serve para dizer o nome e se a ficha está anonimizada,
+ * nunca para preencher formulário nem para ligar.
  */
 export async function contatoJaExistente(
   details: Record<string, unknown>,
   enviado: { phone_e164: string | null; doc_number: string | null },
-): Promise<Contato | null> {
+): Promise<ContatoNaLista | null> {
   // `details.field` é do contrato (`phone_e164` | `doc_number`); o VALOR vem do
   // que acabou de ser enviado, e não de `details` — o contrato promete o campo e
   // o `contact_id`, não o valor, e ler um campo que o contrato não publica é
@@ -150,7 +154,7 @@ export async function contatoJaExistente(
 
   if (!consulta) return null;
 
-  const encontrados = await paginarContatos<Contato>("/contacts", {
+  const encontrados = await paginarContatos<ContatoNaLista>("/contacts", {
     ...consulta,
     per_page: 1,
     // Ficha anonimizada não aparece por padrão — mas ela ainda ocupa o telefone

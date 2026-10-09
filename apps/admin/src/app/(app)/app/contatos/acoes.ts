@@ -17,7 +17,7 @@ import {
   PALAVRA_DE_CONFIRMACAO,
   contatoParaEntrada,
 } from "@/lib/contatos/esquemas";
-import type { Contato, ResultadoDeAnonimizacao } from "@/lib/contatos/tipos";
+import type { Contato, ContatoNaLista, ResultadoDeAnonimizacao } from "@/lib/contatos/tipos";
 
 const CAMINHO = "/app/contatos";
 
@@ -29,6 +29,11 @@ const CAMINHO = "/app/contatos";
  * quem quer mudar um campo sem conhecer os outros — não é o caso de um modal que
  * abriu com todos preenchidos, e usá-lo esconderia o campo que a pessoa apagou
  * de propósito (o e-mail que o hóspede pediu para tirar, por exemplo).
+ *
+ * O `PUT` só é seguro porque o formulário se preenche com **a ficha**
+ * (`lerFichaDoContato`), nunca com a linha da lista: a linha é mascarada e não
+ * traz `notes` nem `birth_date`, e mandá-la inteira de volta apagaria o que
+ * ela não trouxe (dívida D11).
  */
 
 /**
@@ -45,8 +50,10 @@ export type Duplicata = {
   campo: "phone_e164" | "doc_number" | null;
   /** O `details.contact_id` da recusa. Basta para abrir a ficha. */
   contactId: string | null;
-  /** Quem é, quando deu para descobrir sem gravar `pii_access_log`. */
-  contato: Contato | null;
+  /** Quem é, quando deu para descobrir sem gravar `pii_access_log`. É a
+   *  **linha da lista** — mascarada, sem `birth_date` nem `notes`: dá o nome e
+   *  diz se a ficha está anonimizada, e só. */
+  contato: ContatoNaLista | null;
 };
 
 /** Sucesso, a duplicata (que tem caminho de saída) ou qualquer outra recusa.
@@ -99,6 +106,34 @@ export async function salvarContato(
   }
 
   return resultado;
+}
+
+/**
+ * Lê **a ficha** — `GET /contacts/{id}`, com os valores cheios.
+ *
+ * É a porta para tudo que a linha da lista não pode fazer (dívida D11): o
+ * formulário de edição aberto pela lista e o botão de ligar do lead. A coleção
+ * devolve documento, telefone e e-mail mascarados e não traz `birth_date` nem
+ * `notes`; preencher o formulário com ela mandaria a máscara de volta num `PUT`
+ * (`422` em campo que ninguém tocou) ou, num contato só com nome e anotação,
+ * gravaria a anotação vazia sem erro nenhum.
+ *
+ * **Esta leitura grava `pii_access_log`** (`reason: "detail"`), e é de
+ * propósito: abrir a ficha para editar ou para ligar é ler dado pessoal, e a
+ * trilha da LGPD existe para responder quem leu e quando. Por isso ela só sai
+ * no gesto do operador (o clique em "Editar" ou em "Ligar"), nunca para
+ * desenhar uma lista.
+ *
+ * Não é escrita, e não revalida nada: a resposta da action carrega só o valor
+ * devolvido, sem re-render da rota.
+ */
+export async function lerFichaDoContato(id: string): Promise<ResultadoDeContato<Contato>> {
+  const recusa = await exigir("contacts", "ver");
+  if (recusa) return falhaDeContato(recusa.code, recusa.message, recusa.details);
+
+  // Server Action é endpoint público: o `id` vem de quem chamou, e entra no
+  // caminho codificado para não virar outro caminho da API.
+  return chamarContatos<Contato>(`/contacts/${encodeURIComponent(id)}`);
 }
 
 /**

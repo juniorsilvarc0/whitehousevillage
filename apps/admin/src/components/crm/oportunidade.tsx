@@ -4,9 +4,10 @@ import * as React from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  CalendarRange, CheckCircle2, FileText, Loader2, Mail, MapPin, Phone, Plus, Trophy, XCircle,
+  CalendarRange, CheckCircle2, FileText, Loader2, Mail, MapPin, Plus, Trophy, XCircle,
 } from "lucide-react";
 
+import { TelefoneClicavel } from "@/components/contatos/botao-whatsapp";
 import { Abas } from "@/components/crm/abas";
 import { AvisosDoCrm, notificar, notificarSucesso } from "@/components/crm/avisos";
 import { CampoInline } from "@/components/crm/campo-inline";
@@ -33,7 +34,6 @@ import type {
 } from "@/lib/crm/tipos";
 import { formatarData, formatarInstante, noitesEntre } from "@/lib/datas";
 import { formatarBRL, reaisDeCentavos } from "@/lib/dinheiro";
-import { formatarTelefone } from "@/lib/contatos/telefone";
 import { ehEstadoDeReserva, ESTADOS } from "@/lib/reservas/estados";
 import { RailDaOportunidade } from "@/components/crm/rail-da-oportunidade";
 import { cn } from "@/lib/utils";
@@ -112,10 +112,7 @@ export function TelaDaOportunidade({
           </p>
           <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             {contact.phone_e164 ? (
-              <a href={`tel:${contact.phone_e164}`} className="flex items-center gap-1.5 hover:text-foreground">
-                <Phone className="size-3.5" aria-hidden="true" />
-                {formatarTelefone(contact.phone_e164)}
-              </a>
+              <TelefoneClicavel telefone={contact.phone_e164} className="font-sans" />
             ) : null}
             {contact.email ? (
               <a href={`mailto:${contact.email}`} className="flex items-center gap-1.5 hover:text-foreground">

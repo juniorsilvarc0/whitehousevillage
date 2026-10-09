@@ -3,9 +3,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useControleDeModal } from "@/components/layout/controle-de-modal";
-import type { Contato } from "@/lib/contatos/tipos";
+import type { ContatoNaLista } from "@/lib/contatos/tipos";
 
-import { ModalDeContato } from "./modal-de-contato";
+import { ModalDeContato, type AberturaDoContato } from "./modal-de-contato";
 
 /**
  * **O momento mais importante do cadastro: o telefone já é de alguém.**
@@ -19,10 +19,12 @@ import { ModalDeContato } from "./modal-de-contato";
  */
 
 const salvarContato = vi.fn();
+const lerFichaDoContato = vi.fn();
 const refresh = vi.fn();
 
 vi.mock("@/app/(app)/app/contatos/acoes", () => ({
   salvarContato: (...args: unknown[]) => salvarContato(...args),
+  lerFichaDoContato: (...args: unknown[]) => lerFichaDoContato(...args),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -34,17 +36,17 @@ vi.mock("sonner", () => ({
   Toaster: () => null,
 }));
 
-const ANA: Contato = {
+/** Quem já existe, como a recusa o descobre: pela **lista** (que não grava
+ *  `pii_access_log`) — então mascarado e sem `birth_date` nem `notes`. */
+const ANA: ContatoNaLista = {
   id: "c-ana",
   name: "Ana Silva",
-  email: "ana@exemplo.com",
-  phone_e164: "+5585999990000",
+  email: "a***@exemplo.com",
+  phone_e164: "+*********0000",
   doc_type: null,
   doc_number: null,
-  birth_date: null,
   city: "Fortaleza",
   state: "CE",
-  notes: null,
   lgpd_basis: "contrato",
   marketing_opt_in: false,
   consent_at: null,
@@ -56,7 +58,7 @@ const ANA: Contato = {
 /** Casca mínima: o modal é imperativo (`controle.abrir`), então o teste precisa
  *  de alguém que o abra — como a tela de verdade faz no clique de "Novo". */
 function Bancada() {
-  const controle = useControleDeModal<Contato | null>();
+  const controle = useControleDeModal<AberturaDoContato>();
   return (
     <>
       <button type="button" onClick={() => controle.abrir(null)}>
@@ -76,6 +78,7 @@ function abrirEPreencher(nome: string, telefone: string) {
 
 beforeEach(() => {
   salvarContato.mockReset();
+  lerFichaDoContato.mockReset();
   refresh.mockReset();
 });
 
@@ -98,6 +101,19 @@ describe("telefone que já é de alguém", () => {
 
     const link = screen.getByRole("link", { name: /Abrir a ficha de Ana/ });
     expect(link.getAttribute("href")).toBe("/app/contatos/c-ana");
+  });
+
+  it("repete o número que o operador digitou, não a máscara da lista", async () => {
+    // Quem já existe é descoberto pela LISTA, que devolve o telefone mascarado.
+    // A colisão é por igualdade exata: o número digitado é o da ficha
+    // existente, e é ele que faz sentido repetir — `+*********0000` no aviso é
+    // a linha mascarada usada como se fosse a ficha (D11).
+    render(<Bancada />);
+    abrirEPreencher("Ana S.", "+5585999990000");
+
+    const aviso = (await screen.findByText("Ana Silva já está cadastrada")).closest('[role="alert"]');
+    expect(aviso?.textContent).toContain("+55 (85) 99999-0000");
+    expect(aviso?.textContent).not.toContain("*");
   });
 
   it("o aviso fica na tela — não é um toast que some", async () => {
