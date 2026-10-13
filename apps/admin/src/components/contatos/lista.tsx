@@ -8,13 +8,11 @@ import { useControleDeModal } from "@/components/layout/controle-de-modal";
 import { EstadoVazio } from "@/components/layout/estados";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { formatarDocumento } from "@/lib/contatos/documento";
-import { formatarTelefone } from "@/lib/contatos/telefone";
-import { ROTULO_DO_DOCUMENTO, type Contato } from "@/lib/contatos/tipos";
+import { ROTULO_DO_DOCUMENTO, type ContatoNaLista } from "@/lib/contatos/tipos";
 import { cn } from "@/lib/utils";
 
 import { AvisosDeContatos } from "@/components/contatos/avisos";
-import { ModalDeContato } from "@/components/contatos/modal-de-contato";
+import { ModalDeContato, type AberturaDoContato } from "@/components/contatos/modal-de-contato";
 
 /**
  * A agenda da casa.
@@ -33,17 +31,31 @@ import { ModalDeContato } from "@/components/contatos/modal-de-contato";
  * ainda sustenta reservas antigas e a operação precisa saber que ela existe. O
  * que não pode é ele se parecer com um contato vendável — daí a etiqueta e o
  * nome esmaecido.
+ *
+ * ## A linha é mascarada, e editar passa pela ficha (dívida D11)
+ *
+ * Cada linha é um `ContatoNaLista`: documento, telefone e e-mail mascarados, e
+ * sem `birth_date` nem `notes`. A tela mostra a máscara **como a API a
+ * devolveu** — ela já vem pontuada (`***.***.777-35`), e passá-la pelos
+ * formatadores de CPF e de telefone só "funcionava" porque eles devolvem como
+ * veio o que não reconhecem.
+ *
+ * "Editar" **não** entrega a linha ao formulário: entrega o `id`, e o modal
+ * busca a ficha (`GET /contacts/{id}`, que grava `pii_access_log`) antes de
+ * montar qualquer campo. Com a linha, o `PUT` mandaria a máscara de volta e
+ * gravaria vazio o que ela não trouxe — a anotação de um contato some assim, sem
+ * erro nenhum.
  */
 export function ListaDeContatos({
   contatos,
   permissoes,
   temFiltro,
 }: {
-  contatos: readonly Contato[];
+  contatos: readonly ContatoNaLista[];
   permissoes: { criar: boolean; editar: boolean };
   temFiltro: boolean;
 }) {
-  const modal = useControleDeModal<Contato | null>();
+  const modal = useControleDeModal<AberturaDoContato>();
 
   return (
     <>
@@ -127,8 +139,9 @@ export function ListaDeContatos({
                       ) : null}
                     </div>
 
+                    {/* Texto, nunca `tel:`: a máscara não é E.164. Ligar é pela ficha. */}
                     <div className="min-w-0 flex-1 font-mono text-xs text-muted-foreground">
-                      {formatarTelefone(contato.phone_e164) || "—"}
+                      {contato.phone_e164 ?? "—"}
                     </div>
 
                     <div className="min-w-0 flex-1 text-xs text-muted-foreground">
@@ -137,9 +150,7 @@ export function ListaDeContatos({
                           <span className="uppercase">
                             {contato.doc_type ? ROTULO_DO_DOCUMENTO[contato.doc_type] : ""}
                           </span>{" "}
-                          <span className="font-mono">
-                            {formatarDocumento(contato.doc_type, contato.doc_number)}
-                          </span>
+                          <span className="font-mono">{contato.doc_number}</span>
                         </>
                       ) : (
                         "—"
@@ -170,7 +181,7 @@ export function ListaDeContatos({
                       variant="ghost"
                       size="iconSm"
                       aria-label={`Editar ${contato.name}`}
-                      onClick={() => modal.abrir(contato)}
+                      onClick={() => modal.abrir({ buscar: { id: contato.id, nome: contato.name } })}
                     >
                       <Pencil aria-hidden="true" />
                     </Button>

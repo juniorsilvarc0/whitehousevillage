@@ -1,6 +1,7 @@
 import { MessageCircle, Phone } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
+import { linkDeLigacao } from "@/lib/contatos/ligacao";
 import { formatarTelefone } from "@/lib/contatos/telefone";
 import { linkDoWhatsApp, mensagemDaReserva } from "@/lib/contatos/whatsapp";
 import { cn } from "@/lib/utils";
@@ -41,12 +42,27 @@ export function BotaoWhatsApp({
   );
 }
 
-/** O telefone formatado, clicável para ligar. Nada quando não há telefone. */
+/**
+ * O telefone formatado, clicável para ligar. Nada quando não há telefone.
+ *
+ * Só vira link o que é E.164 (`linkDeLigacao`): valor mascarado
+ * (`+*********0000`, que é o que toda coleção de contato devolve) aparece como
+ * texto. Um `tel:` de asteriscos foi o defeito da D11 no card do lead.
+ */
 export function TelefoneClicavel({ telefone, className }: { telefone: string | null | undefined; className?: string }) {
   if (!telefone) return null;
+  const href = linkDeLigacao(telefone);
+  if (!href) {
+    return (
+      <span className={cn("inline-flex items-center gap-1.5 font-mono", className)}>
+        <Phone className="size-3.5" aria-hidden="true" />
+        {telefone}
+      </span>
+    );
+  }
   return (
     <a
-      href={`tel:${telefone}`}
+      href={href}
       className={cn("inline-flex items-center gap-1.5 font-mono hover:text-foreground", className)}
     >
       <Phone className="size-3.5" aria-hidden="true" />

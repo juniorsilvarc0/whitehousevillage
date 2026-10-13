@@ -204,6 +204,26 @@ for (const rota of TELAS) {
     .textContent({ timeout: 500 }).catch(() => null);
   if (aviso) falhas.push(`${rota}: a tela abriu com aviso de erro — "${aviso.trim().slice(0, 80)}"`);
 
+  // Nenhum link de ligação ou de WhatsApp com máscara (dívida D11).
+  //
+  // As coleções que embutem contato devolvem o telefone mascarado
+  // (`+*********0000`) — a lista de contatos e os leads, até no detalhe. Até a
+  // D11 o card do lead montava `tel:` com a máscara, e o botão discava
+  // asteriscos; nenhum teste via, porque todos usavam telefone cheio. O teste
+  // de componente cobre o card; esta conferência cobre o que ele não alcança:
+  // qualquer tela, com o dado que o banco servido tem.
+  const ligacoesMascaradas = await pagina
+    .$$eval('a[href^="tel:"], a[href*="wa.me/"]', (as) =>
+      as
+        .map((a) => a.getAttribute("href") ?? "")
+        // No `wa.me` só o número conta: o `?text=` é a mensagem, não o destino.
+        .filter((href) => /\*|%2A/i.test(href.startsWith("tel:") ? href : href.split("?")[0])),
+    )
+    .catch(() => []);
+  for (const href of ligacoesMascaradas) {
+    falhas.push(`${rota}: link de ligação com telefone mascarado — ${href.slice(0, 60)} (dívida D11)`);
+  }
+
   await registrarDestinos(rota);
   console.log(`  ${rota}`);
 }

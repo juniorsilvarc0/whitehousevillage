@@ -50,7 +50,18 @@ export const ContatoFormulario = z
     consent_at: TEXTO_OPCIONAL,
   })
   .superRefine((v, ctx) => {
-    if (v.email !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.email)) {
+    // Espelho de `validarEmail` no DTO do Go. `*` é a máscara que a lista
+    // devolve (`f***@gmail.com`), e o formato a APROVA — a RFC aceita `*` antes
+    // do `@`. Telefone e documento mascarados já caem nos validadores de formato
+    // abaixo; o e-mail, não. É a segunda trava da D11: a primeira é o formulário
+    // nunca se preencher com a linha da lista.
+    if (v.email.includes("*")) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["email"],
+        message: "Este e-mail está mascarado. Abra a ficha do contato para editar o endereço completo.",
+      });
+    } else if (v.email !== "" && !/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.email)) {
       ctx.addIssue({ code: "custom", path: ["email"], message: "E-mail inválido." });
     }
 

@@ -9,7 +9,7 @@
 | Fase corrente | **2 — Dinheiro e rotina**, aberta. Bloco 0 (dívida) **fechado**; Bloco 1 começou pelo F2-09. Em paralelo, o plano de [unificação do site](unificacao-site-crm.md) está no passo A0 mais a limpeza D1/D2/D4 |
 | Backlog da fase | [`docs/backlog/fase-2.md`](backlog/fase-2.md) — 24 itens. Estado item a item no quadro "Estado em 02/10/2026": **9 feitos**, **2 parciais**, **13 abertos** |
 | Schema da árvore | `20261002180000` (`brokers_e_fk_do_corretor`) = `router.SchemaVersionEsperada`. Conferido em 02/10 no Postgres de teste recriado do zero: `banco pronto: 20261002180000\|f`. O banco do stack de desenvolvimento **não** foi conferido nesta rodada (o ambiente dela não tinha Docker) |
-| Dívida aberta | **D1** (agora pré-requisito da reserva pública, não da Fase 6), **D4**, **D9** (parcial), **D11** (aberta nesta rodada). Pagas: **D2**, **D3**, **D5**, **D6**, **D7**, **D8**, **D10** |
+| Dívida aberta | **D1** (agora pré-requisito da reserva pública, não da Fase 6), **D4**, **D9** (parcial). Pagas: **D2**, **D3**, **D5**, **D6**, **D7**, **D8**, **D10**, **D11** |
 | Decisões do dono pendentes | 13, cada uma com o que bloqueia — ver [Decisões pendentes do dono do negócio](#decisões-pendentes-do-dono-do-negócio) |
 | Última atualização | 02/10/2026, pelo `squad-lead`, ao fechar a Rodada 5 |
 | Repositório | `github.com/juniorsilvarc0/whitehousevillage`. `main` = `957e6e3`; a Rodada 5 está na árvore e é commitada pelo integrador ao fim dela. PR #2 (`ci/actions-node-24`, `c8037be`) aberto, esperando autorização do dono |
@@ -367,7 +367,7 @@ Por que é aceitável até aqui: com uma ou duas pessoas no funil, a janela é p
 
 O teste é a parte que importa, e ele tem forma obrigatória: **re-renderizar com identidade nova da fábrica de conexão**. Foi exatamente essa a forma que os 13 testes do hook de SSE não sabiam falhar — todos passavam uma fábrica estável de módulo, a única que não podia quebrar, enquanto a conexão reabria **1957 vezes em 9 segundos** no build minificado.
 
-### D11 — O painel ainda trata a lista de contatos como ficha cheia → `next-frontend`, primeiro item da próxima rodada
+### D11 — O painel ainda trata a lista de contatos como ficha cheia → **PAGA em 09/10/2026**
 
 **Aberta em 02/10/2026 pelo `squad-lead`**, na revisão da Rodada 5. Não foi assumida por ninguém: é o efeito colateral de o F2-23 ter mudado o formato de `GET /contacts` numa rodada em que o painel não teve agente.
 
@@ -380,6 +380,8 @@ A API passou a devolver, na coleção, o schema `ContatoNaLista`: documento, tel
 **Por que é aceitável até a próxima rodada, e não até depois**: a alternativa era manter a lista servindo 11 CPFs inteiros a qualquer corretor sem gravar rastro, que é um vazamento medido; o defeito do painel é de **escrita recusada** no caso comum, e o caso de perda (contato só com nome e anotação) é estreito. Não é aceitável por mais tempo do que isso, porque o caminho de perda é silencioso.
 
 **Definitivo**: o formulário de edição carrega a ficha (`GET /contacts/{id}`, que grava `pii_access_log` como deve), nunca a linha; `lib/contatos/tipos.ts` ganha `ContatoNaLista`, e o `tsc` passa a recusar o uso da linha como ficha; o lead liga pela ficha do contato, não por `tel:` da lista. **Prova**: teste de componente que abre "Editar" a partir da lista com uma linha mascarada e exige que o formulário só monte depois da ficha chegar — e o controle negativo, com a linha passada direto, vermelho; e a fumaça reprovando se a lista de contatos tiver um `href="tel:` com `*`.
+
+**Paga em 09/10/2026**, como o definitivo pedia: `ContatoNaLista` em `lib/contatos/tipos.ts` (o `tsc` recusa a linha onde se espera a ficha — `TS2739`); "Editar" pela lista lê a ficha por `GET /contacts/{id}` e só monta o formulário quando ela chega; o botão de ligar do lead lê a ficha no clique e disca o E.164 dela; todo `tel:` do painel passa por `lib/contatos/ligacao.ts`, que só aceita E.164; o zod recusa e-mail com `*`; e a fumaça reprova `tel:` ou `wa.me` com `*` em qualquer tela. Prova: `lista.test.tsx` (8) e `leads/painel.test.tsx` (5), com três controles negativos vermelhos — entre eles a perda silenciosa da anotação (`expected '' to be 'Indicado pelo Carlos…'`) e o `tel:+*********0000`.
 
 ---
 

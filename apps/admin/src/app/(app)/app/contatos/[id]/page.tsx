@@ -20,7 +20,8 @@ export const metadata = { title: "Contato" };
  * diferença entre esta rota e a lista. A lista serve à operação do dia; a ficha
  * é leitura de dado pessoal identificável (documento, nascimento), e a LGPD pede
  * que ela deixe registro de quem olhou. Por isso o cadastro completo **não** é
- * embutido no card do CRM: lá vai o `ContatoResumo`, que não registra.
+ * embutido no card do CRM: lá vai o `ContatoResumo`, só com o canal (telefone e
+ * e-mail cheios, e a leitura do `/full` registra com `reason: "opportunity"`).
  *
  * ## As duas buscas falham em separado
  *

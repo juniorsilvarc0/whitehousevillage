@@ -8,7 +8,7 @@ import { can } from "@/lib/auth/permissions";
 import { requireSession } from "@/lib/auth/session";
 import { paginarContatos } from "@/lib/contatos/api";
 import { consultaDeBusca } from "@/lib/contatos/busca";
-import type { Contato } from "@/lib/contatos/tipos";
+import type { ContatoNaLista } from "@/lib/contatos/tipos";
 
 import { BarraDeContatos } from "./barra";
 
@@ -47,7 +47,9 @@ export default async function ContatosPage({ searchParams }: { searchParams: Pro
   const pagina = Number.parseInt(filtros.page ?? "1", 10);
   const termo = filtros.busca ?? "";
 
-  const contatos = await paginarContatos<Contato>("/contacts", {
+  // A coleção é `ContatoNaLista` — mascarada, sem `birth_date` nem `notes`.
+  // Não é a ficha, e o tipo impede a lista de entregá-la ao formulário (D11).
+  const contatos = await paginarContatos<ContatoNaLista>("/contacts", {
     // Uma caixa, três filtros: o formato do termo escolhe entre `phone`
     // (igualdade E.164), `doc_number` (igualdade) e `q` (trigram por nome).
     ...consultaDeBusca(termo),
