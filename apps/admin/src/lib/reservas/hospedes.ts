@@ -38,12 +38,39 @@ export function podeAcrescentar(poderes: PoderesSobreALista, listados: number, v
 }
 
 /**
+ * **O titular tem uma fonte só: `reservations.contact_id`** (spec §6). É a
+ * mesma pergunta que o domínio faz (`id == r.Lead` em `guests.CheckRemove` e
+ * `CheckAdd`), e é a única que a tela faz.
+ *
+ * Nem `is_lead_guest` nem a posição na lista decidem. O banco garante que a
+ * linha marcada, quando existe, é a do contato da reserva — mas "ao menos um
+ * titular" é regra da aplicação, e uma correção manual por SQL deixa a lista
+ * sem a linha do titular, ou com ele desmarcado. Escolher pelo marcador (ou
+ * pelo primeiro da lista) promoveu um acompanhante a cliente: foi o defeito que
+ * abriu o F2-22, e o do cartão "Cliente" que o QA achou depois dele.
+ */
+export function ehTitular(hospede: Pick<HospedeDaReserva, "contact_id">, contatoDaReserva: string): boolean {
+  return hospede.contact_id === contatoDaReserva;
+}
+
+/**
+ * O titular, se ele está na lista — **nunca** outro no lugar dele. `null` quer
+ * dizer "a lista não tem a linha do titular"; quem desenha cai no contato da
+ * reserva (`contact_name`/`contact_id`), não no primeiro acompanhante.
+ */
+export function titularNaLista(hospedes: readonly HospedeDaReserva[], contatoDaReserva: string): HospedeDaReserva | null {
+  return hospedes.find((h) => ehTitular(h, contatoDaReserva)) ?? null;
+}
+
+/**
  * "Retirar" só nos acompanhantes. O titular é a projeção de
  * `reservations.contact_id`: retirá-lo é `409 RESOURCE_IN_USE`, e troca-se o
- * titular editando a reserva, que traz a lista junto.
+ * titular editando a reserva, que traz a lista junto. `titular` vem de
+ * `ehTitular` — o mesmo critério do servidor, para a tela não oferecer o botão
+ * que ele recusa.
  */
-export function podeRetirar(hospede: Pick<HospedeDaReserva, "is_lead_guest">, poderes: PoderesSobreALista): boolean {
-  return poderes.editavel && poderes.podeEditar && !hospede.is_lead_guest;
+export function podeRetirar(titular: boolean, poderes: PoderesSobreALista): boolean {
+  return poderes.editavel && poderes.podeEditar && !titular;
 }
 
 /**

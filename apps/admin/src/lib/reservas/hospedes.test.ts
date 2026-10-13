@@ -8,6 +8,7 @@ import { normalizarCodigo } from "@/lib/api/codigos";
 import { mensagemDoErro, type Falha } from "@/lib/acoes/resultado";
 import {
   cabeAumentar,
+  ehTitular,
   lerListaCheia,
   mensagemDaLista,
   numeroParaMaisUm,
@@ -15,7 +16,9 @@ import {
   podeAbrirLugar,
   podeAcrescentar,
   podeRetirar,
+  titularNaLista,
 } from "@/lib/reservas/hospedes";
+import type { HospedeDaReserva } from "@/lib/reservas/tipos";
 
 /**
  * A rooming list (F2-22) do lado do painel: os portões dos botões e as frases
@@ -88,15 +91,46 @@ describe("Acrescentar hóspede — só com tudo junto", () => {
   });
 });
 
+describe("o titular tem uma fonte só: reservations.contact_id (spec §6)", () => {
+  const CLIENTE = "c-carlos";
+  const carlos = { contact_id: CLIENTE, name: "Carlos Andrade", is_lead_guest: true } as HospedeDaReserva;
+  const bia = { contact_id: "c-bia", name: "Beatriz Andrade", is_lead_guest: false } as HospedeDaReserva;
+
+  it("é titular quem é o contato da reserva — com ou sem o marcador da linha", () => {
+    expect(ehTitular(carlos, CLIENTE)).toBe(true);
+    // Correção manual por SQL desmarcou a linha: continua sendo o cliente.
+    const desmarcado: HospedeDaReserva = { ...carlos, is_lead_guest: false };
+    expect(ehTitular(desmarcado, CLIENTE)).toBe(true);
+    expect(ehTitular(bia, CLIENTE)).toBe(false);
+  });
+
+  it("o marcador sozinho não faz titular", () => {
+    // Leitura velha no meio de uma troca de titular, ou dado corrigido à mão:
+    // quem decide é o contato da reserva, como no domínio (`id == r.Lead`).
+    const marcada: HospedeDaReserva = { ...bia, is_lead_guest: true };
+    expect(ehTitular(marcada, CLIENTE)).toBe(false);
+  });
+
+  it("acha o titular onde quer que ele esteja na lista", () => {
+    expect(titularNaLista([bia, carlos], CLIENTE)).toBe(carlos);
+  });
+
+  it("sem a linha do titular, devolve null — NUNCA o primeiro acompanhante", () => {
+    // Era o `?? guests[0]` do cartão "Cliente": promovia a Beatriz a cliente.
+    expect(titularNaLista([bia], CLIENTE)).toBeNull();
+    expect(titularNaLista([], CLIENTE)).toBeNull();
+  });
+});
+
 describe("Retirar — só acompanhante", () => {
   it("o titular nunca tem o botão, nem com tudo liberado", () => {
-    expect(podeRetirar({ is_lead_guest: true }, EDITA)).toBe(false);
+    expect(podeRetirar(true, EDITA)).toBe(false);
   });
 
   it("o acompanhante tem, com a lista editável e a permissão", () => {
-    expect(podeRetirar({ is_lead_guest: false }, EDITA)).toBe(true);
-    expect(podeRetirar({ is_lead_guest: false }, { editavel: false, podeEditar: true })).toBe(false);
-    expect(podeRetirar({ is_lead_guest: false }, { editavel: true, podeEditar: false })).toBe(false);
+    expect(podeRetirar(false, EDITA)).toBe(true);
+    expect(podeRetirar(false, { editavel: false, podeEditar: true })).toBe(false);
+    expect(podeRetirar(false, { editavel: true, podeEditar: false })).toBe(false);
   });
 });
 

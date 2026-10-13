@@ -141,6 +141,22 @@ func (s *Servico) Buscar(ctx context.Context, id uuid.UUID) (Reserva, error) {
 //
 // Os totais e as noites vêm do SNAPSHOT — nada é recalculado na leitura, senão
 // a tela mostraria o preço de hoje para uma venda de ontem.
+//
+// # Uma fotografia só
+//
+// A tela sai de várias consultas — a reserva (com o nome do titular), as
+// noites, a lista de hóspedes, a linha do tempo e a prévia do cancelamento — e
+// todas leem o MESMO instante do banco (`db.TxManager.Fotografia`: REPEATABLE
+// READ, READ ONLY). Em READ COMMITTED, cada uma via o que estivesse comitado no
+// instante dela, e o QA mediu a consequência: com o titular sendo trocado em
+// paralelo, de 2 a 9 em 120 leituras saíam com o cabeçalho dizendo "Ana" e a
+// lista marcando "Beto" como titular — a troca, que é atômica, comitava entre
+// a leitura da reserva e a da lista. O `/full` existe justamente para a tela
+// não montar estado intermediário; agora ela é inteira de antes da troca, ou
+// inteira de depois.
+//
+// O registro de acesso a dado pessoal fica FORA da fotografia (que não
+// escreve) e vem depois dela, com falha fechada — ver o fim da função.
 func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (ReservaCompleta, error) {
 	u, err := ator(ctx)
 	if err != nil {
@@ -148,31 +164,44 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (ReservaCompleta, 
 	}
 	so, eu := somenteMinhas(ctx, auth.AcaoVer), u.ID
 
-	reserva, err := s.repo.Buscar(ctx, u.PropertyID, id, so, eu)
+	var completa ReservaCompleta
+	err = s.tx.Fotografia(ctx, func(ctx context.Context) error {
+		reserva, err := s.repo.Buscar(ctx, u.PropertyID, id, so, eu)
+		if err != nil {
+			return err
+		}
+
+		// Recomeça do zero a cada tentativa: a repetição do TxManager não pode
+		// deixar campo de uma fotografia anterior na tela.
+		completa = ReservaCompleta{Reserva: reserva, Unidades: reserva.Unidades}
+		if completa.Noites, err = s.repo.NoitesDe(ctx, id); err != nil {
+			return err
+		}
+		completa.Linhas = AgruparEmLinhas(completa.Noites)
+		if completa.Hospedes, err = s.repo.HospedesDe(ctx, id); err != nil {
+			return err
+		}
+		completa.HospedesEditaveis = listaEditavel(reserva.Status)
+		if completa.Timeline, err = s.repo.TimelineDe(ctx, id); err != nil {
+			return err
+		}
+
+		// A prévia é o mesmo cálculo do ?dry_run=1, e lê a mesma fotografia.
+		// Falhar aqui não pode derrubar a tela inteira: reserva sem política
+		// congelada (dado antigo) simplesmente não tem prévia — essa recusa é
+		// decidida em Go, sem erro de SQL, e o resto continua legível. Erro de
+		// SQL dentro da fotografia (o banco caiu, a consulta estourou o tempo)
+		// aborta a transação e derruba a tela, como derrubaria qualquer outra
+		// leitura dela.
+		if Cancelavel(reserva.Status) {
+			if previa, err := s.simular(ctx, id, ""); err == nil {
+				completa.PreviaDoCancelamento = &previa
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return ReservaCompleta{}, err
-	}
-
-	completa := ReservaCompleta{Reserva: reserva, Unidades: reserva.Unidades}
-	if completa.Noites, err = s.repo.NoitesDe(ctx, id); err != nil {
-		return completa, err
-	}
-	completa.Linhas = AgruparEmLinhas(completa.Noites)
-	if completa.Hospedes, err = s.repo.HospedesDe(ctx, id); err != nil {
-		return completa, err
-	}
-	completa.HospedesEditaveis = listaEditavel(reserva.Status)
-	if completa.Timeline, err = s.repo.TimelineDe(ctx, id); err != nil {
-		return completa, err
-	}
-
-	// A prévia é o mesmo cálculo do ?dry_run=1. Falhar aqui não pode derrubar a
-	// tela inteira: reserva sem política congelada (dado antigo) simplesmente
-	// não tem prévia, e o resto continua legível.
-	if Cancelavel(reserva.Status) {
-		if previa, err := s.simular(ctx, id, ""); err == nil {
-			completa.PreviaDoCancelamento = &previa
-		}
 	}
 
 	// A rooming list sai com nome, documento e telefone CHEIOS (é de onde a
@@ -181,10 +210,10 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (ReservaCompleta, 
 	// rooming_list`, numa instrução só — a mesma gravação de GET
 	// /reservations/{id}/guests (service_hospedes.go).
 	//
-	// Por último, depois de toda leitura que pode falhar, e com falha FECHADA:
-	// se o registro não entra, a tela não sai. Reserva fora do escopo já
-	// respondeu 404 lá em cima, sem gravar nada; reserva sem hóspede não
-	// exibiu ninguém e não grava.
+	// Depois da fotografia, fora dela, e com falha FECHADA: a tela só volta ao
+	// handler se o registro entrou. Reserva fora do escopo já respondeu 404 lá
+	// dentro, sem gravar nada; reserva sem hóspede não exibiu ninguém e não
+	// grava.
 	if err := s.registrarHospedesExibidos(ctx, completa.Hospedes); err != nil {
 		return ReservaCompleta{}, err
 	}

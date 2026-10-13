@@ -19,6 +19,7 @@ import { mensagemDaReserva } from "@/lib/contatos/whatsapp";
 import { aumentarHospedes, retirarHospede } from "@/lib/reservas/acoes-de-hospedes";
 import { ESTADOS } from "@/lib/reservas/estados";
 import {
+  ehTitular,
   mensagemDaLista,
   numeroParaMaisUm,
   podeAbrirLugar,
@@ -44,14 +45,17 @@ import type { HospedeDaReserva, Reserva } from "@/lib/reservas/tipos";
  *   tem uma segunda cópia dos estados;
  * - **quem pode** é `reservations:editar` (esconde; quem barra é a API);
  * - **"Acrescentar"** só com lugar sobrando (menos nomes que o vendido);
- *   **"Retirar"** só nos acompanhantes — o titular se troca editando a reserva.
+ *   **"Retirar"** só nos acompanhantes — o titular se troca editando a reserva;
+ * - **quem é o titular** é `reservation.contact_id` (`ehTitular`), não o
+ *   marcador `is_lead_guest` nem a posição na lista: é o mesmo critério do
+ *   servidor, e uma lista corrigida à mão por SQL não muda quem é o cliente.
  *
  * Lista completa e mais gente chegando: o caminho do contrato é aumentar antes
  * o número de hóspedes da reserva (`PATCH guests_count`, conferido contra a
  * capacidade do produto), e é o que a seção oferece.
  */
 
-export type ReservaDaLista = Pick<Reserva, "id" | "code" | "status" | "guests_count">;
+export type ReservaDaLista = Pick<Reserva, "id" | "code" | "status" | "guests_count" | "contact_id">;
 
 export type PermissoesDaLista = {
   /** `reservations:editar`. */
@@ -159,15 +163,19 @@ export function SecaoDeHospedes({
         />
       ) : (
         <ul aria-label="Lista de hóspedes" className="mt-3 flex flex-col gap-2">
-          {hospedes.map((hospede) => (
-            <LinhaDoHospede
-              key={hospede.contact_id}
-              hospede={hospede}
-              codigoDaReserva={reserva.code}
-              retiravel={podeRetirar(hospede, poderes)}
-              aoRetirar={() => pedirRetirada(hospede)}
-            />
-          ))}
+          {hospedes.map((hospede) => {
+            const titular = ehTitular(hospede, reserva.contact_id);
+            return (
+              <LinhaDoHospede
+                key={hospede.contact_id}
+                hospede={hospede}
+                titular={titular}
+                codigoDaReserva={reserva.code}
+                retiravel={podeRetirar(titular, poderes)}
+                aoRetirar={() => pedirRetirada(hospede)}
+              />
+            );
+          })}
         </ul>
       )}
 
@@ -303,11 +311,14 @@ function Explicacao({
 
 function LinhaDoHospede({
   hospede,
+  titular,
   codigoDaReserva,
   retiravel,
   aoRetirar,
 }: {
   hospede: HospedeDaReserva;
+  /** `ehTitular` — o contato da reserva, não o marcador da linha. */
+  titular: boolean;
   codigoDaReserva: string;
   retiravel: boolean;
   aoRetirar: () => void;
@@ -329,7 +340,7 @@ function LinhaDoHospede({
           <Link href={`/app/contatos/${hospede.contact_id}`} className="font-medium hover:underline">
             {hospede.name}
           </Link>
-          {hospede.is_lead_guest ? <Badge variant="outline">Titular</Badge> : null}
+          {titular ? <Badge variant="outline">Titular</Badge> : null}
         </p>
         <p className="mt-0.5 font-mono text-xs text-muted-foreground">
           {documento ?? <span className="font-sans">Sem documento na ficha</span>}

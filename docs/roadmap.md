@@ -385,6 +385,14 @@ A API passou a devolver, na coleção, o schema `ContatoNaLista`: documento, tel
 
 ---
 
+### D14 — A lista de reservas monta a tela com quatro leituras soltas → aberta em 13/10/2026
+
+**Achada pelo `backend-go`** ao corrigir o defeito do QA no `/full` (F2-22): `GET /reservations` (`Servico.Listar`) faz a contagem, a página, `UnidadesDe` e `TelefonesDosClientes` em quatro instruções no pool, sem transação. Uma troca de titular que comite entre a página e o telefone mostra o nome do titular antigo ao lado do telefone do novo — e o `pii_access_log` (`reservation_list`) registra o id do antigo enquanto a tela exibe o telefone do novo. `meta.total` e a página também podem vir de instantes diferentes. Lido no código, não reproduzido; a janela é de milissegundos.
+
+**Definitivo**: as leituras dentro de `s.tx.Fotografia` (a mesma do `/full`, `REPEATABLE READ READ ONLY`) e a PII gravada depois, em falha fechada — com um teste de corrida no molde de `TestHospedesQACorridaEntreAbrirOFullETrocarOTitular`. `GET /reservations/{id}` (`Repository.Buscar`, reserva e `UnidadesDe`) tem a mesma forma, sem PII; entra junto. **Por que não agora**: é anterior ao F2-22 e não vaza dado — o que erra é o registro da leitura, numa janela estreita —, e o PR da rooming list não precisa crescer para fechá-la.
+
+---
+
 ### D13 — O "hoje" da casa tem cerca de dez cópias em SQL → aberta em 13/10/2026
 
 **Achada pelo `tech-lead`** ao desenhar a agenda: a regra 5 do CLAUDE.md pede o fuso num helper único, e o Go não tinha nenhum — são cerca de dez `(now() AT TIME ZONE p.timezone)::date` espalhados nos repositórios (`reservas`, `inventario`, `bens`, `disponibilidade`, `manutencao`) e um `vitrine.fusoDaCasa` com `time.LoadLocation("America/Fortaleza")` fixo, contra a ideia de o fuso ser dado da propriedade.

@@ -176,6 +176,48 @@ func NewTxManager(pool *pgxpool.Pool) *TxManager { return &TxManager{pool: pool}
 // 409 DATE_CONFLICT. Disputa de data jamais vira 500, com ou sem orçamento
 // sobrando.
 func (m *TxManager) Do(ctx context.Context, fn func(ctx context.Context) error) error {
+	return m.repetir(ctx, pgx.TxOptions{}, fn)
+}
+
+// opcoesDaFotografia são as da transação de Fotografia: um snapshot só, e
+// nenhuma escrita.
+var opcoesDaFotografia = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
+
+// Fotografia executa fn numa transação REPEATABLE READ e READ ONLY: todas as
+// leituras de fn enxergam o banco no MESMO instante, e nenhuma delas escreve.
+//
+// Existe para a tela montada com várias consultas. Em READ COMMITTED — o padrão
+// do pool e de Do — cada instrução enxerga o que estiver comitado no instante
+// DELA, e uma escrita que comita entre duas leituras da mesma tela mistura dois
+// estados na mesma resposta. Medido pelo QA da rooming list (13/10/2026): com
+// 40 trocas de titular e 120 aberturas do `/full` em paralelo, de 2 a 9
+// leituras saíam com o cabeçalho dizendo "Ana" e a lista de hóspedes marcando
+// "Beto" como titular — a troca tinha comitado entre a leitura da reserva e a
+// da lista. Em REPEATABLE READ o snapshot é tirado na primeira instrução da
+// transação e vale até o fim dela: a tela inteira é de antes da troca, ou
+// inteira de depois.
+//
+// READ ONLY porque fotografia não escreve: o banco recusa (25006) qualquer
+// INSERT, UPDATE, DELETE ou `SELECT ... FOR UPDATE` que entre por engano numa
+// leitura. A consequência para quem chama: o que a leitura precisa GRAVAR — o
+// registro de acesso a dado pessoal (`pii.Registrar`) — vai DEPOIS, fora dela,
+// e antes de a resposta sair (ver o `/full` em internal/modules/reservas). E
+// uma transação só de leitura em REPEATABLE READ nunca é abortada por conflito
+// de serialização: a escrita concorrente não espera por ela, e ela não espera
+// pela escrita.
+//
+// A repetição é a mesma de Do — só alcança a espera por trava de tabela (DDL),
+// já que leitura não trava linha.
+//
+// Dentro de uma transação que já existe, fn roda nela, como em Do: o
+// isolamento é o de quem a abriu, e um snapshot não se troca no meio.
+func (m *TxManager) Fotografia(ctx context.Context, fn func(ctx context.Context) error) error {
+	return m.repetir(ctx, opcoesDaFotografia, fn)
+}
+
+// repetir é o laço de Do e de Fotografia: abre a transação com `opcoes`, roda
+// fn e repete o que for contenção transiente, até o orçamento.
+func (m *TxManager) repetir(ctx context.Context, opcoes pgx.TxOptions, fn func(ctx context.Context) error) error {
 	if EmTransacao(ctx) {
 		// Transação aninhada reusa a de fora: commit interno não pode publicar
 		// metade do trabalho do service que chamou.
@@ -184,7 +226,7 @@ func (m *TxManager) Do(ctx context.Context, fn func(ctx context.Context) error) 
 
 	var err error
 	for tentativa := 1; ; tentativa++ {
-		err = m.executar(ctx, fn)
+		err = m.executar(ctx, opcoes, fn)
 		if err == nil || !ehTransiente(err) {
 			return err
 		}
@@ -218,8 +260,10 @@ func esperarAntesDeRepetir(ctx context.Context, tentativa int) bool {
 	}
 }
 
-func (m *TxManager) executar(ctx context.Context, fn func(ctx context.Context) error) (err error) {
-	tx, err := m.pool.Begin(ctx)
+func (m *TxManager) executar(ctx context.Context, opcoes pgx.TxOptions, fn func(ctx context.Context) error) (err error) {
+	// `pgx.TxOptions{}` é o BEGIN seco, o mesmo de `pool.Begin`: o isolamento e
+	// o modo de acesso padrão do servidor.
+	tx, err := m.pool.BeginTx(ctx, opcoes)
 	if err != nil {
 		return MapError(err)
 	}

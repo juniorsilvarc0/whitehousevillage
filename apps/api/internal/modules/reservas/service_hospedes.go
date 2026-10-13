@@ -38,35 +38,51 @@ const entidadeDoContato = "contacts"
 //
 // A leitura é a de UMA reserva, com o escopo de `ver` no SQL: fora do escopo é
 // 404 — nunca 403, que confirmaria que a reserva existe — e nada é gravado.
+//
+// O `meta` (o número vendido, se a lista se edita) e a lista saem da MESMA
+// fotografia do banco (`db.TxManager.Fotografia`), pelo mesmo motivo do `/full`:
+// lidos em instantes diferentes, um PATCH de `guests_count` ou uma troca de
+// titular comitada entre as duas leituras fariam a resposta dizer "cabem 1" ao
+// lado de dois nomes. Sem trava: leitura não espera — nem atrasa — a escrita em
+// curso na mesma reserva.
+//
 // Documento, telefone e e-mail saem cheios, então cada pessoa exibida grava uma
-// linha em `pii_access_log`, numa instrução, depois de toda leitura que pode
-// falhar e com falha FECHADA: se o registro não entra, a lista não sai.
+// linha em `pii_access_log`, numa instrução: depois da fotografia, fora dela (que
+// não escreve) e com falha FECHADA — se o registro não entra, a lista não sai.
 func (s *Servico) ListarHospedes(ctx context.Context, id uuid.UUID) (ListaDeHospedes, error) {
 	u, err := ator(ctx)
 	if err != nil {
 		return ListaDeHospedes{}, err
 	}
-	// Sem trava: é leitura, e segurar `FOR UPDATE` faria a lista esperar — e
-	// atrasar — a escrita em curso na mesma reserva.
-	e, err := s.repo.LerEstado(ctx, u.PropertyID, id, somenteMinhas(ctx, auth.AcaoVer), u.ID)
+
+	var out ListaDeHospedes
+	err = s.tx.Fotografia(ctx, func(ctx context.Context) error {
+		e, err := s.repo.LerEstado(ctx, u.PropertyID, id, somenteMinhas(ctx, auth.AcaoVer), u.ID)
+		if err != nil {
+			return err
+		}
+		hospedes, err := s.repo.HospedesDe(ctx, id)
+		if err != nil {
+			return err
+		}
+		out = ListaDeHospedes{
+			Hospedes: hospedes,
+			Meta: MetaDaListaDeHospedes{
+				GuestsCount: e.Hospedes,
+				Capacity:    e.Capacidade,
+				Editable:    listaEditavel(e.Status),
+			},
+		}
+		return nil
+	})
 	if err != nil {
 		return ListaDeHospedes{}, err
 	}
-	hospedes, err := s.repo.HospedesDe(ctx, id)
-	if err != nil {
+
+	if err := s.registrarHospedesExibidos(ctx, out.Hospedes); err != nil {
 		return ListaDeHospedes{}, err
 	}
-	if err := s.registrarHospedesExibidos(ctx, hospedes); err != nil {
-		return ListaDeHospedes{}, err
-	}
-	return ListaDeHospedes{
-		Hospedes: hospedes,
-		Meta: MetaDaListaDeHospedes{
-			GuestsCount: e.Hospedes,
-			Capacity:    e.Capacidade,
-			Editable:    listaEditavel(e.Status),
-		},
-	}, nil
+	return out, nil
 }
 
 // registrarHospedesExibidos grava UMA linha de `pii_access_log` por pessoa

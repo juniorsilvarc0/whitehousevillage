@@ -19,6 +19,7 @@ import { formatarData, formatarDataCurta, formatarInstante } from "@/lib/datas";
 import { formatarBRL, formatarPct } from "@/lib/dinheiro";
 import { rotuloDaOrigem } from "@/lib/origem";
 import { ESTADOS, rotuloDoMotivo } from "@/lib/reservas/estados";
+import { titularNaLista } from "@/lib/reservas/hospedes";
 import type { ReservaCompleta } from "@/lib/reservas/tipos";
 import { cn } from "@/lib/utils";
 
@@ -402,17 +403,25 @@ function Unidades({ completo }: { completo: ReservaCompleta }) {
  * Quem reservou — no topo, porque é a primeira coisa que a gestão faz com uma
  * pré-reserva: falar com o cliente para receber o sinal.
  *
- * O titular sai da rooming list (que já traz telefone e e-mail cheios e grava o
- * rastro em `pii_access_log` na leitura do `/full`); sem rooming list, sobra o
- * nome do contato da reserva e o link para a ficha.
+ * **O cliente é `reservation.contact_id`**, a fonte única do titular (spec §6).
+ * Da rooming list sai só o canal dele — telefone e e-mail cheios, que a leitura
+ * do `/full` já registrou em `pii_access_log` —, e só da linha cujo
+ * `contact_id` é o da reserva (`titularNaLista`).
+ *
+ * Sem essa linha, o cartão fica com o nome e a ficha do contato da reserva, sem
+ * telefone nem e-mail, que a reserva não traz. **Nunca** com o primeiro da
+ * lista: o banco aceita lista sem a linha do titular ("ao menos um titular" é
+ * regra da aplicação, e uma correção manual por SQL a desfaz), e cair em
+ * `guests[0]` punha o nome, o telefone, o WhatsApp e a ficha de um
+ * ACOMPANHANTE no lugar do cliente — o mesmo sintoma que abriu o F2-22.
  */
 function Cliente({ completo }: { completo: ReservaCompleta }) {
   const r = completo.reservation;
-  const titular = completo.guests.find((h) => h.is_lead_guest) ?? completo.guests[0] ?? null;
+  const titular = titularNaLista(completo.guests, r.contact_id);
   const nome = titular?.name ?? r.contact_name;
   const telefone = titular?.phone_e164 ?? null;
   const email = titular?.email ?? null;
-  const contatoId = titular?.contact_id ?? r.contact_id;
+  const contatoId = r.contact_id;
 
   return (
     <section
@@ -429,8 +438,12 @@ function Cliente({ completo }: { completo: ReservaCompleta }) {
           <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
             {telefone ? (
               <TelefoneClicavel telefone={telefone} />
-            ) : (
+            ) : titular ? (
               <span>Sem telefone na ficha</span>
+            ) : (
+              // Não é "sem telefone": a ficha pode ter. É a lista que não tem a
+              // linha do titular — e dizer isso é o que leva alguém a corrigir.
+              <span>O titular não está na lista de hóspedes: telefone e e-mail ficam na ficha.</span>
             )}
             {email ? (
               <a href={`mailto:${email}`} className="flex items-center gap-1.5 hover:text-foreground">

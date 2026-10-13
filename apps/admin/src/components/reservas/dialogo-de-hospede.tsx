@@ -31,6 +31,7 @@ import {
 } from "@/lib/reservas/acoes-de-hospedes";
 import {
   cabeAumentar,
+  ehTitular,
   lerListaCheia,
   mensagemDaLista,
   numeroParaMaisUm,
@@ -113,7 +114,7 @@ function erroDoDocumento(tipo: TipoDeDocumento): string {
     : `${ROTULO_DO_DOCUMENTO[tipo]} inválido — confira os dígitos.`;
 }
 
-export type ReservaDoDialogo = Pick<Reserva, "id" | "code" | "guests_count">;
+export type ReservaDoDialogo = Pick<Reserva, "id" | "code" | "guests_count" | "contact_id">;
 
 export function DialogoDeHospede({
   controle,
@@ -196,7 +197,7 @@ export function DialogoDeHospede({
     }
   }
 
-  const contatosNaLista = React.useMemo(() => new Map(hospedes.map((h) => [h.contact_id, h])), [hospedes]);
+  const contatosNaLista = React.useMemo(() => new Set(hospedes.map((h) => h.contact_id)), [hospedes]);
 
   // ── 1. Procurar ──────────────────────────────────────────────────────────
 
@@ -391,7 +392,11 @@ export function DialogoDeHospede({
               </p>
               <ul aria-label="Pessoas encontradas" className="flex flex-col gap-2">
                 {passo.encontrados.map((pessoa) => {
-                  const naLista = contatosNaLista.get(pessoa.id);
+                  // O titular é o contato da reserva, esteja ou não a linha dele
+                  // na lista: acrescentá-lo é `409 CODE_IN_USE` de qualquer
+                  // jeito (`CheckAdd` compara com `reservations.contact_id`).
+                  const titular = ehTitular({ contact_id: pessoa.id }, reserva.contact_id);
+                  const naLista = contatosNaLista.has(pessoa.id);
                   return (
                     <li
                       key={pessoa.id}
@@ -406,8 +411,8 @@ export function DialogoDeHospede({
                           </p>
                         ) : null}
                       </div>
-                      {naLista ? (
-                        <Badge variant="accent">{naLista.is_lead_guest ? "Titular desta reserva" : "Já está na lista"}</Badge>
+                      {titular || naLista ? (
+                        <Badge variant="accent">{titular ? "Titular desta reserva" : "Já está na lista"}</Badge>
                       ) : (
                         <Button
                           size="sm"

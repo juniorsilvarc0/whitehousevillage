@@ -37,7 +37,14 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
 }));
 
-const RESERVA: ReservaDaLista = { id: "r-1", code: "WH-2026-0042", status: "confirmed", guests_count: 4 };
+/** O cliente da reserva — a fonte única do titular — é o Carlos. */
+const RESERVA: ReservaDaLista = {
+  id: "r-1",
+  code: "WH-2026-0042",
+  status: "confirmed",
+  guests_count: 4,
+  contact_id: "c-carlos",
+};
 
 const CARLOS: HospedeDaReserva = {
   contact_id: "c-carlos",
@@ -180,6 +187,25 @@ describe("Retirar — só acompanhante", () => {
     expect(within(linhaDe("Beatriz Andrade")).getByRole("button", { name: /Retirar/ })).toBeTruthy();
   });
 
+  it("o titular é o contato da reserva, não o marcador da linha", () => {
+    // Lista corrigida à mão por SQL: o Carlos (cliente) veio desmarcado e a
+    // Beatriz, marcada. O servidor decide por `reservations.contact_id` —
+    // retirar o Carlos seria `409 RESOURCE_IN_USE` —, e a tela também.
+    desenhar({ hospedes: [{ ...CARLOS, is_lead_guest: false }, { ...BIA, is_lead_guest: true }] });
+    const carlos = linhaDe("Carlos Andrade");
+    const bia = linhaDe("Beatriz Andrade");
+    expect(within(carlos).getByText("Titular")).toBeTruthy();
+    expect(within(carlos).queryByRole("button", { name: /Retirar/ })).toBeNull();
+    expect(within(bia).queryByText("Titular")).toBeNull();
+    expect(within(bia).getByRole("button", { name: /Retirar/ })).toBeTruthy();
+  });
+
+  it("sem a linha do titular, ninguém é promovido a titular", () => {
+    desenhar({ hospedes: [BIA] });
+    expect(within(linhaDe("Beatriz Andrade")).queryByText("Titular")).toBeNull();
+    expect(within(linhaDe("Beatriz Andrade")).getByRole("button", { name: /Retirar/ })).toBeTruthy();
+  });
+
   it("ninguém tem o botão com a lista fechada ou sem permissão", () => {
     const { unmount } = desenhar({ editavel: false });
     expect(screen.queryAllByRole("button", { name: /Retirar/ })).toHaveLength(0);
@@ -260,6 +286,21 @@ describe("achou pelo documento", () => {
       data: [{ id: "c-carlos", name: "Carlos Andrade", doc_type: "cpf", doc_number: "***.***.777-35" }],
     });
     desenhar();
+    await procurar("111.444.777-35");
+    const encontrados = await screen.findByRole("list", { name: "Pessoas encontradas" });
+    expect(within(encontrados).getByText("Titular desta reserva")).toBeTruthy();
+    expect(within(encontrados).queryByRole("button", { name: /Acrescentar/ })).toBeNull();
+  });
+
+  it("o cliente da reserva é o titular mesmo fora da lista — sem botão de acrescentar", async () => {
+    // Lista sem a linha do titular (correção manual por SQL): a busca acha o
+    // Carlos, que não está na lista, mas acrescentá-lo é `409 CODE_IN_USE` —
+    // `CheckAdd` compara com `reservations.contact_id`.
+    acoes.procurarPorDocumento.mockResolvedValueOnce({
+      ok: true,
+      data: [{ id: "c-carlos", name: "Carlos Andrade", doc_type: "cpf", doc_number: "***.***.777-35" }],
+    });
+    desenhar({ hospedes: [BIA] });
     await procurar("111.444.777-35");
     const encontrados = await screen.findByRole("list", { name: "Pessoas encontradas" });
     expect(within(encontrados).getByText("Titular desta reserva")).toBeTruthy();
