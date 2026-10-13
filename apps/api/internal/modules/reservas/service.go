@@ -10,6 +10,7 @@ import (
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/commission"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/agenda"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/audit"
@@ -34,10 +35,26 @@ type Servico struct {
 	// o mesmo instante do banco.
 	orcamentos *disponibilidade.Servico
 	tx         *db.TxManager
+
+	// agenda recebe cada passo da reserva (agenda.go); efeitosDaConfirmacao
+	// são os efeitos do `/confirm`, com a agenda primeiro.
+	agenda               AgendaDaReserva
+	efeitosDaConfirmacao []EfeitoDaConfirmacao
 }
 
+// NovoServico monta o service com a agenda ligada.
+//
+// A ligação nasce AQUI, e não no router, de propósito: há três montagens deste
+// service (o handler de reservas, a vitrine e o CRM) e uma reserva confirmada
+// sem agenda não pode depender de quem a montou lembrar de ligar. A agenda usa
+// o mesmo pool, e as consultas dela pegam a transação da reserva pelo contexto.
 func NovoServico(repo *Repository, orcamentos *disponibilidade.Servico, tx *db.TxManager) *Servico {
-	return &Servico{repo: repo, orcamentos: orcamentos, tx: tx}
+	ligacao := agenda.NovaLigacao(repo.pool)
+	return &Servico{
+		repo: repo, orcamentos: orcamentos, tx: tx,
+		agenda:               ligacao,
+		efeitosDaConfirmacao: []EfeitoDaConfirmacao{ligacao},
+	}
 }
 
 // Resultado é o que o handler escreve. Ele existe por causa da idempotência: a

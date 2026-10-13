@@ -50,6 +50,7 @@ func (a *ambiente) corretorVinculado(t *testing.T, perfil uuid.UUID) (uuid.UUID,
 	// então o cadastro e o contato.
 	t.Cleanup(func() {
 		a.executar(t, `UPDATE users SET broker_id = NULL WHERE id = $1`, conta)
+		a.executar(t, `DELETE FROM agenda_events WHERE reservation_id IN (SELECT id FROM reservations WHERE broker_id = $1)`, corretor)
 		a.executar(t, `DELETE FROM reservations WHERE broker_id = $1`, corretor)
 		a.executar(t, `DELETE FROM brokers WHERE id = $1`, corretor)
 		a.executar(t, `DELETE FROM contacts WHERE id = $1`, contato)

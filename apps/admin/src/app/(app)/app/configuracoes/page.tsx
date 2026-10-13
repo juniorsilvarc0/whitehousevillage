@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CalendarDays, Calculator, Package, ScrollText, Table2 } from "lucide-react";
+import { CalendarDays, Calculator, Clock, Package, ScrollText, Table2 } from "lucide-react";
 
 import { SemAcesso } from "@/components/layout/estados";
 import { CabecalhoDeTela, Nota, Tela } from "@/components/layout/tela";
@@ -63,6 +63,20 @@ const AREAS: Area[] = [
     recurso: "settings",
     acao: "ver",
     icone: ScrollText,
+  },
+  {
+    // A tela LÊ com `agenda:ver` (o `x-rbac` de `GET /agenda/settings`) e GRAVA
+    // com `settings:editar`. O cartão daqui, porém, pede `settings`: é o
+    // horário que a casa promete ao hóspede, decisão do dono (spec §16), e
+    // declarar `agenda:ver` abriria esta página de Configurações ao corretor e
+    // ao `usuario` — que a spec mantém fora dela (§1, §11). Quem opera a agenda
+    // chega aos horários, para ler, pelo botão "Horários" da própria agenda.
+    titulo: "Horários da agenda",
+    descricao: "Check-in, check-out, janela de limpeza, funcionamento por dia, passo da grade e folga entre compromissos.",
+    href: "/app/configuracoes/agenda",
+    recurso: "settings",
+    acao: "ver",
+    icone: Clock,
   },
 ];
 

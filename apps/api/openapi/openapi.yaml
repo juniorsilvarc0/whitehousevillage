@@ -208,6 +208,80 @@ tags:
       `GET /units/{id}/inventory`), que pedem `inventory.goods:ver`. Os dois
       perfis que recebem `maintenance` no seed também recebem esse; um perfil
       futuro só de manutenção precisará dele para usar o formulário.
+  - name: Agenda
+    description: |
+      Agenda operacional (spec §9, backlog F2-19 a F2-21): o que a operação faz,
+      onde e quando — **check-in, check-out, limpeza, manutenção, visita, evento
+      e bloqueio**. Regras puras em `internal/domain/agenda`; o relógio da casa
+      em `internal/domain/calendar` (`Zone`, a única conversão entre hora de
+      parede e instante no Go). Schema em `agenda_events`, `agenda_blocks` e
+      `agenda_settings` (`docs/db.md` §9).
+
+      **Recurso RBAC: `agenda`** (`supports_own = true`); gravar os horários
+      pede `settings:editar`. `admin` e `usuario` em `all`; o `corretor` em
+      `own`. **`own` na agenda é `assignee_id = <ator>` no SQL** — da lista, do
+      detalhe, da edição, da conclusão e do cancelamento. Fora do escopo é
+      **`404`, nunca `403`**: "existe, mas não é seu" já vaza que existe. Em
+      `own`, o responsável de toda escrita é o próprio ator (ausente vira ele;
+      outro valor, inclusive `null`, é `403 FORBIDDEN` com
+      `details.reason: assignee_not_actor`), e o que não tem responsável — os
+      eventos automáticos, os derivados — não aparece.
+
+      Cinco regras atravessam a tag:
+
+      1. **A agenda segue a reserva, e nunca a trava.** Confirmar põe
+         check-in, check-out e limpeza (`origin: reservation`); cancelar os
+         cancela; registrar a entrada e a saída os conclui; remarcar é cancelar
+         a original e confirmar a nova; realocar não precisa mexer neles,
+         porque **o evento automático guarda a reserva, e só**: a unidade e o
+         titular são lidos dela a cada leitura. O que é da agenda — o horário
+         combinado, o responsável, a anotação, o estado — é gravado. Nenhuma
+         venda é recusada por causa da agenda: se ela cria um conflito com o
+         que já estava marcado, o conflito aparece (`has_unit_conflict`).
+      2. **Conflito de unidade bloqueia; conflito de horário avisa** (spec §9,
+         de propósito). Unidade: o evento cruza, numa das unidades dele, a
+         estadia de um hóspede, uma limpeza, um check-in ou check-out, uma
+         visita, um evento, uma manutenção ou um bloqueio — `409
+         UNIT_NOT_AVAILABLE` com `details.conflicts` (a unidade, o que a ocupa
+         e a janela; nunca id, título ou pessoa). Horário: fora do
+         funcionamento, dentro de um bloqueio de horário da operação, ou com o
+         responsável sem a folga entre compromissos — `201`/`200` com
+         `meta.warnings`, nunca recusa. O evento ligado a uma reserva não
+         colide com a ESTADIA dela (a faxina do meio da estadia, o casamento
+         do grupo que alugou a casa).
+      3. **Manutenção e bloqueio de unidade são lidos, não copiados.** Aparecem
+         na lista lidos de `stay_blocks` (`origin: maintenance` e
+         `stay_block`), o dia inteiro, e mexem-se onde nasceram — a ordem de
+         manutenção e `/blocks`. Uma cópia seria uma segunda fonte, e as duas
+         divergiriam no primeiro bloqueio estendido por um caminho que não
+         soubesse da agenda.
+      4. **Os horários são dado**, em `GET|PUT /agenda/settings`: check-in,
+         check-out, janela de limpeza, funcionamento, passo da grade e folga.
+         Os que nascem no banco são **provisórios, a confirmar pelo dono**
+         (decisão 12 do roadmap): `provisional: true` até a primeira gravação
+         por uma pessoa.
+      5. **Instante no fuso da casa.** Toda data-hora de resposta sai no
+         offset da propriedade (`"2026-11-20T14:00:00-03:00"`), e toda data
+         civil (`from`, `to`, `date`, `today`) é dia da casa. Evento de dia
+         inteiro começa e termina à meia-noite DA CASA. O painel não converte
+         fuso para agrupar: usa `date`; e "hoje" é o `today` de
+         `GET /agenda/settings`, não o relógio do navegador.
+
+      **Dado pessoal na resposta** (regra do topo deste arquivo): nenhuma rota
+      desta tag devolve documento, telefone ou e-mail. O evento guarda
+      `contact_id` — o id, e não o nome, para a anonimização não deixar cópia
+      numa tabela que meio time lê (F2-19) —, e a resposta traz
+      `contact_name`, lido do contato na hora, como toda coleção traz o nome
+      (sem máscara, que o nome não tem). Por isso nenhuma rota daqui grava
+      `pii_access_log`, nem a lista nem o detalhe; quem precisa do telefone do
+      hóspede abre a reserva (`GET /reservations/{id}/full`), que registra.
+      `assignee_name` e `updated_by_name` são nomes de **usuário**.
+
+      **Toda escrita vai para `audit_log`** — a feita aqui e a que a reserva
+      provoca. **Sem `Idempotency-Key`**: nenhuma rota daqui cria reserva nem
+      dinheiro, e os duplicados que importam são recusados pelo banco — o
+      segundo evento automático da mesma reserva (índice único) e o segundo
+      evento manual na mesma unidade e hora (constraint `EXCLUDE`).
   - name: Tarifário
     description: Tarifas, calendário comercial e políticas — tudo dado versionado, e nada reescreve o passado.
   - name: Contatos
@@ -3613,6 +3687,22 @@ paths:
         Hold vencido responde `409 HOLD_EXPIRED` — as unidades já foram
         liberadas, e confirmar por cima seria vender uma data que talvez já tenha
         outro dono.
+
+        ## Na agenda (F2-20), no mesmo commit
+
+        Confirmar põe na agenda (tag Agenda) o **check-in** no dia da entrada,
+        o **check-out** e a **limpeza** no dia da saída, pelos horários de
+        `GET /agenda/settings` (`agenda.Plan`): `origin: reservation`,
+        `agendado`, sem responsável. Os três guardam só a reserva — a unidade e
+        o titular são lidos dela. Nenhum é recusado por conflito na agenda: a
+        venda vence, e o conflito aparece em `has_unit_conflict`.
+
+        Repetir com a mesma `Idempotency-Key` devolve a resposta guardada e não
+        cria nada; e o banco não aceita um segundo check-in, check-out ou
+        limpeza automáticos para a mesma reserva (índice único
+        `(reservation_id, type)` das linhas de origem `reservation`). Os
+        recebíveis e a comissão (F2-12, F2-13) entram neste mesmo passo, na
+        mesma transação, quando o financeiro existir.
       x-rbac: { recurso: reservations, acao: editar }
       parameters:
         - name: Idempotency-Key
@@ -3680,6 +3770,14 @@ paths:
 
         Cancelar reserva já em `cancelled`, `expired`, `no_show`, `checked_out`
         ou `closed` é `409 RESERVATION_NOT_CANCELLABLE`.
+
+        **Na agenda (F2-20), no mesmo commit** (`agenda.OnCancel`): sem o
+        hóspede ter entrado, todo evento `agendado` ligado à reserva vira
+        `cancelado` — os três automáticos e os marcados à mão — e nada é
+        apagado. Com o hóspede dentro (`checked_in`), o check-out automático é
+        cancelado, a limpeza automática vem para hoje (se estava para depois:
+        as noites restantes voltaram à venda) e o evento manual que ainda não
+        começou é cancelado. `dry_run` não mexe na agenda.
       x-rbac: { recurso: reservations, acao: editar }
       parameters:
         - name: dry_run
@@ -3730,6 +3828,12 @@ paths:
         As duas coisas acontecem na mesma transação, e por isso o
         `DATE_CONFLICT` da nova data não deixa a reserva antiga cancelada: ou as
         duas mudanças valem, ou nenhuma vale.
+
+        **Na agenda (F2-20)**: é cancelar a original e emitir a nova, na mesma
+        transação. Os eventos `agendado` da original viram `cancelado`; a nova,
+        quando nasce `confirmed`, ganha os três dela (`agenda.Plan`) nas datas
+        novas, pelos horários vigentes. O que foi ajustado à mão na original —
+        responsável, horário, anotação — não é copiado: valia para outra data.
       x-rbac: { recurso: reservations, acao: editar }
       parameters:
         - name: Idempotency-Key
@@ -3804,6 +3908,10 @@ paths:
         ser prova. Medido em 26/08/2026: `WH-2026-0001`, estadia de 14 a
         16/09/2026, aceitou `at: 2019-01-01T10:00:00-03:00` com `200` e gravou o
         evento `checked_in` sete anos antes da reserva existir.
+
+        **Na agenda (F2-20)** (`agenda.OnCheckIn`): o check-in automático vira
+        `concluido`, com `done_at` = o instante registrado. A janela não muda —
+        o hóspede que chega às 19:00 chegou atrasado para o das 14:00.
       x-rbac: { recurso: reservations, acao: editar }
       requestBody:
         required: false
@@ -3873,6 +3981,12 @@ paths:
 
         `closed` (acerto financeiro final e devolução de caução) é passo do
         módulo financeiro e **não** tem endpoint na Fase 1.
+
+        **Na agenda (F2-20)** (`agenda.OnCheckOut`): o check-out automático
+        vira `concluido`. Saída **antecipada** (num dia anterior ao
+        `check_out`) traz o check-out e a limpeza automáticos para o dia em que
+        a unidade esvaziou — as noites restantes voltaram à venda, e quem entra
+        amanhã precisa da unidade limpa hoje.
       x-rbac: { recurso: reservations, acao: editar }
       requestBody:
         required: false
@@ -3922,6 +4036,16 @@ paths:
 
         Produto `all_members` (a White House Completa) não realoca: ele já ocupa
         todas as unidades, não há para onde mover.
+
+        **Na agenda (F2-20)**: os eventos automáticos não têm unidade gravada —
+        ela é lida da reserva, e eles já aparecem na unidade nova. O evento
+        manual `agendado` ligado à reserva e preso à unidade que saiu muda
+        junto, na mesma transação (`agenda.MovesOnReassign`); o concluído fica
+        onde aconteceu. **A agenda nunca trava a realocação**: se esse evento
+        cair, na unidade de destino, sobre outra marcação manual, ele muda
+        **sem unidade própria** (`unit_id = null`, passa a ocupar as unidades
+        da reserva) em vez de a realocação virar `409` — e a lista da agenda o
+        mostra com `has_unit_conflict` para a operação resolver.
       x-rbac: { recurso: reservations, acao: editar }
       requestBody:
         required: true
@@ -7938,6 +8062,582 @@ paths:
           description: "`MAINTENANCE_ORDER_CLOSED` — ordem encerrada."
           $ref: "#/components/responses/Erro"
 
+  # ───────── Agenda (spec §9, F2-19 a F2-21) ─────────
+  /agenda/events:
+    get:
+      tags: [Agenda]
+      summary: A agenda numa janela de dias — a fonte das visões de dia, semana, mês e lista
+      description: |
+        Devolve os eventos que **cruzam** a janela `[from, to)` — dias da casa,
+        half-open, como a estadia —, ordenados por início e, no empate, por
+        `id`. As quatro visões do painel usam esta mesma rota: dia
+        (`to = from + 1`), semana, mês (a grade inteira, até 6 semanas) e
+        lista. A janela é de no máximo **92 dias**.
+
+        Vêm juntos, no mesmo envelope e na mesma paginação:
+
+        - os eventos **gravados** (`origin: reservation` e `manual`);
+        - a **manutenção** e o **bloqueio de unidade**, lidos de `stay_blocks`
+          na hora (`origin: maintenance` para `source = 'maintenance'`,
+          `origin: stay_block` para `owner_hold` e `ota`), só enquanto ocupam o
+          calendário (`confirmed`): `type` `manutencao` ou `bloqueio`,
+          `all_day: true`, `status: agendado`, `editable: nada`,
+          `allowed_actions: []`. O `id` deles é o da linha de `stay_blocks`, e
+          `GET /agenda/events/{id}` **não** os serve: a tela abre a ordem
+          (`maintenance_order_id`) ou o bloqueio (`stay_block_id`), que é onde
+          eles se mexem.
+
+        **Não** vêm os bloqueios de horário da operação nem o horário de
+        funcionamento: são restrições, e não eventos — saem de
+        `GET /agenda/blocks` e `GET /agenda/settings`, e o painel os desenha
+        como fundo da grade.
+
+        **Escopo `own`**: só os eventos gravados com `assignee_id = <ator>`,
+        filtrados no SQL — `meta.total` é a contagem do escopo, não da agenda.
+        Os derivados não aparecem: não têm responsável.
+
+        Paginação no envelope padrão, `per_page` até 100, como em toda lista:
+        as visões de calendário pedem a janela inteira e seguem
+        `meta.total_pages`.
+
+        `has_unit_conflict` é calculado na leitura, pela MESMA regra que recusa
+        a escrita (`agenda.UnitConflicts`): o evento que já estava na agenda
+        quando a venda, a manutenção ou a outra marcação chegou passa a
+        colidir, e a lista mostra.
+      x-rbac: { recurso: agenda, acao: ver }
+      parameters:
+        - { name: from, in: query, schema: { type: string, format: date, example: "2026-11-01" }, description: "Primeiro dia da janela (dia da casa). Obrigatório, exceto com `reservation_id`." }
+        - { name: to,   in: query, schema: { type: string, format: date, example: "2026-12-01" }, description: "Dia seguinte ao último (exclusivo). Obrigatório com `from`; `to > from` e no máximo 92 dias depois." }
+        - { name: type, in: query, schema: { type: string, example: "checkin,checkout" }, description: "Um ou mais `TipoDeEventoDaAgenda`, separados por vírgula." }
+        - { name: status, in: query, schema: { type: string, default: "agendado,concluido", example: "cancelado" }, description: "Um ou mais `StatusDoEventoDaAgenda`, separados por vírgula. O padrão esconde os cancelados." }
+        - { name: unit_id, in: query, schema: { type: string, format: uuid }, description: "Os eventos que ocupam a unidade: a gravada no manual, as da reserva no automático e no manual sem unidade, a do bloqueio no derivado." }
+        - { name: assignee_id, in: query, schema: { type: string, format: uuid } }
+        - { name: unassigned, in: query, schema: { type: boolean }, description: "`true` = só os sem responsável (a limpeza que ninguém pegou); `false` = só os com. Junto com `assignee_id` é `422`." }
+        - { name: reservation_id, in: query, schema: { type: string, format: uuid }, description: "Os eventos ligados à reserva — os automáticos e os manuais. Dispensa `from` e `to`." }
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: sort,     in: query, schema: { type: string, default: starts_at, enum: [starts_at, -starts_at] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/EventoDaAgenda" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: |
+            `VALIDATION_ERROR` — `from`/`to` ausentes sem `reservation_id`,
+            `to ≤ from`, janela acima de 92 dias, `type` ou `status` fora do
+            vocabulário, `unassigned` que não seja `true` nem `false`,
+            `unassigned` junto com `assignee_id`, `sort` fora da lista, id mal
+            formado. Filtro inválido nunca vira lista inteira fingindo que
+            filtrou (D12).
+          $ref: "#/components/responses/Erro"
+    post:
+      tags: [Agenda]
+      summary: Marca um evento à mão — visita, evento ou limpeza avulsa
+      description: |
+        Nasce `agendado`, com `origin: manual`, `created_by` = quem marcou.
+        Check-in e check-out não se marcam à mão (nascem da reserva);
+        manutenção é a ordem de manutenção (`/maintenance-orders`); bloqueio de
+        unidade é `POST /blocks`; bloqueio de horário da operação é
+        `POST /agenda/blocks`.
+
+        ## Unidade, reserva, pessoa e responsável
+
+        - `unit_id` é uma unidade **ativa** da propriedade. Sem ele, o evento
+          ligado a uma reserva ocupa **as unidades da reserva** (o casamento do
+          grupo que alugou a Completa ocupa a casa); sem nenhum dos dois, não
+          ocupa unidade (a reunião com o fornecedor).
+        - `reservation_id` é uma reserva da propriedade em `hold`, `confirmed`
+          ou `checked_in`; com `unit_id`, a unidade tem de ser uma das dela
+          (`422` em `unit_id`). Cancelar a reserva segue `agenda.OnCancel`:
+          se o hóspede não chegou a entrar, cancela todo evento `agendado`
+          ligado a ela; com o hóspede hospedado, cancela o manual que ainda não
+          começou, e o que já começou fica, porque aconteceu.
+        - `contact_id` é um contato da propriedade, não anonimizado — o cliente
+          da visita. Só o id é gravado.
+        - `assignee_id` é um usuário ativo da propriedade. Em escopo `own`,
+          ausente vira o próprio ator, e qualquer outro valor — inclusive
+          `null` — é `403` (`details.reason: assignee_not_actor`).
+
+        ## Conflito: unidade recusa, horário avisa
+
+        Numa das unidades do evento, cruzar a estadia de um hóspede (da hora de
+        entrada do primeiro dia à hora de saída do último — a combinada, quando
+        o check-in ou o check-out da reserva foram ajustados), uma limpeza, um
+        check-in ou check-out, uma visita ou evento agendado, uma manutenção ou
+        um bloqueio de unidade é **`409 UNIT_NOT_AVAILABLE`**, e nada é criado.
+        `details.conflicts` lista cada colisão (`ConflitoDeUnidade`). A disputa
+        entre duas marcações manuais na mesma unidade é decidida pelo **banco**
+        (constraint `EXCLUDE`, `23P01` → este mesmo `409`), não por SELECT antes
+        do INSERT.
+
+        Fora do horário de funcionamento, dentro de um bloqueio de horário da
+        operação, ou com o responsável sem a folga (`buffer_minutes`) entre
+        compromissos, o evento **é criado** — `201` com `meta.warnings`.
+
+        ## A janela
+
+        Half-open, `starts_at < ends_at`; `ends_at` ausente é `starts_at` + um
+        passo da grade (`slot_minutes`). Até 31 dias de duração; o começo de um
+        ano atrás até três anos à frente. `all_day: true` exige `starts_at` e
+        `ends_at` à **meia-noite da casa** (`2026-11-20T00:00:00-03:00`, e não a
+        meia-noite do navegador) e não recebe aviso de horário.
+      x-rbac: { recurso: agenda, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventoDaAgendaCriar" }
+      responses:
+        "201":
+          description: Marcado — com os avisos de horário, se houver
+          headers:
+            Location:
+              description: URI do evento criado.
+              schema: { type: string, example: /api/v1/agenda/events/5b0c6f0e-2a8d-4d51-9a77-0d7b1f2c3e44 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EscritaNaAgenda" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403":
+          description: "`FORBIDDEN` — sem `agenda:criar`; ou, em escopo `own`, `assignee_id` que não é o ator (`details.field: assignee_id`, `details.reason: assignee_not_actor`)."
+          $ref: "#/components/responses/Erro"
+        "409":
+          description: "`UNIT_NOT_AVAILABLE` — a unidade está ocupada na janela; `details.conflicts`. Nada foi criado."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — `type` fora de `visita|evento|limpeza`; `title`
+            vazio; janela inválida (`starts_at`, `ends_at`); dia inteiro fora da
+            meia-noite da casa; `unit_id`, `reservation_id`, `contact_id` ou
+            `assignee_id` inexistente, de outra propriedade, inativo ou
+            anonimizado; reserva fora de `hold|confirmed|checked_in`; unidade que
+            não é da reserva; campo desconhecido.
+          $ref: "#/components/responses/Erro"
+
+  /agenda/events/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Agenda]
+      summary: Detalhe do evento gravado
+      description: |
+        Só eventos gravados (`origin: reservation` ou `manual`): o id de um
+        derivado de `stay_blocks` é `404` aqui. Em escopo `own`, evento de
+        outro responsável (ou sem responsável) é `404`, nunca `403`.
+      x-rbac: { recurso: agenda, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/EventoDaAgenda" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Agenda]
+      summary: Substitui o evento
+      description: |
+        **Evento manual agendado** (`editable: tudo`): substitui tudo que o
+        `POST` aceita, com as mesmas regras de conflito e de aviso. Campo
+        anulável omitido vira `null`, como em todo `PUT`; `assignee_id`
+        omitido é ninguém em `all` e o próprio ator em `own`.
+
+        **Evento automático agendado** (`editable: segue_a_reserva`): só o
+        horário, o responsável e a anotação mudam. `type`, `title`, `all_day`,
+        `unit_id`, `reservation_id` e `contact_id` são da reserva — omitidos
+        ficam como estão, repetidos passam, diferentes são `422` no campo
+        ("segue a reserva"). Check-in e check-out mudam de **hora**, não de dia
+        (o dia é o da reserva). A limpeza pode ir para depois — inclusive para
+        outro dia, quando a equipe só vem amanhã —, nunca para antes do fim do
+        check-out da reserva. Mover o check-out para depois pode cruzar a
+        limpeza da mesma unidade: é `409 UNIT_NOT_AVAILABLE`, e a ordem certa é
+        mover a limpeza primeiro.
+
+        **Concluído** (`so_notas`): só `notes` muda; o resto repetido passa,
+        diferente é `409 AGENDA_EVENT_CLOSED`. **Cancelado** (`nada`): qualquer
+        mudança é `409 AGENDA_EVENT_CLOSED`.
+
+        Estado não muda por aqui — só por `/complete` e `DELETE`. Responde com
+        `meta.warnings` quando a janela mudou.
+      x-rbac: { recurso: agenda, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventoDaAgendaSubstituir" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EscritaNaAgenda" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403":
+          description: "`FORBIDDEN` — sem `agenda:editar`; ou, em escopo `own`, `assignee_id` que não é o ator."
+          $ref: "#/components/responses/Erro"
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `UNIT_NOT_AVAILABLE` — a janela nova cruza outra ocupação da unidade
+            (`details.conflicts`); nada mudou. `AGENDA_EVENT_CLOSED` — o estado
+            não aceita a mudança (`details.status`, `details.editable`).
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Agenda]
+      summary: Atualiza o evento — é por aqui que se troca o responsável ou o horário
+      description: |
+        Campo ausente não muda nada; `null` limpa (`Opt[T]`). As mesmas regras
+        do `PUT`, campo a campo: no automático, só `starts_at`, `ends_at`,
+        `assignee_id` e `notes`; no concluído, só `notes`; no cancelado, nada.
+        Corpo vazio responde `200` sem mudar nada, em qualquer estado.
+      x-rbac: { recurso: agenda, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EventoDaAgendaAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EscritaNaAgenda" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`UNIT_NOT_AVAILABLE` ou `AGENDA_EVENT_CLOSED`, como no `PUT`."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Agenda]
+      summary: Desmarca o evento manual
+      description: |
+        **Cancela, não apaga** — o "excluir" de um registro com histórico
+        (`docs/api.md` §2): `status: cancelado`, `cancelled_at` do servidor. A
+        visita desmarcada continua na agenda como desmarcada.
+
+        Só o evento **manual** agendado se desmarca. O automático segue a
+        reserva — sai da agenda quando a reserva é cancelada —, e o pedido é
+        `409 INVALID_STATE_TRANSITION` com `details.reason: segue_a_reserva`.
+        Já concluído ou cancelado é `409 AGENDA_EVENT_CLOSED`.
+
+        Responde `200` com o evento como ficou, e não `204`.
+      x-rbac: { recurso: agenda, acao: excluir }
+      responses:
+        "200":
+          description: Desmarcado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/EventoDaAgenda" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `INVALID_STATE_TRANSITION` — evento automático
+            (`details.reason: segue_a_reserva`, `details.allowed`).
+            `AGENDA_EVENT_CLOSED` — já concluído ou cancelado.
+          $ref: "#/components/responses/Erro"
+
+  /agenda/events/{id}/complete:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Agenda]
+      summary: Marca o evento como feito — a limpeza terminou, a visita aconteceu
+      description: |
+        `agendado → concluido`, com `done_at` e `done_by` do servidor. Sem
+        corpo.
+
+        Concluem por aqui o evento **manual** e a **limpeza automática** (quem
+        limpa marca no celular). O check-in e o check-out automáticos concluem
+        pela reserva — `POST /reservations/{id}/check-in` e `/check-out` —, e o
+        pedido aqui é `409 INVALID_STATE_TRANSITION` com
+        `details.reason: segue_a_reserva`: duas portas para o mesmo fato
+        divergiriam, e a reserva diria "não entrou" com a agenda dizendo
+        "entrou".
+
+        Só do dia do evento em diante (dia da casa): concluir a limpeza de
+        amanhã é `409 INVALID_STATE_TRANSITION` com
+        `details.reason: nao_comecou`. Já fechado é
+        `409 AGENDA_EVENT_CLOSED`.
+      x-rbac: { recurso: agenda, acao: editar }
+      responses:
+        "200":
+          description: Concluído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/EventoDaAgenda" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `INVALID_STATE_TRANSITION` — check-in/check-out automático
+            (`segue_a_reserva`) ou evento de dia futuro (`nao_comecou`), com
+            `details.allowed`. `AGENDA_EVENT_CLOSED` — já fechado.
+          $ref: "#/components/responses/Erro"
+
+  /agenda/blocks:
+    get:
+      tags: [Agenda]
+      summary: Bloqueios de horário da operação numa janela de dias
+      description: |
+        "Equipe em treinamento das 14:00 às 16:00", "operação fechada no dia da
+        dedetização". Não ocupam unidade — são do TEMPO da operação — e não
+        recusam nada: o evento marcado em cima deles recebe o aviso
+        `bloqueio_de_horario`. Para tirar uma unidade de venda, é
+        `POST /blocks`.
+
+        Os que **cruzam** `[from, to)` (dias da casa, até 92 dias), por início.
+        Lidos com `agenda:ver` em **qualquer** escopo: não têm dono nem dado de
+        pessoa, e o corretor precisa deles para marcar a visita — como precisa
+        de `GET /agenda/settings`.
+      x-rbac: { recurso: agenda, acao: ver }
+      parameters:
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to,   in: query, required: true, schema: { type: string, format: date }, description: "Exclusivo; `to > from`, até 92 dias depois." }
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/BloqueioDeHorario" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Agenda]
+      summary: Bloqueia um horário da operação
+      description: |
+        Exige `agenda:criar` em escopo **`all`**: o bloqueio é da operação
+        inteira, não tem responsável, e o escopo `own` não tem por onde se
+        aplicar a ele — em `own` é `403 FORBIDDEN` com
+        `details.reason: own_scope_not_applicable`, e não "um bloqueio só
+        dele". Concedê-lo seria deixar quem só marca as próprias visitas
+        avisar a operação inteira de que ela está fechada.
+
+        Janela half-open, até 366 dias, do mesmo horizonte dos eventos; dia
+        inteiro à meia-noite da casa. Não recusa por sobreposição — dois
+        bloqueios no mesmo horário são dois avisos.
+      x-rbac: { recurso: agenda, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BloqueioDeHorarioCriar" }
+      responses:
+        "201":
+          description: Criado
+          headers:
+            Location:
+              description: URI do bloqueio criado.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/BloqueioDeHorario" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+
+  /agenda/blocks/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Agenda]
+      summary: Detalhe do bloqueio de horário
+      x-rbac: { recurso: agenda, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/BloqueioDeHorario" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Agenda]
+      summary: Substitui o bloqueio de horário
+      description: "Escopo `all` (em `own`, `403` com `details.reason: own_scope_not_applicable`). As regras da criação."
+      x-rbac: { recurso: agenda, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BloqueioDeHorarioCriar" }
+      responses:
+        "200":
+          description: Substituído
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/BloqueioDeHorario" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Agenda]
+      summary: Atualiza o bloqueio de horário
+      description: "Campo ausente não muda; nenhum dos campos aceita `null`. Escopo `all`."
+      x-rbac: { recurso: agenda, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BloqueioDeHorarioAtualizar" }
+      responses:
+        "200":
+          description: Atualizado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/BloqueioDeHorario" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Agenda]
+      summary: Remove o bloqueio de horário
+      description: |
+        Apaga de verdade (`204`): o bloqueio de horário é configuração do tempo
+        da operação, não histórico de nada — e o antes fica em `audit_log`.
+        Escopo `all`.
+      x-rbac: { recurso: agenda, acao: excluir }
+      responses:
+        "204": { description: Removido }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+
+  /agenda/settings:
+    get:
+      tags: [Agenda]
+      summary: Os horários da operação — e o "hoje" da casa
+      description: |
+        Uma configuração por propriedade (`agenda_settings`). Lida com
+        `agenda:ver` em **qualquer** escopo: sem ela a grade não sabe onde
+        começa o dia, e não há o que filtrar — não tem dono nem pessoa.
+
+        Traz também `timezone` e `today`, só leitura: o painel desenha "hoje"
+        com o dia da casa, e não com o do navegador.
+      x-rbac: { recurso: agenda, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/ConfiguracaoDaAgenda" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Agenda]
+      summary: Grava os horários da operação e reprograma o que ainda estava no horário antigo
+      description: |
+        **Pede `settings:editar`, e não `agenda:editar`.** Os horários de
+        entrada e de saída são o que a casa promete ao hóspede, e mudá-los
+        reprograma a agenda inteira de hoje em diante: é decisão do dono (spec
+        §16, "Configurações"), e o perfil `usuario` — que opera a agenda em
+        `all` — é, por desenho, "operação sem configurações" (spec §1).
+        Pendurada em `agenda:editar`, quem marca a limpeza do AP-02 mudaria o
+        check-in da casa.
+
+        A coerência é de `agenda.Settings.Validate`, com todas as violações de
+        uma vez em `details`:
+
+        `checkout_time ≤ cleaning_start < cleaning_end ≤ checkin_time` — o dia
+        de troca (um hóspede sai, a unidade é limpa, o seguinte entra) cabe
+        sem a agenda colidir consigo mesma. O check-out (o passo que TERMINA na
+        hora de saída) e o check-in (o passo que COMEÇA na de entrada) cabem no
+        dia. `slot_minutes` de 5 a 240 e divisor de 1440; `buffer_minutes` de 0
+        a 240. Horário de funcionamento: dia ISO 1–7, `start < end` (o
+        intervalo que atravessa a meia-noite vira dois), até 4 intervalos por
+        dia, sem sobreposição. Dia sem intervalo é dia fechado.
+
+        ## Reprograma, na mesma transação
+
+        Todo evento **automático**, **agendado**, **de hoje em diante** e que
+        ainda está **exatamente no horário que a configuração anterior lhe
+        dava** passa para o horário novo (`agenda.Retime`). O que alguém ajustou
+        à mão, o passado e o concluído não mudam. É o que faz a confirmação dos
+        horários provisórios valer também para a agenda que já tinha sido
+        enchida com eles. `meta.retimed_events` diz quantos.
+
+        A partir desta gravação, `provisional` passa a `false`.
+      x-rbac: { recurso: settings, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConfiguracaoDaAgendaEntrada" }
+      responses:
+        "200":
+          description: Gravada
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data: { $ref: "#/components/schemas/ConfiguracaoDaAgenda" }
+                  meta:
+                    type: object
+                    required: [retimed_events]
+                    properties:
+                      retimed_events: { type: integer, minimum: 0, description: "Eventos automáticos reprogramados para o horário novo." }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: "`VALIDATION_ERROR` — `details` com cada campo incoerente (`checkin_time`, `cleaning_start`, `business_hours[2].end`, …), ou campo desconhecido (`timezone` e `today` são só leitura)."
+          $ref: "#/components/responses/Erro"
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -7973,6 +8673,7 @@ components:
                            CONTACT_DUPLICATE, CONTACT_ANONYMIZED, QUOTE_NOT_PENDING,
                            COUNT_ALREADY_OPEN, COUNT_CLOSED, COUNT_HAS_PENDING_LINES,
                            MAINTENANCE_ORDER_CLOSED, MAINTENANCE_ORDER_ALREADY_OPEN,
+                           AGENDA_EVENT_CLOSED,
                            INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
@@ -8697,6 +9398,7 @@ components:
         activities:     { type: integer }
         notes:          { type: integer }
         conversations:  { type: integer }
+        agenda_events:  { type: integer, description: "Eventos da agenda que citam o contato (o cliente da visita, ou o titular de um evento manual). Só o id é gravado." }
 
     ContatoCompleto:
       allOf:
@@ -11732,6 +12434,346 @@ components:
       description: "Corpo opcional de `POST /{id}/complete`."
       properties:
         cost_cents: { type: integer, format: int64, minimum: 1, description: "Grava o custo no mesmo UPDATE que conclui. Ausente não mexe no custo (que pode chegar depois, por `PATCH`)." }
+
+    # ───────── Agenda ─────────
+    TipoDeEventoDaAgenda:
+      type: string
+      enum: [checkin, checkout, limpeza, manutencao, visita, evento, bloqueio]
+      description: |
+        Os sete da spec §9 (`agenda.Types()`). Gravados em `agenda_events`:
+        `checkin`, `checkout`, `limpeza`, `visita`, `evento`. Lidos de
+        `stay_blocks`, sem cópia: `manutencao` e `bloqueio` (de unidade).
+
+    TipoDeEventoManual:
+      type: string
+      enum: [visita, evento, limpeza]
+      description: |
+        O que se marca à mão (`agenda.ManualTypes()`). `limpeza` é dos dois
+        lados: a da reserva nasce sozinha; a avulsa (a do meio da estadia, a
+        geral antes da temporada) é marcada por alguém.
+
+    OrigemDoEventoDaAgenda:
+      type: string
+      enum: [reservation, manual, maintenance, stay_block]
+      description: |
+        `reservation` — nasceu da reserva confirmada e a segue.
+        `manual` — marcado em `POST /agenda/events`.
+        `maintenance` — linha de `stay_blocks` de uma manutenção, lida na hora.
+        `stay_block` — linha de `stay_blocks` de uso do proprietário ou de
+        canal (`owner_hold`, `ota`), lida na hora.
+        As duas primeiras são o `CHECK` de `agenda_events.origin`.
+
+    StatusDoEventoDaAgenda:
+      type: string
+      enum: [agendado, concluido, cancelado]
+      description: |
+        O `CHECK` de `agenda_events.status`. Fechado (`concluido`, `cancelado`)
+        não reabre: a visita desmarcada que volta a acontecer é visita nova.
+        Nada é apagado — cancelado fica na agenda como cancelado.
+
+    AcaoDoEventoDaAgenda:
+      type: string
+      enum: [complete, cancel]
+      description: "`complete` é `POST /{id}/complete`; `cancel` é `DELETE /{id}`."
+
+    EditavelDoEventoDaAgenda:
+      type: string
+      enum: [tudo, segue_a_reserva, so_notas, nada]
+      description: |
+        O que `PUT`/`PATCH` aceitam no estado atual (`agenda.EditableIn`):
+        `tudo` no manual agendado; `segue_a_reserva` no automático agendado
+        (horário, responsável e anotação); `so_notas` no concluído; `nada` no
+        cancelado e no derivado de `stay_blocks`.
+
+    HoraDoDia:
+      type: string
+      pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9]|24:00)$"
+      example: "14:00"
+      description: "Hora de parede da casa, `HH:MM`, de `00:00` a `24:00` (`24:00` só fecha intervalo). Um formato só: `9:00`, `14h` e `14:00:00` são `422`."
+
+    UnidadeDoEventoDaAgenda:
+      type: object
+      required: [unit_id, unit_code]
+      properties:
+        unit_id:   { type: string, format: uuid }
+        unit_code: { type: string, example: AP-01 }
+
+    EventoDaAgenda:
+      type: object
+      required: [id, type, origin, status, title, starts_at, ends_at, all_day, date, units,
+                 has_unit_conflict, allowed_actions, editable]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: "`agenda_events.id`; nos derivados, o `stay_blocks.id` (que `GET /agenda/events/{id}` não serve)."
+        type:   { $ref: "#/components/schemas/TipoDeEventoDaAgenda" }
+        origin: { $ref: "#/components/schemas/OrigemDoEventoDaAgenda" }
+        status: { $ref: "#/components/schemas/StatusDoEventoDaAgenda" }
+        title:
+          type: string
+          example: "Check-in · WH-2026-0007"
+          description: |
+            No manual, o gravado. No automático, composto na leitura
+            (`agenda.AutoTitle`: tipo + código da reserva) — não é gravado. Na
+            manutenção, o título da ordem; no bloqueio de unidade, a nota do
+            bloqueio ou "Bloqueio".
+        starts_at:
+          type: string
+          format: date-time
+          example: "2026-11-20T14:00:00-03:00"
+          description: "Instante, no offset da propriedade: a string traz a hora de parede da casa."
+        ends_at:
+          type: string
+          format: date-time
+          description: "Exclusivo. No dia inteiro, a meia-noite da casa do dia seguinte ao último."
+        all_day: { type: boolean }
+        date:
+          type: string
+          format: date
+          description: "O dia da casa em que o evento começa — é por ele que as visões agrupam, sem converter fuso no navegador."
+        unit_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            A unidade **gravada** no evento manual (a que o `PUT` devolve para a
+            ida e volta do formulário). `null` no automático — que lê a unidade
+            da reserva, em `units` — e no manual sem unidade própria.
+        units:
+          type: array
+          items: { $ref: "#/components/schemas/UnidadeDoEventoDaAgenda" }
+          description: |
+            As unidades que o evento ocupa, por `code`. No automático, as da
+            reserva **hoje** (`reservation_units`): realocada a reserva, a
+            agenda já mostra a unidade nova. No manual, a gravada — ou, sem ela,
+            as da reserva ligada; vazia se o evento não ocupa unidade.
+        reservation_id:   { type: [string, "null"], format: uuid }
+        reservation_code: { type: [string, "null"], example: WH-2026-0007 }
+        contact_id:
+          type: [string, "null"]
+          format: uuid
+          description: "No automático, o titular da reserva (`reservations.contact_id`, lido na hora); no manual, o gravado. Só o id é gravado na agenda."
+        contact_name:
+          type: [string, "null"]
+          description: "Lido do contato na hora — como em toda coleção, o nome sai inteiro e não grava `pii_access_log`. Documento, telefone e e-mail não saem nesta tag."
+        assignee_id:   { type: [string, "null"], format: uuid }
+        assignee_name: { type: [string, "null"], description: "Nome do USUÁRIO responsável." }
+        notes:         { type: [string, "null"], maxLength: 2000 }
+        maintenance_order_id: { type: [string, "null"], format: uuid, description: "Só em `origin: maintenance`, quando o bloqueio é de uma ordem." }
+        stay_block_id:        { type: [string, "null"], format: uuid, description: "Só nos derivados: a linha de `stay_blocks`." }
+        done_at: { type: [string, "null"], format: date-time, description: "Nulo se e somente se não está `concluido`. No check-in e no check-out automáticos, o instante registrado na reserva." }
+        done_by: { type: [string, "null"], format: uuid }
+        cancelled_at: { type: [string, "null"], format: date-time, description: "Nulo se e somente se não está `cancelado`." }
+        has_unit_conflict:
+          type: boolean
+          description: |
+            Calculado na leitura, pela mesma regra que recusa a escrita
+            (`agenda.UnitConflicts`): o evento agendado cruza, numa das
+            unidades dele, outra ocupação. Acontece quando a venda, a
+            manutenção ou o ajuste de um evento automático chegou DEPOIS — a
+            agenda nunca trava a venda, e mostra o conflito em vez de escondê-lo.
+            Sempre `false` em fechado e em derivado.
+        allowed_actions:
+          type: array
+          items: { $ref: "#/components/schemas/AcaoDoEventoDaAgenda" }
+          description: |
+            As transições que o evento aceita HOJE (`agenda.AllowedActions`): o
+            painel desenha os botões a partir daqui, sem segunda cópia da
+            máquina. `[]` no check-in e no check-out automáticos (seguem a
+            reserva), no fechado e no derivado; `complete` só do dia do evento
+            em diante.
+        editable: { $ref: "#/components/schemas/EditavelDoEventoDaAgenda" }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: [string, "null"], format: date-time, description: "Nulo nos derivados." }
+        updated_at: { type: [string, "null"], format: date-time, description: "Nulo nos derivados." }
+
+    EventoDaAgendaCriar:
+      type: object
+      additionalProperties: false
+      required: [type, title, starts_at]
+      properties:
+        type:      { $ref: "#/components/schemas/TipoDeEventoManual" }
+        title:     { type: string, minLength: 1, maxLength: 200, description: "Sem espaço nas pontas contando; só espaço é `422`." }
+        starts_at: { type: string, format: date-time, description: "Com offset. Instante sem offset é `422` — não se adivinha o fuso." }
+        ends_at:   { type: string, format: date-time, description: "Exclusivo. Ausente = `starts_at` + `slot_minutes`." }
+        all_day:   { type: boolean, default: false }
+        unit_id:        { type: [string, "null"], format: uuid }
+        reservation_id: { type: [string, "null"], format: uuid }
+        contact_id:     { type: [string, "null"], format: uuid }
+        assignee_id:    { type: [string, "null"], format: uuid, description: "Em `own`, ausente vira o ator; outro valor é `403`." }
+        notes:          { type: [string, "null"], maxLength: 2000 }
+
+    EventoDaAgendaSubstituir:
+      type: object
+      additionalProperties: false
+      required: [starts_at, ends_at]
+      description: |
+        Corpo do `PUT`. No manual agendado, `type` e `title` também são
+        obrigatórios, e os anuláveis omitidos viram `null`. No automático,
+        `type`, `title`, `all_day`, `unit_id`, `reservation_id` e `contact_id`
+        omitidos ficam como estão e repetidos passam (ver a rota).
+      properties:
+        type:      { $ref: "#/components/schemas/TipoDeEventoManual" }
+        title:     { type: string, minLength: 1, maxLength: 200 }
+        starts_at: { type: string, format: date-time }
+        ends_at:   { type: string, format: date-time }
+        all_day:   { type: boolean, default: false }
+        unit_id:        { type: [string, "null"], format: uuid }
+        reservation_id: { type: [string, "null"], format: uuid }
+        contact_id:     { type: [string, "null"], format: uuid }
+        assignee_id:    { type: [string, "null"], format: uuid }
+        notes:          { type: [string, "null"], maxLength: 2000 }
+
+    EventoDaAgendaAtualizar:
+      type: object
+      additionalProperties: false
+      description: "Corpo do `PATCH` — ausente não muda nada; `null` limpa. `type`, `title`, `starts_at`, `ends_at` e `all_day` não aceitam `null`."
+      properties:
+        type:      { $ref: "#/components/schemas/TipoDeEventoManual" }
+        title:     { type: string, minLength: 1, maxLength: 200 }
+        starts_at: { type: string, format: date-time }
+        ends_at:   { type: string, format: date-time }
+        all_day:   { type: boolean }
+        unit_id:        { type: [string, "null"], format: uuid }
+        reservation_id: { type: [string, "null"], format: uuid }
+        contact_id:     { type: [string, "null"], format: uuid }
+        assignee_id:    { type: [string, "null"], format: uuid }
+        notes:          { type: [string, "null"], maxLength: 2000 }
+
+    AvisoDeAgenda:
+      type: object
+      required: [kind, message]
+      description: |
+        Conflito de HORÁRIO — o evento foi gravado (`agenda.TimeWarnings`).
+        `fora_do_horario`: não cabe num intervalo de funcionamento do dia
+        (dia inteiro não recebe). `bloqueio_de_horario`: cruza um bloqueio de
+        horário da operação (`ref_id` é o bloqueio). `responsavel_ocupado`: o
+        responsável tem outro compromisso agendado que cruza este, contada a
+        folga `buffer_minutes` dos dois lados (`ref_id` é o outro evento —
+        sempre visível ao ator: em `own` é dele, em `all` ele vê tudo).
+      properties:
+        kind:      { type: string, enum: [fora_do_horario, bloqueio_de_horario, responsavel_ocupado] }
+        message:   { type: string }
+        ref_id:    { type: [string, "null"], format: uuid }
+        starts_at: { type: [string, "null"], format: date-time }
+        ends_at:   { type: [string, "null"], format: date-time }
+
+    EscritaNaAgenda:
+      type: object
+      required: [data, meta]
+      description: "Resposta de `POST`, `PUT` e `PATCH` de evento: o evento e os avisos de horário — `[]` quando não há."
+      properties:
+        data: { $ref: "#/components/schemas/EventoDaAgenda" }
+        meta:
+          type: object
+          required: [warnings]
+          properties:
+            warnings:
+              type: array
+              items: { $ref: "#/components/schemas/AvisoDeAgenda" }
+
+    ConflitoDeUnidade:
+      type: object
+      required: [unit_id, kind, starts_at, ends_at]
+      description: |
+        Uma linha de `details.conflicts` do `409 UNIT_NOT_AVAILABLE` da agenda
+        (`agenda.CheckUnit`). Diz a unidade, o que a ocupa e quando — e nada
+        que identifique o evento ou a pessoa: o ator pode não ter escopo para
+        ver a visita do colega, e "limpeza das 11:00 às 14:00" basta para
+        escolher outro horário. O módulo acrescenta `unit_code`.
+      properties:
+        unit_id:   { type: string, format: uuid }
+        unit_code: { type: string }
+        kind:      { type: string, enum: [estadia, checkin, checkout, limpeza, visita, evento, manutencao, bloqueio] }
+        starts_at: { type: string, format: date-time }
+        ends_at:   { type: string, format: date-time }
+
+    BloqueioDeHorario:
+      type: object
+      required: [id, starts_at, ends_at, all_day, reason, created_at, updated_at]
+      description: "Linha de `agenda_blocks`: o tempo da operação, não uma unidade."
+      properties:
+        id:         { type: string, format: uuid }
+        starts_at:  { type: string, format: date-time }
+        ends_at:    { type: string, format: date-time, description: Exclusivo. }
+        all_day:    { type: boolean }
+        reason:     { type: string, example: Equipe em treinamento }
+        created_by: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    BloqueioDeHorarioCriar:
+      type: object
+      additionalProperties: false
+      required: [starts_at, ends_at, reason]
+      description: "Corpo do `POST` e do `PUT`."
+      properties:
+        starts_at: { type: string, format: date-time }
+        ends_at:   { type: string, format: date-time }
+        all_day:   { type: boolean, default: false }
+        reason:    { type: string, minLength: 1, maxLength: 200 }
+
+    BloqueioDeHorarioAtualizar:
+      type: object
+      additionalProperties: false
+      properties:
+        starts_at: { type: string, format: date-time }
+        ends_at:   { type: string, format: date-time }
+        all_day:   { type: boolean }
+        reason:    { type: string, minLength: 1, maxLength: 200 }
+
+    IntervaloDeFuncionamento:
+      type: object
+      additionalProperties: false
+      required: [weekday, start, end]
+      properties:
+        weekday: { type: integer, minimum: 1, maximum: 7, description: "Dia da semana ISO: 1 = segunda … 7 = domingo." }
+        start:   { $ref: "#/components/schemas/HoraDoDia" }
+        end:     { $ref: "#/components/schemas/HoraDoDia" }
+
+    ConfiguracaoDaAgenda:
+      type: object
+      required: [timezone, today, checkin_time, checkout_time, cleaning_start, cleaning_end,
+                 business_hours, slot_minutes, buffer_minutes, provisional, updated_at]
+      properties:
+        timezone: { type: string, example: America/Fortaleza, description: "`properties.timezone` — só leitura; muda pelo cadastro da propriedade." }
+        today:    { type: string, format: date, description: "O dia de hoje NA CASA — só leitura. É o \"hoje\" do painel." }
+        checkin_time:   { $ref: "#/components/schemas/HoraDoDia" }
+        checkout_time:  { $ref: "#/components/schemas/HoraDoDia" }
+        cleaning_start: { $ref: "#/components/schemas/HoraDoDia" }
+        cleaning_end:   { $ref: "#/components/schemas/HoraDoDia" }
+        business_hours:
+          type: array
+          items: { $ref: "#/components/schemas/IntervaloDeFuncionamento" }
+          description: "Ordenado por dia e início. Dia sem intervalo é dia fechado."
+        slot_minutes:   { type: integer, example: 30, description: "Passo da grade das visões de dia e semana, e a duração do check-in e do check-out." }
+        buffer_minutes: { type: integer, example: 15, description: "Folga mínima entre dois compromissos da mesma pessoa." }
+        provisional:
+          type: boolean
+          description: |
+            `true` enquanto ninguém gravou a configuração (`updated_by` nulo):
+            os valores são os que o banco semeou e estão **a confirmar pelo
+            dono** (decisão 12). O painel mostra a pendência até ele gravar.
+        updated_at:      { type: string, format: date-time }
+        updated_by:      { type: [string, "null"], format: uuid }
+        updated_by_name: { type: [string, "null"] }
+
+    ConfiguracaoDaAgendaEntrada:
+      type: object
+      additionalProperties: false
+      required: [checkin_time, checkout_time, cleaning_start, cleaning_end, business_hours, slot_minutes, buffer_minutes]
+      description: "Corpo do `PUT /agenda/settings` — a configuração inteira. `timezone`, `today`, `provisional` e os de autoria são só leitura (`422` se vierem)."
+      properties:
+        checkin_time:   { $ref: "#/components/schemas/HoraDoDia" }
+        checkout_time:  { $ref: "#/components/schemas/HoraDoDia" }
+        cleaning_start: { $ref: "#/components/schemas/HoraDoDia" }
+        cleaning_end:   { $ref: "#/components/schemas/HoraDoDia" }
+        business_hours:
+          type: array
+          maxItems: 28
+          items: { $ref: "#/components/schemas/IntervaloDeFuncionamento" }
+        slot_minutes:   { type: integer, minimum: 5, maximum: 240 }
+        buffer_minutes: { type: integer, minimum: 0, maximum: 240 }
 
 security:
   - bearerAuth: []

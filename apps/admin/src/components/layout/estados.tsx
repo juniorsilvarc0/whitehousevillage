@@ -93,6 +93,7 @@ export function EstadoDeErro({
  * sistema está com defeito.
  */
 const NOME_DA_AREA: Record<string, string> = {
+  agenda: "Agenda operacional",
   calendar: "Mapa de ocupação",
   contacts: "Contatos",
   "crm.leads": "Leads",

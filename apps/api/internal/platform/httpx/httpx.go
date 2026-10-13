@@ -45,6 +45,18 @@ func List(w http.ResponseWriter, data any, meta Meta) {
 	write(w, http.StatusOK, envelope{Data: colecaoNaoNula(data), Meta: &meta})
 }
 
+// Envelope responde um recurso com um `meta` que NÃO é paginação: os avisos de
+// horário de uma escrita da agenda, a contagem de eventos reprogramados.
+// `meta` sai sempre, mesmo sem nada dentro, porque o contrato o declara
+// obrigatório nessas respostas — e é o mesmo formato `{data, meta}` de toda
+// coleção, só que com o `meta` do recurso.
+func Envelope(w http.ResponseWriter, status int, data, meta any) {
+	write(w, status, struct {
+		Data any `json:"data"`
+		Meta any `json:"meta"`
+	}{Data: data, Meta: meta})
+}
+
 // colecaoNaoNula troca coleção nula por coleção vazia.
 //
 // O contrato promete `data` como array em toda listagem. Um slice nulo dentro de

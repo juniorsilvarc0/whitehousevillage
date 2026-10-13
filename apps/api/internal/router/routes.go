@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/agenda"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/bens"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
@@ -109,6 +110,9 @@ type Deps struct {
 	// Manutencao são as ordens de manutenção (rotas_manutencao.go, recurso
 	// `maintenance`): a ordem e o bloqueio de calendário que ela segura.
 	Manutencao *manutencao.Handler
+
+	// Agenda é a agenda operacional (rotas_agenda.go, recurso `agenda`).
+	Agenda *agenda.Handler
 }
 
 // Rotas devolve a tabela completa da API v1, concatenando os grupos.
@@ -135,6 +139,7 @@ func Rotas(d Deps) []Rota {
 		rotasSite,
 		rotasBens,
 		rotasManutencao,
+		rotasAgenda,
 	} {
 		todas = append(todas, grupo(d)...)
 	}

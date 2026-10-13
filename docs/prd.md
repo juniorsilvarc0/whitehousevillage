@@ -93,7 +93,7 @@ Gestão fecha o mês: receita realizada, comissões a pagar, repasse ao propriet
 | Reservas e calendário | total | total | próprias |
 | CRM (leads, oportunidades) | total | total | próprios |
 | Chat WhatsApp | total | total | próprias conversas |
-| Agenda | total | total | leitura |
+| Agenda | total | total | próprias (as que tem como responsável — as visitas) |
 | Financeiro | total | lançamento | ❌ |
 | Comissões | total | total | próprias |
 | Inventário | total | total | ❌ |

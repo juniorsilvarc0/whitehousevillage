@@ -69,6 +69,7 @@ const (
 	CodeCountHasPendingLines      = "COUNT_HAS_PENDING_LINES"
 	CodeMaintenanceOrderClosed    = "MAINTENANCE_ORDER_CLOSED"
 	CodeMaintenanceOrderOpen      = "MAINTENANCE_ORDER_ALREADY_OPEN"
+	CodeAgendaEventClosed         = "AGENDA_EVENT_CLOSED"
 	CodeInternal                  = "INTERNAL"
 )
 
@@ -324,5 +325,28 @@ var (
 	// existe, para o toque repetido virar navegação em vez de beco.
 	MaintenanceOrderOpen = definir(CodeMaintenanceOrderOpen,
 		"Esta avaria já tem uma ordem de manutenção em aberto.",
+		http.StatusConflict)
+)
+
+// Erros da agenda operacional (spec §9, F2-19 a F2-21).
+//
+// Nasceu com o contrato de `/agenda/*` e antes do módulo que o emite, pelo
+// mesmo motivo dos da ordem de manutenção: o enum da OpenAPI e o literal em Go
+// entram no mesmo commit, ou `contrato_de_erros_test.go` reprova. O conflito
+// de unidade da agenda NÃO ganhou código próprio: é `UNIT_NOT_AVAILABLE`, o
+// mesmo do `/reassign-unit` — nos dois casos a unidade está tomada naquele
+// período, e a ação de quem lê é a mesma (escolher outra unidade ou outro
+// horário).
+var (
+	// AgendaEventClosed — escrita num evento `concluido` ou `cancelado` que o
+	// estado não aceita: transição (`/complete`, `DELETE`) e edição de
+	// qualquer campo que não a anotação do concluído. Fechado não reabre: a
+	// visita desmarcada que volta a acontecer é visita nova.
+	//
+	// Quem carimba é `internal/domain/agenda` (Next e CheckEdit), com
+	// `details.status` e `details.editable` (`so_notas` no concluído, `nada`
+	// no cancelado).
+	AgendaEventClosed = definir(CodeAgendaEventClosed,
+		"Este evento da agenda já foi encerrado.",
 		http.StatusConflict)
 )

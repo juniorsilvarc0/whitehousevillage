@@ -41,6 +41,15 @@ const TELAS = [
   // Sem `?unidade=` ela responde 200 com a instrução de onde escolher — o que
   // basta para provar que a rota existe e que a sessão chega até ela.
   "/app/inventario/imprimir",
+  // Agenda operacional (spec §9, F2-21): as quatro visões são a mesma rota com
+  // `?visao=`, e as duas sub-telas — os bloqueios de horário e os horários da
+  // operação em Configurações.
+  "/app/agenda",
+  "/app/agenda?visao=semana",
+  "/app/agenda?visao=mes",
+  "/app/agenda?visao=lista",
+  "/app/agenda/bloqueios",
+  "/app/configuracoes/agenda",
 ];
 
 // `channel: "chrome"` usa o Chrome instalado na máquina — é o que mais se

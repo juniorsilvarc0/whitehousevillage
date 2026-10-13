@@ -148,6 +148,17 @@ func (r *Repository) DataLocal(ctx context.Context, propriedade uuid.UUID, insta
 	return d, nil
 }
 
+// Agora é o `now()` do banco — o início da transação de quem chama, o mesmo
+// relógio das colunas que ela grava. É o instante da entrada e da saída na
+// agenda quando o registro não informa `at`.
+func (r *Repository) Agora(ctx context.Context) (time.Time, error) {
+	var agora time.Time
+	if err := r.exec(ctx).QueryRow(ctx, `SELECT now()`).Scan(&agora); err != nil {
+		return time.Time{}, db.MapError(err)
+	}
+	return agora, nil
+}
+
 // InstanteDoEvento devolve o instante EFETIVO do último evento de um tipo: o
 // `at` que o operador informou no payload quando houver, senão o carimbo da
 // linha. É o que permite ao /check-out recusar uma saída anterior à entrada

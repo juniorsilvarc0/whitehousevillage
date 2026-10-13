@@ -21,6 +21,15 @@ describe("descreverTempoReal", () => {
     expect(descreverTempoReal("sem_rede", "funil").detalhe).not.toContain("mapa");
   });
 
+  it("a agenda fala da agenda — e não promete o que o barramento não avisa", () => {
+    // O barramento só tem `calendar` e `crm`: a agenda ouve o primeiro (reserva
+    // e bloqueio de unidade). O evento marcado à mão não passa por ele, e a
+    // frase não pode dizer que a tela se atualiza "sozinha" com tudo.
+    expect(descreverTempoReal("ligado", "agenda").detalhe).toMatch(/^A agenda/);
+    expect(descreverTempoReal("ligado", "agenda").detalhe).toMatch(/marca à mão aparece ao recarregar/);
+    expect(descreverTempoReal("sem_rede", "agenda").detalhe).not.toContain("mapa");
+  });
+
   it("só oferece reconectar onde o clique muda alguma coisa", () => {
     expect(descreverTempoReal("ligado").ofereceReconectar).toBe(false);
     expect(descreverTempoReal("conectando").ofereceReconectar).toBe(false);

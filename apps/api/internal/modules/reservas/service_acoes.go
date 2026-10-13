@@ -111,6 +111,12 @@ func (s *Servico) Confirmar(ctx context.Context, id uuid.UUID, chave string, cor
 		if err := s.repo.AtualizarStatus(ctx, id, EstadoConfirmada, &agora, nil, nil, true); err != nil {
 			return err
 		}
+		// Os efeitos da confirmação, NA MESMA TRANSAÇÃO: a agenda primeiro
+		// (check-in, check-out e limpeza — agenda.go). Repetir a mesma
+		// Idempotency-Key não chega aqui: a resposta guardada volta antes.
+		if err := s.confirmarEfeitos(ctx, id); err != nil {
+			return err
+		}
 
 		payload := map[string]any{"deposit_paid_cents": pago, "blocks_promoted": promovidos}
 		if corpo.Meio != "" {
@@ -226,6 +232,12 @@ func (s *Servico) Cancelar(ctx context.Context, id uuid.UUID, dryRun bool, corpo
 			motivoPtr = &motivo
 		}
 		if err := s.repo.AtualizarStatus(ctx, id, destino, nil, &agora, motivoPtr, true); err != nil {
+			return err
+		}
+		// Na agenda, no mesmo commit: sem o hóspede ter entrado, tudo o que
+		// estava agendado vira `cancelado`; com ele dentro, o check-out é
+		// cancelado e a limpeza vem para hoje. `dry_run` saiu lá em cima.
+		if err := s.agenda.AoCancelar(ctx, id, e.Status == EstadoCheckIn); err != nil {
 			return err
 		}
 
@@ -438,6 +450,12 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 		if err := s.repo.AtualizarStatus(ctx, id, EstadoCancelada, nil, &agora, &motivo, true); err != nil {
 			return err
 		}
+		// Na agenda, remarcar é cancelar a original e confirmar a nova: os
+		// eventos agendados da original viram `cancelado` (ela não tinha
+		// hóspede dentro — remarca-se `hold` ou `confirmed`).
+		if err := s.agenda.AoCancelar(ctx, e.ID, false); err != nil {
+			return err
+		}
 
 		// 2. Emite a nova, recalculada do zero com a tabela e a política
 		//    VIGENTES HOJE — remarcar é uma venda nova, não uma edição de preço.
@@ -470,6 +488,14 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 		nova, credito, err := s.emitir(ctx, u, pedido, AtribuicaoDoCorretor{Corretor: e.BrokerID}, e.Status, &e.ID, sinalHerdado)
 		if err != nil {
 			return err
+		}
+		// A nova que nasce confirmada ganha os três eventos dela, nas datas
+		// novas e pelos horários vigentes. O ajustado à mão na original
+		// (responsável, horário, anotação) não é copiado: valia para outra data.
+		if e.Status == EstadoConfirmada {
+			if err := s.agenda.AoConfirmar(ctx, nova.ID); err != nil {
+				return err
+			}
 		}
 
 		if err := s.repo.InserirEvento(ctx, id, EventoRemarcada, map[string]any{
@@ -585,6 +611,11 @@ func (s *Servico) registrarEstadia(ctx context.Context, id uuid.UUID, corpo Regi
 		if err := s.repo.AtualizarStatus(ctx, id, destino, nil, nil, nil, false); err != nil {
 			return err
 		}
+		// Na agenda, no mesmo commit, com o instante informado — ou o `now()`
+		// do banco, o mesmo relógio das outras colunas desta transação.
+		if err := s.registrarNaAgenda(ctx, id, destino, instante); err != nil {
+			return err
+		}
 
 		// O instante vai para a TIMELINE, não para uma coluna de `reservations`:
 		// a tabela já nasceu acima do teto de colunas do db.md, e um evento
@@ -607,6 +638,27 @@ func (s *Servico) registrarEstadia(ctx context.Context, id uuid.UUID, corpo Regi
 		return err
 	})
 	return out, err
+}
+
+// registrarNaAgenda conclui o check-in ou o check-out automático da reserva.
+func (s *Servico) registrarNaAgenda(ctx context.Context, id uuid.UUID, destino string, instante *time.Time) error {
+	var em time.Time
+	if instante != nil {
+		em = *instante
+	} else {
+		agora, err := s.repo.Agora(ctx)
+		if err != nil {
+			return err
+		}
+		em = agora
+	}
+	switch destino {
+	case EstadoCheckIn:
+		return s.agenda.AoRegistrarEntrada(ctx, id, em)
+	case EstadoCheckOut:
+		return s.agenda.AoRegistrarSaida(ctx, id, em)
+	}
+	return apperr.Internal.WithCause(fmt.Errorf("reservas: estadia sem passo na agenda para %q", destino))
 }
 
 // instanteDoRegistro traduz o `at` do corpo. Nulo é "agora" — e "agora" também
@@ -750,6 +802,11 @@ func (s *Servico) Realocar(ctx context.Context, id uuid.UUID, corpo PedidoDeReal
 
 		travar := corpo.Travar.Ou(true) // o default do contrato é `true`
 		if err := s.repo.Realocar(ctx, e, origem.ID, corpo.UnidadeDeDestino, codigoDestino, travar, &u.ID); err != nil {
+			return err
+		}
+		// Na agenda: o automático já está na unidade nova (ele a lê da
+		// reserva); o manual agendado preso à unidade que saiu muda junto.
+		if err := s.agenda.AoRealocar(ctx, id, origem.ID, corpo.UnidadeDeDestino); err != nil {
 			return err
 		}
 		if err := s.repo.InserirEvento(ctx, id, EventoUnidadeTrocada, map[string]any{

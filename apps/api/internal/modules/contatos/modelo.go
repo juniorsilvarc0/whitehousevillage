@@ -124,13 +124,21 @@ type Vinculos struct {
 	// do 409 RESOURCE_IN_USE com a contagem. Fora do schema VinculosDoContato
 	// por enquanto, como os dois de cima — ver o relatório.
 	Corretores int `json:"brokers"`
+
+	// Agenda conta os eventos da agenda em que o contato é o cliente
+	// (`agenda_events.contact_id`, FK RESTRICT desde 20261013120000) — a visita
+	// marcada com ele. O evento automático não grava o titular (lê da
+	// reserva), então só o manual aparece aqui. Sem ele, o DELETE da ficha de
+	// quem só tem uma visita estourava 23503 e saía 422 genérico. Fora do
+	// schema VinculosDoContato, como os três de cima.
+	Agenda int `json:"agenda_events"`
 }
 
 // Total é quantos registros de qualquer tipo apontam para o contato. Zero é a
 // única condição em que o `DELETE` pode seguir.
 func (v Vinculos) Total() int {
 	return v.Reservas + v.Leads + v.Oportunidades + v.Atividades +
-		v.Notas + v.Conversas + v.Hospedes + v.Orcamentos + v.Corretores
+		v.Notas + v.Conversas + v.Hospedes + v.Orcamentos + v.Corretores + v.Agenda
 }
 
 // ContatoCompleto é o schema `ContatoCompleto`: a ficha mais as contagens.

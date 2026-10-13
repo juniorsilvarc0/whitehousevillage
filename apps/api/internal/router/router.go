@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/agenda"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/bens"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
@@ -104,6 +105,10 @@ func New(o Opcoes) (http.Handler, error) {
 		// Ordens de manutenção. Montar é OBRIGATÓRIO: rotas_manutencao.go não
 		// guarda contra handler nulo.
 		Manutencao: manutencao.NovoHandler(o.Pool, tx),
+
+		// Agenda operacional. Montar é OBRIGATÓRIO: rotas_agenda.go não guarda
+		// contra handler nulo.
+		Agenda: agenda.NovoHandler(o.Pool, tx),
 	}
 
 	prepararVolumeDeMidia(o.Config.MediaDir)

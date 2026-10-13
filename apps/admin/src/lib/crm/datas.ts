@@ -1,4 +1,4 @@
-import { FUSO } from "@/lib/fuso";
+import { deslocamentoDaCasa } from "@/lib/fuso";
 
 /**
  * Data + hora digitadas → instante ISO, no fuso da **operação**.
@@ -9,31 +9,16 @@ import { FUSO } from "@/lib/fuso";
  * está em Lisboa nasceria às 5h da manhã em Fortaleza, e o alerta de tarefa
  * vencida dispararia meio dia antes.
  *
- * O deslocamento é **perguntado ao Intl** para a data em questão, e não escrito
- * como `-03:00`. Fortaleza não tem horário de verão hoje; a constante ficaria
- * certa por anos e erraria em silêncio no dia em que a regra mudasse — e é
- * justamente por isso que `lib/fuso.ts` existe em vez de um número.
+ * O deslocamento vem de `lib/fuso.ts` (`deslocamentoDaCasa`), que o pergunta ao
+ * Intl em vez de escrever `-03:00`. Até 13/10/2026 este arquivo tinha a própria
+ * cópia da conversa com o Intl; a agenda precisou da mesma conversão, e o
+ * helper de fuso passou a ser um só para os dois (spec §9).
  */
-function deslocamentoDoFuso(dataISO: string): string {
-  try {
-    const partes = new Intl.DateTimeFormat("en-US", {
-      timeZone: FUSO,
-      timeZoneName: "longOffset",
-    }).formatToParts(new Date(`${dataISO}T12:00:00Z`));
-    const nome = partes.find((p) => p.type === "timeZoneName")?.value ?? "";
-    const casado = /GMT([+-]\d{2}:\d{2})/.exec(nome);
-    if (casado) return casado[1]!;
-  } catch {
-    // Ambiente sem `longOffset` (runtime antigo). Cai no deslocamento atual da
-    // casa, que é o comportamento menos errado disponível.
-  }
-  return "-03:00";
-}
 
 /** `("2026-12-20", "09:00")` → `"2026-12-20T09:00:00-03:00"`. Hora vazia é 09:00,
  *  o começo do expediente — tarefa sem hora vira tarefa da meia-noite, que
  *  chega como vencida antes de alguém abrir o painel. */
 export function instanteDaOperacao(data: string, hora: string): string {
   const horario = /^\d{2}:\d{2}$/.test(hora) ? hora : "09:00";
-  return `${data}T${horario}:00${deslocamentoDoFuso(data)}`;
+  return `${data}T${horario}:00${deslocamentoDaCasa(data, horario)}`;
 }
