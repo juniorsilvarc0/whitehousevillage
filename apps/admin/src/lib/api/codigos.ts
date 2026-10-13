@@ -55,6 +55,10 @@ export type CodigoDeErro =
   // caminho até a ordem que já existe.
   | "MAINTENANCE_ORDER_CLOSED"
   | "MAINTENANCE_ORDER_ALREADY_OPEN"
+  // Agenda operacional (spec §9). É 409 — sem ele aqui, `normalizarCodigo` o
+  // jogaria em `INTERNAL`, e a edição de um evento já concluído diria "erro no
+  // servidor" em vez de "agora só a anotação muda", perdendo `details.editable`.
+  | "AGENDA_EVENT_CLOSED"
   | "INTERNAL"
   // Fora do contrato: a API não respondeu (caiu, DNS, timeout). É do BFF, não
   // do servidor, e por isso não pode se disfarçar de INTERNAL — a tela precisa
@@ -71,6 +75,7 @@ const CONHECIDOS: readonly string[] = [
   "COMPOSITION_INCOMPLETE", "HOLD_LIMIT_REACHED",
   "COUNT_ALREADY_OPEN", "COUNT_CLOSED", "COUNT_HAS_PENDING_LINES",
   "MAINTENANCE_ORDER_CLOSED", "MAINTENANCE_ORDER_ALREADY_OPEN",
+  "AGENDA_EVENT_CLOSED",
   "INTERNAL",
 ];
 

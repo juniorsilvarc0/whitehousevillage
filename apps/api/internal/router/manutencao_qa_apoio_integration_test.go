@@ -216,6 +216,7 @@ func (m *qmFaxina) limpar(t *testing.T) {
 		unidades, itens, usuarios)
 	for _, p := range m.produtos {
 		exec(`DELETE FROM reservation_guests WHERE reservation_id IN (SELECT id FROM reservations WHERE unit_type_id = $1)`, p)
+		exec(`DELETE FROM agenda_events WHERE reservation_id IN (SELECT id FROM reservations WHERE unit_type_id = $1)`, p)
 		exec(`DELETE FROM reservations WHERE unit_type_id = $1`, p)
 	}
 	exec(`DELETE FROM stay_blocks WHERE unit_id = ANY($1)`, unidades)

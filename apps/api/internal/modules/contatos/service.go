@@ -288,6 +288,19 @@ func (s *Servico) Excluir(ctx context.Context, id uuid.UUID) error {
 			})
 		}
 		if err := s.repo.Excluir(ctx, id); err != nil {
+			// A contagem acima é a primeira defesa; esta é a rede embaixo
+			// dela. Qualquer FK que ainda aponte para o contato — a da reserva,
+			// a da agenda, a de uma tabela nova que a contagem não conheça, e
+			// a que cai primeiro depende do OID — é o mesmo fato para quem
+			// pediu: a ficha tem vínculo. Os `details` saem da contagem, e não
+			// do nome da constraint.
+			if db.IsForeignKeyViolation(err) {
+				return apperr.ResourceInUse.WithMessage(mensagemContatoComVinculos).WithDetails(map[string]any{
+					"references": v,
+					"hint": "este contato tem histórico. Para atender ao direito de eliminação sem apagar " +
+						"a venda, use POST /contacts/" + id.String() + "/anonymize.",
+				}).WithCause(err)
+			}
 			return err
 		}
 		return registrarExclusao(ctx, s.repo.pool, atual)

@@ -158,6 +158,9 @@ func (a *ambiente) hospedeDaJornada(t *testing.T, propriedade uuid.UUID) uuid.UU
 		t.Fatalf("criando o hóspede da jornada: %v", err)
 	}
 	t.Cleanup(func() {
+		// A agenda segura a reserva confirmada por FK RESTRICT (20261013120000).
+		a.executarQA(t, `DELETE FROM agenda_events
+		                  WHERE contact_id = $1 OR reservation_id IN (SELECT id FROM reservations WHERE contact_id = $1)`, id)
 		a.executarQA(t, `DELETE FROM reservation_guests WHERE contact_id = $1`, id)
 		a.executarQA(t, `DELETE FROM reservations WHERE contact_id = $1`, id)
 		a.executarQA(t, `DELETE FROM contacts WHERE id = $1`, id)

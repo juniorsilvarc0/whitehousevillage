@@ -81,6 +81,8 @@ export function mensagemDoErro(code: CodigoDeErro, padrao = "Não foi possível 
       return "Esta ordem de manutenção já foi encerrada. Recarregue a página para ver como ela ficou — retrabalho é uma ordem nova.";
     case "MAINTENANCE_ORDER_ALREADY_OPEN":
       return "Esta avaria já tem uma ordem de manutenção em aberto. Continue por ela em vez de abrir outra.";
+    case "AGENDA_EVENT_CLOSED":
+      return "Este evento da agenda já foi concluído ou desmarcado e não aceita essa mudança. Recarregue a página para ver como ele ficou — o que volta a acontecer é um evento novo.";
     case "IDEMPOTENCY_MISMATCH":
       return "Esta ação já foi enviada antes com outros dados. Recarregue a página e confira.";
     case "INTERNAL":

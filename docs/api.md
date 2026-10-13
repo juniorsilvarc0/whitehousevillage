@@ -119,7 +119,7 @@ POST /blocks  ·  DELETE /blocks/{id}           bloqueio operacional
 **Chat**
 `/chat/conversations` (+`/{id}/messages`, `/{id}/send`, `/send-audio`, `/send-file`, `/{id}/takeover`, `/{id}/resolve`) · `/chat/messages/{id}` · `/chat/quick-replies` · `/chat/connection/{qr,state,disconnect}` · `POST /chat/webhook/uazapi` *(público, autenticado por segredo)*
 
-**Agenda** `/agenda/events` CRUD · `GET /agenda/board?view=day|week|month|list` · `/agenda/settings` · `/agenda/blocks`
+**Agenda** `/agenda/events` CRUD (`?from&to` serve as quatro visões — dia, semana, mês e lista) + `/{id}/complete` · `/agenda/blocks` CRUD · `GET|PUT /agenda/settings`. Não existe `/agenda/board`: as visões de calendário e a lista leem a mesma rota, no envelope padrão, e uma segunda leitura para a mesma agenda divergiria da primeira
 
 **Financeiro** `/finance/receivables` (+`/{id}/settle`) · `/finance/payables` · `/finance/payments` · `/finance/reconciliation` · `/finance/commissions` · `/finance/owner-payouts` (+`/generate`) · `/finance/summary`
 

@@ -385,6 +385,16 @@ A API passou a devolver, na coleção, o schema `ContatoNaLista`: documento, tel
 
 ---
 
+### D13 — O "hoje" da casa tem cerca de dez cópias em SQL → aberta em 13/10/2026
+
+**Achada pelo `tech-lead`** ao desenhar a agenda: a regra 5 do CLAUDE.md pede o fuso num helper único, e o Go não tinha nenhum — são cerca de dez `(now() AT TIME ZONE p.timezone)::date` espalhados nos repositórios (`reservas`, `inventario`, `bens`, `disponibilidade`, `manutencao`) e um `vitrine.fusoDaCasa` com `time.LoadLocation("America/Fortaleza")` fixo, contra a ideia de o fuso ser dado da propriedade.
+
+**O que já foi feito**: `internal/domain/calendar/zone.go` (`calendar.Zone`) é o helper único desde a agenda (PR #18), com `time/tzdata` embutido para a imagem distroless; a agenda inteira passa por ele, e o "agora" vem do `now()` do banco.
+
+**Definitivo**: os demais módulos convergem para `calendar.Zone`, um por vez, cada um com o teste da virada do dia (evento às 22h da casa cai no dia da casa, não no de UTC). **Por que não agora**: as cópias em SQL estão certas hoje — é risco de divergência futura, não defeito medido.
+
+---
+
 ### D12 — Filtro booleano ilegível vira "sem filtro" em toda a API → aberta em 09/10/2026
 
 **Achada pelo `qa-testes`** na fatia de ordens de manutenção: `GET /maintenance-orders?open=sim` devolvia a lista inteira, abertas e encerradas misturadas, como se tivesse filtrado. A causa é de plataforma — `httpx.ParseBool` devolve nulo para valor que não é `true`/`false`, e o handler trata nulo como "não filtrar". São **23 leituras em 8 módulos** (`bens` 6, `crm` 5, `contatos` 3, `inventario` 3, `tarifario` 3, `manutencao` 1, `reservas` 1, `users` 1).
@@ -412,7 +422,7 @@ Nenhuma delas é técnica, e nenhuma pode ser adivinhada por quem implementa. Ca
 | 9 | **A caução de evento entra no total e na base do sinal?** Hoje `internal/domain/booking/booking.go:186-188` faz `Total = Subtotal − Desconto + Limpeza + Caução`, `Sinal = Total × deposit_pct` e `Saldo = Total − Sinal` | O F2-12 e o F2-15. Escrito à letra, o F2-12 (`saldo = total − sinal` **mais** um recebível `security_deposit`) **cobra a caução duas vezes**: uma dentro do saldo, outra no recebível próprio. E o sinal hoje incide sobre a caução, o que talvez não seja a intenção |
 | 10 | **Regra da comissão e quando ela é liberada** — percentual por corretor, por produto ou por faixa; mínimo; base `subtotal − desconto`; liberação na confirmação, no saldo ou no check-out; o que acontece no cancelamento e na remarcação | O F2-08 (os cenários tabelados da função pura), o seed de `commission_rules` (F2-10) e o F2-13 |
 | 11 | **Retenção da caução no check-out** — quem autoriza reter parte dela e com que comprovação | O pagável de devolução parcial do F2-15 |
-| 12 | **Horários da operação** — check-in, check-out e janela de limpeza | O seed de `agenda_settings` (F2-19) e a agenda que se enche sozinha (F2-20) |
+| 12 | **Horários da operação** — check-in, check-out e janela de limpeza | **Não bloqueia mais nada** desde 13/10/2026: os horários viraram dado (`agenda_settings`), com provisórios (14:00, 11:00, limpeza 11–14h, funcionamento 8–20h) que o dono troca em Configurações → Agenda — e trocar reprograma a agenda futura. Falta só o dono dizer os valores definitivos |
 | 13 | **Desconto de 6 a 10% "com aprovação do proprietário"** está escrito em `spec.md:118`, `ui.md:125` e na unificação, e **não existe no código**: `booking.AuthorityOwner` é só um rótulo devolvido em `discount_authority`; o motor recusa apenas acima de 10% (`booking.go`), e a venda com 8% fecha sem ninguém aprovar | Ou vira fluxo (quem aprova, onde fica registrado, o que a reserva guarda) — e entra no backlog com prova —, ou sai dos documentos. Enquanto isso, a jornada 5.3 do PRD (corretor) e o semáforo do `QuoteBuilder` prometem um controle que não há |
 
 Além dessas, duas autorizações que só o dono dá: o **merge do PR #2** (`ci/actions-node-24`, CI verde; o `devops` provou que o `ci.yml` desta rodada mescla com ele sem conflito) e a **remoção das branches remotas já contidas na `main`** (`dividas/quitacao-rodada-4`, `fase-2/bloco-0`).

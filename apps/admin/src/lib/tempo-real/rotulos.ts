@@ -13,12 +13,12 @@ import type { EstadoDoTempoReal } from "./sse";
  * que está na tela, que é o que importa para decidir se vale um F5.
  */
 /**
- * De que tela o texto fala. São duas hoje — o mapa de ocupação e o quadro do
- * funil —, e a diferença aparece só onde a frase nomeia o assunto: dizer "o
+ * De que tela o texto fala. São três hoje — o mapa de ocupação, o quadro do
+ * funil e a agenda —, e a diferença aparece só onde a frase nomeia o assunto: dizer "o
  * mapa se atualiza sozinho" numa tela que não é o mapa é o tipo de texto que
  * ensina o operador a não ler o indicador.
  */
-export type AssuntoDoTempoReal = "mapa" | "funil";
+export type AssuntoDoTempoReal = "mapa" | "funil" | "agenda";
 
 export type DescricaoDoTempoReal = {
   rotulo: string;
@@ -40,7 +40,12 @@ export function descreverTempoReal(
         detalhe:
           assunto === "funil"
             ? "O quadro se atualiza sozinho quando alguém move, ganha ou perde um negócio."
-            : "O mapa se atualiza sozinho quando alguém vende, bloqueia ou cancela.",
+            : assunto === "agenda"
+              ? // O barramento só tem os tópicos `calendar` e `crm`: a agenda ouve
+                // o primeiro, que avisa de reserva e de bloqueio de unidade. O que
+                // alguém marca à mão não passa por ele — e a frase não promete.
+                "A agenda se atualiza sozinha quando uma reserva ou um bloqueio de unidade muda. O que outra pessoa marca à mão aparece ao recarregar."
+              : "O mapa se atualiza sozinho quando alguém vende, bloqueia ou cancela.",
         tom: "ok",
         ofereceReconectar: false,
       };
@@ -71,7 +76,9 @@ export function descreverTempoReal(
         detalhe:
           assunto === "funil"
             ? "Sem internet. O quadro volta a se atualizar sozinho quando a conexão voltar."
-            : "Sem internet. O mapa volta a se atualizar sozinho quando a conexão voltar.",
+            : assunto === "agenda"
+              ? "Sem internet. A agenda volta a se atualizar sozinha quando a conexão voltar."
+              : "Sem internet. O mapa volta a se atualizar sozinho quando a conexão voltar.",
         tom: "falha",
         ofereceReconectar: false,
       };

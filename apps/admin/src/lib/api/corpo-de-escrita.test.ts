@@ -35,6 +35,7 @@ const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const COMERCIAL_TS = path.resolve(AQUI, "comercial.ts");
 const BENS_TS = path.resolve(AQUI, "../bens/tipos.ts");
 const MANUTENCAO_TS = path.resolve(AQUI, "../manutencao/tipos.ts");
+const AGENDA_TS = path.resolve(AQUI, "../agenda/tipos.ts");
 const API = path.resolve(AQUI, "../../../../api/internal/modules");
 
 /** Tira comentários antes de procurar chave: `/** … *\/` tem `:` dentro. */
@@ -105,6 +106,17 @@ const CORPOS: { rota: string; tipoTS: string; arquivoGo: string; structGo: strin
   { rota: "PATCH /maintenance-orders/{id}", tipoTS: "CustoDaOrdemEntrada", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "OrdemDeManutencaoAtualizar" },
   { rota: "POST /maintenance-orders/{id}/complete", tipoTS: "ConclusaoEntrada", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "ConclusaoDaOrdem" },
   { rota: "PUT /maintenance-orders/{id}/block", tipoTS: "PeriodoDoBloqueio", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "PeriodoDoBloqueio" },
+  // Agenda operacional (`agenda`; os horários pedem `settings:editar`). Os tipos
+  // moram em `lib/agenda/tipos.ts`; os DTOs, em `internal/modules/agenda/dto.go`.
+  // O `PATCH` do painel manda só o que o automático e o concluído aceitam
+  // (`EventoAtualizarEntrada`: horário, responsável, anotação), mas o DTO que o
+  // recebe é o `EventoDaAgendaAtualizar` inteiro.
+  { rota: "POST /agenda/events", tipoTS: "EventoCriarEntrada", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "EventoDaAgendaCriar" },
+  { rota: "PUT /agenda/events/{id}", tipoTS: "EventoSubstituirEntrada", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "EventoDaAgendaSubstituir" },
+  { rota: "PATCH /agenda/events/{id}", tipoTS: "EventoAtualizarEntrada", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "EventoDaAgendaAtualizar" },
+  { rota: "POST /agenda/blocks", tipoTS: "BloqueioDeHorarioEntrada", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "BloqueioDeHorarioCriar" },
+  { rota: "PUT /agenda/settings", tipoTS: "ConfiguracaoDaAgendaEntrada", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "ConfiguracaoDaAgendaEntrada" },
+  { rota: "PUT /agenda/settings (intervalo)", tipoTS: "IntervaloDeFuncionamento", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "IntervaloDeFuncionamento" },
 ];
 
 describe("o corpo que o painel manda é o corpo que a API aceita", () => {
@@ -133,6 +145,6 @@ describe("o corpo que o painel manda é o corpo que a API aceita", () => {
   it("a lista de corpos não encolheu sem ninguém notar", () => {
     // Uma linha removida da tabela é cobertura que some em silêncio — o mesmo
     // modo de falha do teste que "passa" porque não afirma nada.
-    expect(CORPOS.length).toBeGreaterThanOrEqual(21);
+    expect(CORPOS.length).toBeGreaterThanOrEqual(27);
   });
 });

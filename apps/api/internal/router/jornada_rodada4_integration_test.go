@@ -138,6 +138,9 @@ func (a *ambiente) limparRastroDoContato(t *testing.T, contato uuid.UUID) {
 		a.executarQA(t, `DELETE FROM quotes WHERE contact_id = $1`, contato)
 		a.executarQA(t, `DELETE FROM crm_opportunities WHERE contact_id = $1`, contato)
 		a.executarQA(t, `DELETE FROM reservation_guests WHERE contact_id = $1`, contato)
+		// A agenda segura a reserva confirmada por FK RESTRICT (20261013120000).
+		a.executarQA(t, `DELETE FROM agenda_events
+		                  WHERE contact_id = $1 OR reservation_id IN (SELECT id FROM reservations WHERE contact_id = $1)`, contato)
 		a.executarQA(t, `DELETE FROM reservations WHERE contact_id = $1`, contato)
 		a.executarQA(t, `DELETE FROM pii_access_log WHERE contact_id = $1`, contato)
 		a.executarQA(t, `DELETE FROM audit_log WHERE entity_id = $1`, contato)

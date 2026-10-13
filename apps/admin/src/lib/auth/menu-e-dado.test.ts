@@ -84,17 +84,19 @@ describe("o menu é derivado da matriz, não do nome do perfil", () => {
     ).toContain("/app/reservas");
   });
 
-  it("a agenda continua ausente por falta de TELA, não por causa do papel", () => {
-    // O contrapeso do caso acima, e o que impede a troca de âncora de virar um
-    // afrouxamento: `/app/agenda` some do menu do corretor, sim — mas some do
-    // menu de todo mundo, inclusive do admin, porque não há `page.tsx`. Se
-    // algum dia ela sumir só para o corretor, este caso continua verde e o de
-    // cima fica vermelho, que é a divisão certa de trabalho entre os dois.
+  it("a agenda aparece para o corretor, que a tem em escopo own — a âncora original", () => {
+    // A agenda voltou a existir em 13/10/2026 (F2-21), e com ela a âncora
+    // original deste arquivo: o corretor tem `agenda` em escopo `own` — a agenda
+    // de visitas dele — e o menu tem de mostrá-la. Escopo restringe o QUE se vê
+    // dentro da tela (as visitas dele, no SQL), nunca SE a tela aparece. Era
+    // exatamente aqui que o `allowedRoles` escondia a tela concedida.
     const agenda = CATALOGO.find((item) => item.href === "/app/agenda");
 
-    expect(agenda, "o destino saiu do catálogo — deveria continuar lá, marcado").toBeDefined();
-    expect(agenda?.emConstrucao, "a agenda voltou a existir: reescreva a âncora deste teste").toBe(true);
-    expect(hrefs("admin", MATRIZ_DO_CORRETOR)).not.toContain("/app/agenda");
+    expect(agenda, "o destino saiu do catálogo").toBeDefined();
+    expect(agenda?.emConstrucao, "a agenda existe: não pode voltar a ser anunciada como em construção").toBeUndefined();
+    expect(hrefs("corretor", MATRIZ_DO_CORRETOR)).toContain("/app/agenda");
+    // Controle: sem `agenda` na matriz, a tela some — inclusive com o mesmo papel.
+    expect(hrefs("corretor", MATRIZ_DO_CORRETOR.filter((p) => p.resource !== "agenda"))).not.toContain("/app/agenda");
   });
 
   /**

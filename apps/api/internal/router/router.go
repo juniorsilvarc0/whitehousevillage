@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/agenda"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/bens"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/contatos"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
@@ -49,7 +50,23 @@ type Opcoes struct {
 }
 
 // New monta as dependências e devolve o handler pronto.
+//
+// O que a API abre por conta própria — a escuta do tempo real, que segura uma
+// conexão dedicada do Postgres — vive enquanto o PROCESSO viver, e por isso
+// New não devolve como fechar. Quem precisa derrubar uma API montada antes de
+// o processo acabar (o teste de integração, que sobe uma por teste) usa
+// NovoComFechamento.
 func New(o Opcoes) (http.Handler, error) {
+	h, _, err := NovoComFechamento(o)
+	return h, err
+}
+
+// NovoComFechamento é o New que também devolve a função que encerra o que a
+// API abriu por conta própria. Sem ela, cada API montada deixa uma conexão de
+// LISTEN aberta: medido em 13/10/2026, a suíte do pacote router (uma API por
+// teste) esgotou as 100 conexões padrão do Postgres — o mesmo limite do banco
+// do CI — com `FATAL: sorry, too many clients already`. Idempotente.
+func NovoComFechamento(o Opcoes) (http.Handler, func(), error) {
 	tx := db.NewTxManager(o.Pool)
 
 	authRepo := auth.NewRepository(o.Pool)
@@ -104,16 +121,23 @@ func New(o Opcoes) (http.Handler, error) {
 		// Ordens de manutenção. Montar é OBRIGATÓRIO: rotas_manutencao.go não
 		// guarda contra handler nulo.
 		Manutencao: manutencao.NovoHandler(o.Pool, tx),
+
+		// Agenda operacional. Montar é OBRIGATÓRIO: rotas_agenda.go não guarda
+		// contra handler nulo.
+		Agenda: agenda.NovoHandler(o.Pool, tx),
 	}
 
 	prepararVolumeDeMidia(o.Config.MediaDir)
 
+	fechar := func() { deps.Stream.Fechar() }
+
 	tabela := Rotas(deps)
 	if err := ValidarTabela(tabela); err != nil {
-		return nil, fmt.Errorf("tabela de rotas inválida: %w", err)
+		fechar()
+		return nil, nil, fmt.Errorf("tabela de rotas inválida: %w", err)
 	}
 
-	return montar(o.Config, tabela, autenticador), nil
+	return montar(o.Config, tabela, autenticador), fechar, nil
 }
 
 func montar(cfg config.Config, tabela []Rota, autenticador *auth.Autenticador) http.Handler {

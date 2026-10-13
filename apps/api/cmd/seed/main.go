@@ -73,6 +73,8 @@ func etapas() []etapa {
 		{"pacotes", pacotes},
 		{"politica_comercial", politicaComercial},
 		{"politica_de_cancelamento", politicaDeCancelamento},
+		{"agenda_settings", configuracaoDaAgenda},
+		{"agenda_das_reservas_confirmadas", agendaDasReservasConfirmadas},
 		{"contatos_de_demonstracao", contatosDeDemonstracao},
 		{"catalogo_de_recursos", catalogoDeRecursos},
 		{"perfis", perfis},

@@ -281,7 +281,24 @@ var matrizSeed = map[string][]concessao{
 		// SQL, `own` degrada para `all` e esta linha passa a permitir apagar o
 		// bloqueio alheio — mais grave que a assimetria que ela corrige.
 		{"calendar", tudo, escopoOwn},
-		{"agenda", leituraEscrita, escopoOwn},
+
+		// `agenda` também com as QUATRO ações, pela mesma lição. Com só
+		// ver+criar, o corretor marcava a visita (`POST /agenda/events`, 201)
+		// e não conseguia desmarcá-la (`DELETE`, agenda:excluir), nem trocar o
+		// horário que o cliente pediu (`PATCH`, agenda:editar), nem dizer que
+		// ela aconteceu (`/complete`, agenda:editar). Excluir aqui é CANCELAR —
+		// o evento fica na agenda como `cancelado` —, não apagar.
+		//
+		// DEPENDE DO FILTRO POR RESPONSÁVEL, como `calendar` depende do dono:
+		// `own` na agenda é `assignee_id = <ator>` no SQL da lista, do detalhe,
+		// da edição, da conclusão e do cancelamento (contrato, tag Agenda), e
+		// toda escrita em `own` grava o próprio ator como responsável. Os
+		// eventos automáticos nascem sem responsável e ficam fora do alcance
+		// dele. O bloqueio de horário da operação (`/agenda/blocks`) não tem
+		// responsável, e em `own` a API o recusa (403,
+		// `own_scope_not_applicable`): estas quatro células não deixam o
+		// corretor fechar a agenda da casa.
+		{"agenda", tudo, escopoOwn},
 
 		// `contacts` em `all` é a exceção incômoda: a tabela não tem coluna de
 		// dono, e sem poder criar o contato o corretor não consegue registrar o

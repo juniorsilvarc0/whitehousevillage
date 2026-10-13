@@ -345,6 +345,12 @@ func (a *ambiente) usuario(t *testing.T, perfilID uuid.UUID) (uuid.UUID, string)
 	// apagado ANTES do contato criado no teste pai, e `reservations.created_by`
 	// o referencia. Soltar as reservas dele primeiro evita o 23503.
 	t.Cleanup(func() {
+		// A agenda segura a reserva, o autor, o responsável e quem concluiu
+		// por FK RESTRICT (20261013120000): o `/confirm` põe três eventos na
+		// agenda, e eles saem antes de tudo.
+		a.executar(t, `DELETE FROM agenda_events
+		                WHERE reservation_id IN (SELECT id FROM reservations WHERE created_by = $1 OR owner_id = $1)
+		                   OR created_by = $1 OR assignee_id = $1 OR done_by = $1`, id)
 		a.executar(t, `DELETE FROM reservations WHERE created_by = $1 OR owner_id = $1`, id)
 		// Ordem de manutenção que aponta para um bloqueio dele (ou que ele abriu)
 		// segura a linha por FK RESTRICT: sai antes do bloqueio.
@@ -390,6 +396,8 @@ func (a *ambiente) contato(t *testing.T) uuid.UUID {
 		t.Fatalf("criando contato: %v", err)
 	}
 	t.Cleanup(func() {
+		a.executar(t, `DELETE FROM agenda_events
+		                WHERE contact_id = $1 OR reservation_id IN (SELECT id FROM reservations WHERE contact_id = $1)`, id)
 		a.executar(t, `DELETE FROM reservation_guests WHERE contact_id = $1`, id)
 		a.executar(t, `DELETE FROM reservations WHERE contact_id = $1`, id)
 		a.executar(t, `DELETE FROM contacts WHERE id = $1`, id)
@@ -459,6 +467,7 @@ func (a *ambiente) desativarUnidade(t *testing.T, codigo string) {
 // indevida travando o calendário dos testes seguintes.
 func (a *ambiente) apagarReserva(t *testing.T, id uuid.UUID) {
 	t.Helper()
+	a.executar(t, `DELETE FROM agenda_events WHERE reservation_id = $1`, id)
 	a.executar(t, `DELETE FROM reservations WHERE id = $1`, id)
 }
 

@@ -192,10 +192,10 @@ describe("navegacaoVisivel", () => {
 
   it("o corretor vê o que é dele — todas as telas que existem e a matriz concede", () => {
     // Esta lista é a interseção de duas coisas, e as duas mudam com o tempo: a
-    // matriz do seed (docs/ui.md §7) e as telas entregues. `/app/chat`,
-    // `/app/agenda` e `/app/comissoes` estão na matriz do corretor e **não**
-    // estão aqui — as telas são de Fase 1g e Fase 2. Voltam ao menu dele sozinhas
-    // no dia em que existirem, sem tocar nesta suíte nem na matriz.
+    // matriz do seed (docs/ui.md §7) e as telas entregues. `/app/chat` e
+    // `/app/comissoes` estão na matriz do corretor e **não** estão aqui — as
+    // telas são de Fase 1g e Fase 2. Voltam ao menu dele sozinhas no dia em que
+    // existirem, sem tocar nesta suíte nem na matriz.
     expect(hrefs({ role: "corretor" }, PERMISSOES_DO_CORRETOR)).toEqual([
       "/app",
       "/app/mapa",
@@ -209,6 +209,10 @@ describe("navegacaoVisivel", () => {
       // Leads entrou junto com o CRM: o seed dá `crm.leads` ao corretor em
       // escopo `own` — são os leads dele, e o menu é função só da matriz.
       "/app/leads",
+      // A agenda chegou em 13/10/2026 (F2-21) — a das visitas dele, `agenda` em
+      // escopo `own`. Entrou sozinha, na posição do catálogo, como este
+      // comentário prometia.
+      "/app/agenda",
     ]);
   });
 

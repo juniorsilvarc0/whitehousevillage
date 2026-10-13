@@ -61,7 +61,7 @@ func subir(t *testing.T) *ambiente {
 	}
 	t.Cleanup(pool.Close)
 
-	h, err := router.New(router.Opcoes{
+	h, fechar, err := router.NovoComFechamento(router.Opcoes{
 		Config: config.Config{
 			Env:         "test",
 			JWTSecret:   "segredo-de-integracao-com-mais-de-32-bytes",
@@ -74,6 +74,9 @@ func subir(t *testing.T) *ambiente {
 	if err != nil {
 		t.Fatalf("montando o router: %v", err)
 	}
+	// A escuta do tempo real segura uma conexão própria; sem fechar, ela fica
+	// aberta depois do teste (ver router.NovoComFechamento).
+	t.Cleanup(fechar)
 
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

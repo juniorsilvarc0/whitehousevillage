@@ -1,0 +1,148 @@
+/*
+ * Geometria e paleta da agenda operacional.
+ *
+ * Mesmo arranjo do mapa (`components/mapa/mapa.css`): o hachurado do bloqueio
+ * e da manutenção e a grade de passos (`repeating-linear-gradient` com
+ * `calc()` sobre a altura da hora) não têm utility, e escrevê-los inline seria
+ * uma string de gradiente nova por cartão a cada render.
+ *
+ * Todas as cores são DERIVADAS dos tokens da marca por `color-mix` — nenhum
+ * hex, nenhum oklch solto. Mudar `--primary` no `globals.css` repinta a agenda
+ * inteira, que é a propriedade que o anti-padrão nº 4 de `docs/ui.md` protege.
+ */
+
+.agenda {
+  /* 3rem = 48px por hora: a visita de 30 minutos tem 24px — uma linha de
+     texto legível no celular sem a grade de doze horas passar de 600px. */
+  --agenda-hora: 3rem;
+  --agenda-rotulo: 3rem;
+
+  --agenda-grade: color-mix(in oklab, var(--border) 85%, transparent);
+  --agenda-passo: color-mix(in oklab, var(--border) 45%, transparent);
+  --agenda-fechado: color-mix(in oklab, var(--muted-foreground) 9%, transparent);
+  --agenda-hoje: color-mix(in oklab, var(--primary) 7%, transparent);
+}
+
+/* ── A cor de cada tipo ──────────────────────────────────────────────────────
+   Check-in entra (o verde do "livre"), check-out sai (areia), limpeza é
+   sálvia, manutenção é a atenção (âmbar), visita é a marca, evento é o verde
+   profundo e o bloqueio é neutro.
+
+   Declarada no PRÓPRIO elemento (`[data-tipo]`), e não herdada de `.agenda`:
+   o detalhe e o formulário abrem num portal, fora da grade, e o ponto do tipo
+   lá dentro ficaria sem cor. */
+
+.agenda-evento,
+.agenda-ponto {
+  --cor: var(--primary);
+}
+.agenda-evento[data-tipo="checkin"],
+.agenda-ponto[data-tipo="checkin"] { --cor: var(--alcada-livre); }
+.agenda-evento[data-tipo="checkout"],
+.agenda-ponto[data-tipo="checkout"] { --cor: var(--chart-3); }
+.agenda-evento[data-tipo="limpeza"],
+.agenda-ponto[data-tipo="limpeza"] { --cor: var(--chart-2); }
+.agenda-evento[data-tipo="manutencao"],
+.agenda-ponto[data-tipo="manutencao"] { --cor: var(--alcada-atencao); }
+.agenda-evento[data-tipo="evento"],
+.agenda-ponto[data-tipo="evento"] { --cor: var(--chart-5); }
+.agenda-evento[data-tipo="bloqueio"],
+.agenda-ponto[data-tipo="bloqueio"] { --cor: var(--muted-foreground); }
+
+/* ── O cartão do evento ──────────────────────────────────────────────────── */
+
+.agenda-evento {
+  background-color: color-mix(in oklab, var(--cor) 16%, var(--card));
+  border-left: 3px solid var(--cor);
+}
+
+/* Manutenção e bloqueio de unidade são lidos de `stay_blocks`: hachurados,
+   como no mapa — a mesma linguagem para a mesma coisa. */
+.agenda-evento[data-tipo="manutencao"],
+.agenda-evento[data-tipo="bloqueio"] {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 6px,
+    color-mix(in oklab, var(--cor) 16%, transparent) 6px 9px
+  );
+}
+
+.agenda-evento[data-status="concluido"] {
+  background-color: color-mix(in oklab, var(--cor) 5%, var(--card));
+  color: var(--muted-foreground);
+}
+
+.agenda-evento[data-status="cancelado"] {
+  background-color: transparent;
+  border-left-style: dashed;
+  color: var(--muted-foreground);
+}
+
+.agenda-evento[data-status="cancelado"] .agenda-evento-titulo {
+  text-decoration: line-through;
+}
+
+/* O conflito de unidade: contorno de dentro, nunca sombra (sombra dentro de
+   sombra é o anti-padrão nº 1 da casca). */
+.agenda-evento[data-conflito="1"] {
+  outline: 1.5px solid var(--destructive);
+  outline-offset: -1.5px;
+}
+
+.agenda-ponto {
+  background-color: var(--cor);
+}
+
+/* ── A grade de horários ─────────────────────────────────────────────────── */
+
+.agenda-rolagem {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.agenda-colunas {
+  display: grid;
+  grid-template-columns: var(--agenda-rotulo) repeat(var(--agenda-dias), minmax(var(--agenda-largura-min, 0px), 1fr));
+}
+
+/* As linhas da hora cheia e do passo (`slot_minutes`) desenhadas no fundo da
+   coluna. A faixa desenhada sempre começa numa hora cheia, então as duas
+   camadas alinham sem deslocamento. */
+.agenda-pista {
+  position: relative;
+  border-left: 1px solid var(--agenda-grade);
+  background-image:
+    linear-gradient(to bottom, var(--agenda-grade) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--agenda-passo) 1px, transparent 1px);
+  background-size:
+    100% var(--agenda-hora),
+    100% calc(var(--agenda-hora) * var(--agenda-passo-fracao, 0.5));
+}
+
+.agenda-pista[data-hoje="1"] {
+  background-color: var(--agenda-hoje);
+}
+
+.agenda-fora-do-horario {
+  position: absolute;
+  inset-inline: 0;
+  background-color: var(--agenda-fechado);
+  pointer-events: none;
+}
+
+/* O bloqueio de horário da operação: não ocupa unidade e não recusa nada —
+   só avisa. Hachurado em vermelho bem claro, para ler "atenção" sem gritar. */
+.agenda-bloqueio-de-horario {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, var(--destructive) 13%, transparent) 0 5px,
+    transparent 5px 10px
+  );
+  border-block: 1px dashed color-mix(in oklab, var(--destructive) 45%, transparent);
+}
+
+.agenda-pista .agenda-bloqueio-de-horario {
+  position: absolute;
+  inset-inline: 0;
+  pointer-events: none;
+}

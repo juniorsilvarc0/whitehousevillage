@@ -191,7 +191,7 @@ func (r *Repository) PropriedadePadrao(ctx context.Context) (uuid.UUID, error) {
 
 // Vinculos conta, por tipo, quem aponta para este contato.
 //
-// Uma consulta com subselects escalares, e não sete idas ao banco: as contagens
+// Uma consulta com subselects escalares, e não uma ida ao banco por tabela: as contagens
 // precisam ser do MESMO instante para a decisão do `DELETE` fazer sentido, e
 // sete consultas seriam sete instantes diferentes.
 func (r *Repository) Vinculos(ctx context.Context, id uuid.UUID) (Vinculos, error) {
@@ -203,12 +203,13 @@ func (r *Repository) Vinculos(ctx context.Context, id uuid.UUID) (Vinculos, erro
 		       (SELECT count(*) FROM crm_notes          WHERE contact_id = $1),
 		       (SELECT count(*) FROM reservation_guests WHERE contact_id = $1),
 		       (SELECT count(*) FROM quotes             WHERE contact_id = $1),
-		       (SELECT count(*) FROM brokers            WHERE contact_id = $1)`
+		       (SELECT count(*) FROM brokers            WHERE contact_id = $1),
+		       (SELECT count(*) FROM agenda_events      WHERE contact_id = $1)`
 
 	var v Vinculos
 	if err := r.exec(ctx).QueryRow(ctx, q, id).Scan(
 		&v.Reservas, &v.Leads, &v.Oportunidades, &v.Atividades,
-		&v.Notas, &v.Hospedes, &v.Orcamentos, &v.Corretores); err != nil {
+		&v.Notas, &v.Hospedes, &v.Orcamentos, &v.Corretores, &v.Agenda); err != nil {
 		return v, db.MapError(err)
 	}
 	return v, nil

@@ -260,6 +260,44 @@ quote → hold ──► confirmed ──► checked_in ──► checked_out �
 - Quatro visões: dia, semana, mês e lista. Horário de funcionamento e bloqueios configuráveis.
 - Conflito de horário é **aviso**, não bloqueio (a operação sabe o que está fazendo); conflito de unidade é bloqueio.
 
+### Desenho
+
+Desenho de 13/10/2026 (F2-19 a F2-21). Contrato na tag Agenda da OpenAPI (`/agenda/events`, `/agenda/blocks`, `/agenda/settings`), regras puras em `internal/domain/agenda`, o relógio da casa em `internal/domain/calendar` (`Zone`), schema em `agenda_events`, `agenda_blocks` e `agenda_settings` (`db.md` §9).
+
+**Os horários são dado** (`agenda_settings`, uma linha por propriedade): check-in, check-out, janela de limpeza, horário de funcionamento por dia da semana, passo da grade (`slot_minutes`) e folga entre compromissos da mesma pessoa (`buffer_minutes`). Os que nascem no banco são **provisórios, a confirmar pelo dono** — check-in 14:00, check-out 11:00, limpeza das 11:00 às 14:00, funcionamento das 08:00 às 20:00 todos os dias, passo de 30 e folga de 15 — e a resposta diz `provisional: true` até alguém gravar. Gravar pede `settings:editar` (o recurso do tarifário e das políticas): o horário de entrada é o que a casa promete ao hóspede, e o perfil `usuario` é "operação sem configurações" (§1). A coerência é uma só: `check-out ≤ início da limpeza < fim da limpeza ≤ check-in` — é o que faz o dia de troca (um sai, limpa, outro entra) caber sem a agenda colidir consigo mesma.
+
+**A agenda segue a reserva, e nunca a trava.**
+
+| Na reserva | Na agenda |
+|---|---|
+| confirmada (`/confirm`; a remarcação que nasce confirmada; o preenchimento das confirmadas antes da agenda) | check-in no dia da entrada, na hora de entrada; check-out no dia da saída, terminando na hora de saída; limpeza no dia da saída, na janela de limpeza — `agendado`, sem responsável, na mesma transação |
+| entrada registrada | o check-in vira `concluido` |
+| saída registrada | o check-out vira `concluido`; saída **antecipada** traz check-out e limpeza para o dia em que a unidade esvaziou |
+| cancelada ou no-show, sem ter entrado | todo evento agendado ligado a ela vira `cancelado` |
+| cancelada ou no-show, com o hóspede dentro | o check-out é cancelado; a limpeza vem para hoje; o evento manual que não começou é cancelado |
+| remarcada | é cancelar a original e confirmar a nova (§5) |
+| realocada | os automáticos já estão na unidade nova; o manual preso à unidade que saiu muda junto |
+| pré-reserva vencida | nada — `hold` não tem agenda |
+
+Nada é apagado. O evento automático **guarda a reserva e só**: a unidade e o titular são lidos dela a cada leitura, e por isso realocar ou trocar o titular não deixa a agenda apontando para o apartamento ou a pessoa de antes. O que é da agenda — o horário combinado, o responsável, a anotação, o estado — é gravado. Uma reserva tem no máximo um check-in, um check-out e uma limpeza automáticos, e quem garante é o índice único do banco, não um `SELECT`. Nenhuma venda é recusada por causa da agenda.
+
+**Conflito de unidade bloqueia; de horário avisa.** Uma unidade está ocupada pela estadia (da hora de entrada do primeiro dia à hora de saída do último — a combinada, se foi ajustada), por todo evento agendado nela e pela manutenção ou bloqueio de unidade (o dia inteiro). Marcar uma visita, um evento ou uma limpeza avulsa que cruze isso é `409 UNIT_NOT_AVAILABLE`; o evento ligado a uma reserva não colide com a estadia dela (a faxina do meio da estadia, o casamento do grupo que alugou a casa). Fora do funcionamento, dentro de um bloqueio de horário da operação ou com o responsável sem a folga, o evento é criado com aviso. O conflito que a venda cria depois aparece na lista (`has_unit_conflict`) em vez de travar a venda.
+
+**Manutenção e bloqueio de unidade são lidos, não copiados**: aparecem na agenda a partir de `stay_blocks` e mexem-se onde nasceram (a ordem de manutenção, `/blocks`). O bloqueio de **horário** da operação (`/agenda/blocks`) é outra coisa: não ocupa unidade, não recusa nada e só gera aviso.
+
+**O que se faz com um evento.** Estado só muda por ação nomeada: concluir (`/complete`, do dia do evento em diante) e desmarcar (`DELETE`, que cancela e não apaga). Check-in e check-out automáticos só mudam pela reserva; a limpeza automática conclui por aqui e não se desmarca. Do automático muda-se o horário (check-in e check-out no mesmo dia; a limpeza nunca antes do fim do check-out), o responsável e a anotação; do concluído, só a anotação; do cancelado, nada. Mudar os horários em Configurações reprograma os eventos automáticos agendados, de hoje em diante, que ainda estavam no horário antigo — o ajustado à mão e o passado ficam.
+
+**Permissão e fuso.** Recurso `agenda` (`supports_own = true`); `own` é `assignee_id = ator` no SQL, e fora dele é `404`. Em `own`, toda escrita tem o próprio ator como responsável. "Hoje", as datas e as horas são do fuso da propriedade (`properties.timezone`), convertidos num lugar só no Go (`calendar.Zone`) e num lugar só no painel; toda data-hora de resposta sai no offset da casa, e o dia de cada evento vem pronto (`date`) para as visões agruparem sem converter fuso no navegador.
+
+**Dado pessoal.** A agenda guarda o `contact_id`, nunca o nome; a resposta traz o nome lido na hora, e nenhuma rota devolve documento, telefone ou e-mail — por isso nenhuma grava `pii_access_log`.
+
+#### Critérios de aceite
+- `POST /reservations/{id}/confirm` seguido de `GET /agenda/events?reservation_id={id}` devolve três eventos — check-in no dia da entrada, check-out e limpeza no da saída —, e repetir o `/confirm` com a mesma `Idempotency-Key` continua devolvendo três; inserir um quarto automático direto no banco é recusado pelo índice único.
+- Cancelar a reserva deixa os três em `status=cancelado`, sem apagar.
+- Visita no apartamento durante a limpeza, ou com hóspede dentro, é `409 UNIT_NOT_AVAILABLE`; visita fora do horário de funcionamento é `201` com aviso; duas visitas simultâneas na mesma unidade e hora: exatamente uma vence, nenhuma `500`.
+- O corretor não vê a visita do colega nem na lista nem no detalhe (`404`).
+- Confirmar os horários provisórios move os check-ins futuros ainda às 14:00 para o horário novo e deixa onde estão os ajustados à mão.
+
 ---
 
 ## 10. Financeiro

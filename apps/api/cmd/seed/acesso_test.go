@@ -116,6 +116,48 @@ func TestCorretorOperaSobreOProprioDado(t *testing.T) {
 	}
 }
 
+// O corretor desfaz o que marca. Permissão que deixa criar e não deixa
+// desfazer não é restrição, é armadilha — e a armadilha já foi medida duas
+// vezes com a mesma forma: em `calendar`, o bloqueio que o corretor criava
+// (201) e não conseguia soltar (403); na agenda, a visita que ele marcava e não
+// conseguia desmarcar, remarcar nem dar por feita, porque só tinha ver+criar.
+//
+// As quatro ações em `own` só são seguras porque os dois recursos têm dono na
+// linha e o SQL filtra por ele: `stay_blocks.owner_id` no calendário e
+// `agenda_events.assignee_id` na agenda. O teste exige as duas metades: as
+// quatro ações, e nenhuma delas fora de `own`.
+func TestCorretorDesfazOQueMarca(t *testing.T) {
+	catalogo := map[string]recurso{}
+	for _, r := range catalogoSeed {
+		catalogo[r.codigo] = r
+	}
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, rec := range []string{"calendar", "agenda"} {
+		if !catalogo[rec].suportaOwn {
+			t.Errorf("%s sem suportaOwn — as quatro ações em own dependem do dono na linha", rec)
+		}
+		escopoDa := map[string]string{}
+		for _, l := range linhas {
+			if l.perfil == "corretor" && l.recurso == rec {
+				escopoDa[l.acao] = l.escopo
+			}
+		}
+		for _, a := range tudo {
+			escopo, ok := escopoDa[a]
+			switch {
+			case !ok:
+				t.Errorf("corretor sem %s:%s — cria e não desfaz; o conserto vira pedir a um admin", rec, a)
+			case escopo != escopoOwn:
+				t.Errorf("corretor com %s:%s em escopo %q — fora de own ele mexeria no que é dos outros", rec, a, escopo)
+			}
+		}
+	}
+}
+
 // docs/site-cms.md §1: recurso `site` com ver+editar, sem `own`, concedido à
 // gestão (e ao admin, pelo catálogo inteiro) — e a ninguém mais.
 func TestSiteEhDaGestao(t *testing.T) {

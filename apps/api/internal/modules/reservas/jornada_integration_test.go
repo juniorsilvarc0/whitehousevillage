@@ -301,6 +301,8 @@ func TestCorridaPelaMesmaDataTemExatamenteUmVencedorPorUnidade(t *testing.T) {
 			}
 
 			// Limpa para o `-count=N` continuar valendo.
+			a.executar(t, `DELETE FROM agenda_events WHERE reservation_id IN
+			                (SELECT id FROM reservations WHERE contact_id = $1 AND check_in = $2::date)`, contato, de)
 			a.executar(t, `DELETE FROM reservations WHERE contact_id = $1 AND check_in = $2::date`, contato, de)
 		})
 	}

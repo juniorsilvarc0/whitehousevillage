@@ -56,8 +56,24 @@ passar, 48 casos sem nenhum resultado inesperado. A régua de 25 colunas, uma da
 acrescentando 8 colunas e rodando o bloco `DO`. O ciclo rodou `up` → `down 1`
 → `up` e `down -all` → `up`; o `pg_dump --schema-only` depois de `down 1` é idêntico ao de antes
 da migration, e o de cada `up` é idêntico ao do primeiro. Os dois catálogos foram semeados duas
-vezes cada, num banco recém-migrado e alternando no mesmo banco. Para
-repetir a conferência de qualquer afirmação daqui:
+vezes cada, num banco recém-migrado e alternando no mesmo banco. Em **13/10/2026**, §2, §9, §14,
+§15 e §16 foram conferidos em `20261013120000` (as três tabelas da agenda), num PG 17.11
+descartável no host, só TCP (o Docker estava desligado). Colunas, constraints e índices foram
+lidos de `information_schema`/`pg_constraint`/`pg_indexes`. Os 32 casos do protótipo do
+tech-lead passaram, 22 recusas e 10 controles, com o caso da FK do contato isolado (§9 explica
+por quê). Uma bateria complementar passou também: 43 recusas e 13 controles, cada recusa num
+cenário em que só a constraint provada segura o caso, mais a régua de 25 colunas provada com 26.
+Oito sessões simultâneas disputaram a mesma unidade e hora: uma venceu, sete saíram com `23P01`;
+o mesmo vale para o índice único dos automáticos, com `23505`. O ciclo rodou `up` → `down 1` →
+`up` e `down -all` → `up`; o `pg_dump --schema-only` depois de `down 1` é idêntico ao de um banco
+que nunca viu a migration, e o de cada `up` é idêntico ao do primeiro. Os dois catálogos foram
+semeados duas vezes cada, num banco limpo, alternando no mesmo banco e sobre uma instalação
+semeada antes da agenda. Ainda em 13/10/2026, §9 e §16 foram conferidos com a etapa
+`agenda_das_reservas_confirmadas`, no mesmo tipo de Postgres descartável. Num banco novo, o seed
+`teste` e o `real` rodaram duas vezes cada, com as contagens de §16. Num banco semeado antes da
+agenda, seis reservas sem agenda passaram pela migration e pelo seed: três ganharam os eventos,
+três ficaram de fora, e a segunda execução criou zero. Para repetir a conferência de qualquer
+afirmação daqui:
 
 ```bash
 # quais tabelas existem
@@ -190,7 +206,7 @@ password_resets(id, user_id, token_hash, expires_at, used_at)
 
 O eixo **`scope`** é o que o portal_amimoveis não tem e é exatamente o que resolve "corretor vê só o dele": o repositório aplica `AND owner_id = $user` quando o escopo é `own`. Sem `if role == "corretor"` em lugar nenhum.
 
-**Escopo `own` exige coluna de dono — e permissão simétrica.** Onde não há dono identificável, `resources.supports_own` é `false` e a grade nem oferece "só os meus"; oferecer um escopo que o SQL não sabe aplicar degrada silenciosamente para `all`. E conceder `criar` sem `excluir` no mesmo recurso é armadilha, não restrição: a revisão mediu o corretor bloqueando as 8 unidades por 364 dias em `calendar` (`POST /blocks` → 201) sem conseguir desfazer (`DELETE /blocks/{id}` → 403). O seed passou a conceder as quatro ações de `calendar` em `own`, o que só é seguro porque `stay_blocks.owner_id` existe e o repositório filtra por ele.
+**Escopo `own` exige coluna de dono — e permissão simétrica.** Onde não há dono identificável, `resources.supports_own` é `false` e a grade nem oferece "só os meus"; oferecer um escopo que o SQL não sabe aplicar degrada silenciosamente para `all`. E conceder `criar` sem `excluir` no mesmo recurso é armadilha, não restrição: a revisão mediu o corretor bloqueando as 8 unidades por 364 dias em `calendar` (`POST /blocks` → 201) sem conseguir desfazer (`DELETE /blocks/{id}` → 403). O seed passou a conceder as quatro ações de `calendar` em `own`, o que só é seguro porque `stay_blocks.owner_id` existe e o repositório filtra por ele. A agenda repetiu a armadilha: o corretor tinha só ver e criar em `agenda` e marcava a visita sem conseguir desmarcá-la. Desde 13/10/2026 ele tem as quatro ações em `own` também ali (§9), onde o dono da linha é `agenda_events.assignee_id`.
 
 `users.broker_id` é o vínculo da conta de perfil `corretor` com o cadastro comercial dela (`brokers`, §10). Nasceu sem foreign key em `20260820140000`, porque `brokers` ainda não existia; desde `20261002180000` a FK existe, e é **composta**:
 
@@ -593,18 +609,235 @@ chat_quick_replies · chat_labels · chat_conversation_labels
 
 ---
 
-## 9. Agenda
+## 9. Agenda operacional
 
-> **Ainda não existe no banco.** As três tabelas nascem em F2-19; o recurso RBAC
-> `agenda` já está no catálogo.
+Entregue em `20261013120000` (F2-19). Contrato na tag Agenda da OpenAPI (`/agenda/events`,
+`/agenda/blocks`, `/agenda/settings`), regras puras em `internal/domain/agenda`, desenho na
+spec §9. Esta seção projetava, desde 20/08/2026, `agenda_events(id, property_id, type, title,
+starts_at, ends_at, all_day, unit_id?, reservation_id?, contact_id?, assignee_id?, status,
+notes)` com sete tipos, `agenda_settings(property_id PK, business_hours jsonb, slot_minutes,
+buffer_minutes)` e `agenda_blocks(id, property_id, starts_at, ends_at, all_day, reason)`.
+Faltavam a **origem** do evento, os **horários da casa** (check-in, check-out e janela de
+limpeza, que não existiam em lugar nenhum do banco), quem concluiu e quando, e o que o banco
+recusa. E sobravam dois tipos: `manutencao` e `bloqueio` não são gravados (abaixo).
 
 ```
-agenda_events(id, property_id, type, title, starts_at, ends_at, all_day,
-              unit_id?, reservation_id?, contact_id?, assignee_id?, status, notes)
-              -- type: checkin|checkout|limpeza|manutencao|visita|evento|bloqueio
-agenda_settings(property_id PK, business_hours jsonb, slot_minutes, buffer_minutes)
-agenda_blocks(id, property_id, starts_at, ends_at, all_day, reason)
+agenda_settings(property_id PK → properties, checkin_time, checkout_time,
+                cleaning_start, cleaning_end, business_hours jsonb,
+                slot_minutes, buffer_minutes, updated_by? → users, updated_at)   -- 10 colunas
+agenda_events(id, property_id, type, origin, reservation_id?, unit_id?, contact_id?,
+              assignee_id?, title?, starts_at, ends_at, all_day, status, notes?,
+              done_at?, done_by?, cancelled_at?, created_by?, created_at, updated_at)
+                                                                                 -- 20 colunas
+        -- type: checkin | checkout | limpeza | visita | evento
+        -- origin: reservation | manual · status: agendado | concluido | cancelado
+agenda_blocks(id, property_id, starts_at, ends_at, all_day, reason,
+              created_by?, created_at, updated_at)                               -- 9 colunas
 ```
+
+Os vocabulários são, palavra por palavra, as constantes de `internal/domain/agenda`
+(`Type.Stored`, `Origin.Stored`, `Status`). Instantes em `timestamptz`, janela half-open
+`[starts_at, ends_at)` — como a estadia é `[entrada, saída)` em datas: a limpeza das 11:00 às
+14:00 e o check-in das 14:00 encostam sem colidir. Dia inteiro começa e termina à meia-noite
+**da casa** (`agenda.CheckWindow`). Não há gatilho de `updated_at` nem de tempo real: quem
+escreve o grava.
+
+### Os horários são dado — e nascem provisórios
+
+`agenda_settings` é uma linha por propriedade; a PK é a FK. Os quatro horários são `time`, hora
+de parede sem fuso: o fuso é `properties.timezone`, e a conversão para instante é do Go
+(`calendar.Zone`), num lugar só.
+
+Os DEFAULTs são os valores **provisórios, a confirmar pelo dono** (decisão 12 do roadmap; ele
+edita em Configurações → Agenda, `PUT /agenda/settings`, que pede `settings:editar`): check-in
+14:00, check-out 11:00, limpeza das 11:00 às 14:00, funcionamento das 08:00 às 20:00 nos sete
+dias, passo (`slot_minutes`) de 30 e folga (`buffer_minutes`) de 15. `updated_by` nulo quer
+dizer "ninguém gravou", e a API o devolve como `provisional: true`. A migration criou a linha de
+toda propriedade que já existia; a da propriedade que nasce depois vem do seed (etapa
+`agenda_settings`, §16), que insere **só** `property_id` e faz `ON CONFLICT DO NOTHING`. Nunca
+`DO UPDATE`: o seed roda a cada deploy e desfaria a confirmação do dono na manhã seguinte. Se a
+linha ainda faltar (propriedade criada por outro caminho depois desta migration), o módulo da
+agenda a cria na primeira leitura com o mesmo `INSERT ... ON CONFLICT DO NOTHING`, e os valores
+continuam vindo dos DEFAULTs, não de uma cópia deles em Go.
+
+Os `CHECK` repetem as desigualdades de `agenda.Settings.Validate`, porque a linha tem dois
+escritores (a API e o seed) e o `psql` não passa por nenhum dos dois:
+
+| Constraint | Regra |
+|---|---|
+| `agenda_settings_dia_de_troca` | `checkout_time ≤ cleaning_start < cleaning_end ≤ checkin_time`: o dia de troca (um hóspede sai, a unidade é limpa, o seguinte entra) cabe sem a agenda colidir consigo mesma |
+| `agenda_settings_slot` | de 5 a 240 e divisor de 1440, escrito com `CASE` (abaixo) |
+| `agenda_settings_buffer` | de 0 a 240 |
+| `agenda_settings_checkout_cabe` | o passo que **termina** na hora de saída cabe no dia: `checkout_time` em minutos ≥ `slot_minutes` |
+| `agenda_settings_checkin_cabe` | o passo que **começa** na hora de entrada cabe no dia: `checkin_time` em minutos + `slot_minutes` ≤ 1440 |
+| `agenda_settings_business_hours_array` | `jsonb_typeof(business_hours) = 'array'` |
+
+`agenda_settings_slot` é `CASE WHEN slot_minutes BETWEEN 5 AND 240 THEN 1440 % slot_minutes = 0
+ELSE false END`, e não o `AND` direto. O Postgres não garante a ordem de avaliação de um `AND`
+(manual, "Expression Evaluation Rules"), e com `slot_minutes = 0` o módulo avaliado primeiro
+devolve `22012` (divisão por zero) em vez do `23514` nesta constraint, que é o que a API
+traduz. Medido no PG 17: `BETWEEN … AND 1440 % s = 0` devolve `23514` hoje só porque o
+executor avalia da esquerda para a direita; com os operandos invertidos, sai `22012`.
+
+O conteúdo de `business_hours` (dia ISO 1–7, `start < end`, até 4 intervalos por dia, sem
+sobreposição; `end` pode ser `"24:00"`) é só de `Validate`. Um `CHECK` sobre o jsonb seria a
+segunda cópia da regra, escrita em outra língua. Nenhum dos quatro `time` vale `24:00` numa
+linha válida, embora o tipo aceite `24:00:00`: check-in às 24:00 reprova `_checkin_cabe`, e fim
+de limpeza às 24:00 reprova `_dia_de_troca`.
+
+### O evento: duas origens, e o que não é gravado
+
+- **`origin = 'reservation'`** é o check-in, o check-out ou a limpeza que a reserva confirmada
+  põe na agenda (`agenda.Plan`) e que a seguem. O evento automático **não guarda unidade, titular
+  nem título** (`agenda_events_automatico`). A unidade e o titular são lidos da reserva a cada
+  leitura (`reservation_units`, `reservations.contact_id`), e o título é composto
+  (`agenda.AutoTitle`). Se fossem copiados, realocar a reserva ou trocar o titular deixaria a
+  agenda apontando para o apartamento e a pessoa de antes.
+- **`origin = 'manual'`** é a visita, o evento ou a limpeza avulsa marcados em
+  `POST /agenda/events`, sempre com título (`agenda_events_manual`). Unidade, reserva e cliente
+  são opcionais.
+- **`manutencao` e `bloqueio` (de unidade) não são linhas daqui.** Aparecem na agenda lidos de
+  `stay_blocks` na hora (`source = 'maintenance'`, `owner_hold`, `ota`) e se mexem onde nasceram:
+  na ordem de manutenção e em `/blocks`. Uma cópia seria uma segunda fonte, e as duas
+  divergiriam no primeiro bloqueio estendido por um caminho que não soubesse da agenda.
+
+A agenda guarda `contact_id`, nunca o nome: a anonimização não pode deixar cópia numa tabela que
+meio time lê. Nada é apagado. Desmarcar é `status = 'cancelado'` com `cancelled_at`, e por isso
+as FKs que saem de `agenda_events` são `ON DELETE RESTRICT`: a agenda é histórico de operação.
+
+### O que o banco garante
+
+| Constraint | Regra |
+|---|---|
+| `agenda_events_da_reserva_idx` | `UNIQUE (reservation_id, type) WHERE origin = 'reservation'`: no máximo um check-in, um check-out e uma limpeza automáticos por reserva, **em qualquer estado**. Não existe segundo check-in legítimo para a mesma reserva, porque reserva cancelada não volta a confirmar e remarcar é reserva nova (spec §5). Assim o `/confirm` repetido e o preenchimento das reservas antigas são idempotentes sem olhar o estado da linha que já está lá. Sai `23505` neste nome; para o `INSERT` absorver, o alvo do `ON CONFLICT` repete o predicado: `ON CONFLICT (reservation_id, type) WHERE origin = 'reservation' DO NOTHING`. O manual ligado à reserva não entra |
+| `agenda_events_unidade_sem_sobreposicao` | `EXCLUDE USING gist (unit_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&) WHERE (origin = 'manual' AND unit_id IS NOT NULL AND status = 'agendado')`: dois manuais agendados não ocupam a mesma unidade no mesmo instante. Sai `23P01` neste nome, que a API traduz para `409 UNIT_NOT_AVAILABLE`: nunca 500, nunca retry. Concluído e cancelado ficam fora, porque não ocupam mais nada e a visita desmarcada não pode impedir a seguinte |
+| `agenda_events_automatico` | automático: tipo `checkin`, `checkout` ou `limpeza`; `reservation_id` presente; `unit_id`, `contact_id` e `title` nulos; não `all_day` |
+| `agenda_events_manual` | manual: tipo `visita`, `evento` ou `limpeza`, com `title` |
+| `agenda_events_periodo` | `ends_at > starts_at`. É conferido antes da inserção no índice, então a janela vazia ou invertida sai `23514` aqui, e nunca como erro do `tstzrange` |
+| `agenda_events_conclusao` · `_cancelamento` | `concluido ⇔ done_at IS NOT NULL`; `cancelado ⇔ cancelled_at IS NOT NULL` (a forma de `inventory_counts_fechamento`) |
+| `agenda_events_concluidor` | `done_by` só com `done_at`. `done_by` continua anulável, porque o check-in automático conclui pela reserva e a conclusão pode não ter autor |
+| `agenda_events_title_nao_vazio` · `_title_tamanho` · `_notes_tamanho` | `btrim(title) <> ''`; `char_length` até 200 e até 2000, caracteres e não bytes, como o `maxLength` do contrato |
+| `agenda_events_type_check` · `_origin_check` · `_status_check` | os vocabulários |
+| FKs | `agenda_events_reservation_id_fkey`, `_unit_id_fkey`, `_contact_id_fkey`, `_assignee_id_fkey`, `_done_by_fkey` e `_created_by_fkey`, todas `ON DELETE RESTRICT`; e `agenda_events_property_id_fkey` |
+
+**A ordem em que as recusas aparecem.** O Postgres confere os `CHECK` em ordem de nome. Por isso
+`agenda_events_type_check` nunca é a primeira a cair: um tipo fora do vocabulário reprova antes
+`_automatico` ou `_manual` (ou `_origin_check`), conforme a origem, e a API recebe o nome da
+regra de forma, que é a mais específica. Medido: com `_manual` tirada, o mesmo `INSERT` cai em
+`_type_check`. As FKs são conferidas por gatilho, no fim da instrução, também em ordem de nome
+(`RI_ConstraintTrigger_a_<oid>`). Por isso apagar um contato que é titular de reserva **e**
+cliente de visita cai em `reservations_contact_id_fkey` ou em `agenda_events_contact_id_fkey`
+conforme o contador de OID do banco em que as migrations rodaram: a recusa é certa, o nome não.
+Quem traduz o `23503` trata os dois.
+
+### O que fica com a API
+
+O banco não recusa o evento que cruza a **estadia** de um hóspede, um evento **automático**, uma
+**manutenção** ou um **bloqueio de unidade**, nem o conflito do **manual sem unidade** que ocupa
+as unidades da reserva ligada. Quem recusa é `agenda.CheckUnit`. Em todos esses casos a unidade
+não está na linha (está em `reservation_units` ou em `stay_blocks`), e `EXCLUDE` só compara
+colunas da mesma tabela. Isso é aceito de propósito: a venda nunca é recusada por causa da agenda
+(o conflito que ela cria aparece na leitura, `has_unit_conflict`), e a corrida que importa, duas
+marcações à mão na mesma unidade, é a que o banco decide. Também ficam com a API:
+
+- que a unidade do manual seja uma das unidades da reserva ligada e esteja ativa;
+- que o contato não esteja anonimizado;
+- a máquina de estados: fechado não reabre (`agenda.Next`) e o automático só muda de hora
+  (`agenda.CheckEdit`);
+- a propriedade: como em §11, nada no banco impede citar a unidade de outra propriedade.
+
+### Índices
+
+- `agenda_events_janela_idx`, gist `(property_id, tstzrange(starts_at, ends_at, '[)'))`, responde
+  "os eventos que cruzam `[from, to)`", que é sobreposição de intervalos e que btree não responde
+  sem varrer desde o começo da história. A consulta precisa repetir a expressão do índice:
+  `WHERE property_id = $1 AND tstzrange(starts_at, ends_at, '[)') && tstzrange($2, $3, '[)')`.
+  Plano medido com `enable_seqscan = off`: `Index Scan using agenda_events_janela_idx`.
+- `agenda_events_inicio_idx (property_id, starts_at, id)` é a ordem da lista e a paginação
+  estável, e cobre a FK `property_id`.
+- `agenda_events_responsavel_idx (assignee_id, starts_at) WHERE assignee_id IS NOT NULL` serve o
+  escopo `own` (`assignee_id = <ator>`) e o filtro `assignee_id`, já na ordem da lista, e cobre a
+  FK. É parcial porque o automático nasce sem responsável.
+- Parciais em `IS NOT NULL` cobrem as FKs restantes: `agenda_events_reserva_idx (reservation_id)`,
+  `_unidade_idx (unit_id)`, `_contato_idx (contact_id)`, `_concluidor_idx (done_by)` e
+  `_autor_idx (created_by)`. `agenda_events_da_reserva_idx` não serviria à FK da reserva, porque
+  só enxerga os automáticos. O índice da `EXCLUDE` também não serviria à FK da unidade, porque só
+  enxerga os manuais agendados.
+- `agenda_blocks_janela_idx`, gist com a mesma expressão, cobre também a FK `property_id`
+  (medido com plano genérico: `Bitmap Index Scan on agenda_blocks_janela_idx`).
+  `agenda_blocks_autor_idx (created_by)` e `agenda_settings_editor_idx (updated_by)`, parciais,
+  cobrem as FKs de usuário.
+
+As onze FKs novas têm índice que começa por elas, e a consulta de §14 continua devolvendo 17.
+
+### O bloqueio de horário da operação (`agenda_blocks`)
+
+"Equipe em treinamento das 14:00 às 16:00" bloqueia o tempo da operação, não uma unidade. Para
+tirar unidade de venda, o caminho é `stay_blocks` (`POST /blocks`). O bloqueio de horário não
+recusa nada, só gera o aviso `bloqueio_de_horario`, e por isso não tem `EXCLUDE`: dois bloqueios
+no mesmo horário são dois avisos. Apaga-se de verdade (`DELETE` → `204`), porque é configuração
+do tempo e não histórico; o antes fica em `audit_log`. Não tem responsável, e em escopo `own` a
+API o recusa (`403`, `own_scope_not_applicable`). As constraints são `agenda_blocks_periodo`
+(`ends_at > starts_at`), `agenda_blocks_reason_nao_vazio` e `agenda_blocks_reason_tamanho`
+(200).
+
+### Permissão
+
+O recurso RBAC `agenda` (`supports_own = true`) já estava no catálogo; a migration não o toca.
+`own` na agenda é `assignee_id = <ator>` no SQL da lista, do detalhe, da edição, da conclusão e
+do cancelamento, e fora dele a resposta é `404`. O `admin` e o `usuario` têm a agenda em `all`.
+O `corretor`, desde 13/10/2026, tem as **quatro ações em `own`**. Antes tinha só ver e criar:
+marcava a visita e não conseguia desmarcá-la, remarcá-la nem dá-la por feita, a mesma armadilha
+medida em `calendar` (§2). Excluir, aqui, é cancelar. A concessão é segura por três motivos: o
+escopo filtra por `assignee_id`, toda escrita em `own` grava o próprio ator como responsável, e
+os eventos automáticos nascem sem responsável, fora do alcance dele. `/agenda/blocks` em `own` é
+`403`. Gravar os horários pede `settings:editar`, que nem o corretor nem o `usuario` têm.
+`TestCorretorDesfazOQueMarca` (`cmd/seed/acesso_test.go`) reprova se `calendar` ou `agenda`
+perderem uma das quatro ações em `own`.
+
+**Apagar o cliente de uma visita.** `DELETE /contacts/{id}` conta os vínculos antes de apagar
+(`contatos.Vinculos`, que passou a contar `agenda_events`) e responde `409 RESOURCE_IN_USE`. Se
+uma FK ainda recusar o `DELETE`, a API trata qualquer `23503` como o mesmo fato, a ficha tem
+vínculo, sem depender de qual constraint caiu primeiro (a ordem por OID, acima).
+
+### As reservas confirmadas antes de a agenda existir
+
+A migration cria a agenda vazia. Quem leva para ela as reservas que já estavam confirmadas é o
+seed, na etapa `agenda_das_reservas_confirmadas` (§16), que chama
+`agenda.PreencherReservasConfirmadas` (`internal/modules/agenda`). A regra é o mesmo `regra.Plan`
+do `/confirm`: uma terceira cópia de "o check-in é às 14:00 do dia da entrada" divergiria das
+outras duas na primeira mudança de horário.
+
+- **Quem entra:** as reservas `confirmed` e `checked_in` da propriedade com saída **de hoje em
+  diante**, no dia da casa. Ficam de fora a reserva que já saiu, a pré-reserva (`hold` não tem
+  agenda) e a cancelada.
+- **O que nasce:** o check-in no dia da entrada e o check-out e a limpeza no dia da saída, nos
+  horários lidos de `agenda_settings` (`FOR SHARE`), sem responsável e sem autor. A reserva já em
+  curso nasce com o check-in `concluido`, no instante de entrada registrado nela
+  (`reservation_events`). A reserva confirmada cuja entrada já passou, sem check-in registrado,
+  ganha um check-in `agendado` no passado, que é o que `regra.Plan` faz. Na tela, isso é uma
+  pendência real (um no-show ou uma entrada que não foi lançada), e não defeito do preenchimento.
+- **Idempotente pelo banco:** `ON CONFLICT (reservation_id, type) WHERE origin = 'reservation' DO
+  NOTHING` sobre `agenda_events_da_reserva_idx`, e a etapa conta só o que nasceu. A segunda
+  execução cria zero.
+- **Roda em todo deploy**, porque `infra/deploy.sh` roda o seed em todo deploy. Depois da
+  primeira vez, cria zero, e no deploy seguinte refaz o automático de qualquer reserva confirmada
+  que tenha ficado sem ele, sem tocar no que já existe. Não grava `audit_log`: o seed não tem
+  ator, e a confirmação de cada reserva já está na trilha dela. Uma falha aqui derruba o seed
+  inteiro (transação única) e, com ele, o deploy.
+
+Medido em 13/10/2026 num banco em `20261009100000` semeado antes da agenda, com seis reservas
+criadas sem agenda e depois a migration aplicada: o primeiro seed criou 9 eventos, três para cada
+uma de três reservas (a confirmada futura, a que sai hoje e a hospedada, cujo check-in nasceu
+concluído às 16:45, a hora da entrada registrada). Deixou de fora a que já tinha saído, a
+pré-reserva e a cancelada, e o segundo seed criou zero.
+
+O `down` derruba as três tabelas e não deixa sobra. É **lossy**: eventos, bloqueios de horário e
+os horários que o dono confirmou somem. O `up` seguinte devolve a cada propriedade a linha com os
+horários provisórios (medido: a configuração gravada pelo dono volta a 14:00/11:00/11:00–14:00,
+`provisional: true`). A agenda das reservas volta no seed seguinte, pela etapa de preenchimento,
+mas só a das reservas com saída de hoje em diante. A das que já saíram não volta, e os eventos
+manuais também não.
 
 ---
 
@@ -1303,12 +1536,17 @@ inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta d
 | `maintenance_orders` | `maintenance_orders_room_id_fkey` `(room_id, unit_id) → unit_rooms(id, unit_id)` — o cômodo é da unidade · `maintenance_orders_issue_id_fkey` `(issue_id, room_id, item_id) → inventory_issues(id, room_id, item_id) ON DELETE RESTRICT` + `maintenance_orders_avaria_exige_comodo_e_bem` — a avaria traz cômodo e bem dela, e por isso é da unidade · `stay_block_id`, `item_id` e `unit_id` em `ON DELETE RESTRICT` — liberar bloqueio é `cancelled`, nunca `DELETE` |
 | `maintenance_orders` | `maintenance_orders_fechamento` `CHECK ((status IN ('concluida','cancelada')) = (closed_at IS NOT NULL))` · `maintenance_orders_inicio` (`em_andamento` ⇔ `started_at`, fora das encerradas) · `maintenance_orders_cronologia` (`started_at <= closed_at`) · `maintenance_orders_fechador` (`closed_by` só com `closed_at`) · `maintenance_orders_custo_positivo` (`cost_cents > 0`) · vocabulários de `priority` e `status` · `title` não vazio e até 200 caracteres, `description` até 4000 |
 | `maintenance_orders` | `(property_id, opened_at, id) WHERE status IN ('aberta','em_andamento')` — a lista de trabalho; a prioridade chega como parâmetro e é ordenada em memória (§11) · `(unit_id, opened_at DESC, id)` · `(room_id, unit_id)`, `(issue_id, room_id, item_id)`, `(item_id, opened_at DESC, id)`, `(opened_by)`, `(closed_by)` parciais em `IS NOT NULL` — cada FK, as compostas na ordem da FK |
+| `agenda_events` | `agenda_events_unidade_sem_sobreposicao` `EXCLUDE USING gist (unit_id WITH =, tstzrange(starts_at, ends_at, '[)') WITH &&) WHERE (origin = 'manual' AND unit_id IS NOT NULL AND status = 'agendado')`: dois manuais agendados não ocupam a mesma unidade ao mesmo tempo; o `23P01` neste nome é o `409 UNIT_NOT_AVAILABLE` · `agenda_events_da_reserva_idx` `UNIQUE (reservation_id, type) WHERE origin = 'reservation'`: no máximo um check-in, um check-out e uma limpeza automáticos por reserva, em qualquer estado (§9) |
+| `agenda_events` | `agenda_events_automatico` (automático: tipo da reserva, `reservation_id`, sem unidade, titular, título nem `all_day`) · `agenda_events_manual` (manual: `visita`/`evento`/`limpeza`, com título) · `agenda_events_periodo` (`ends_at > starts_at`) · `agenda_events_conclusao` (`concluido ⇔ done_at`) · `agenda_events_cancelamento` (`cancelado ⇔ cancelled_at`) · `agenda_events_concluidor` (`done_by` só com `done_at`) · `title` não vazio e até 200 caracteres, `notes` até 2000 · vocabulários de `type`, `origin` e `status` · seis FKs em `ON DELETE RESTRICT` |
+| `agenda_events` | gist `(property_id, tstzrange(starts_at, ends_at, '[)'))`: a janela, e a consulta repete a expressão · `(property_id, starts_at, id)`: a lista ordenada · `(assignee_id, starts_at) WHERE assignee_id IS NOT NULL`: o escopo `own` · `(reservation_id)`, `(unit_id)`, `(contact_id)`, `(done_by)`, `(created_by)` parciais em `IS NOT NULL`: as FKs |
+| `agenda_settings` | `PRIMARY KEY (property_id)` **é** a FK: uma linha por propriedade · `agenda_settings_dia_de_troca` (`checkout ≤ cleaning_start < cleaning_end ≤ checkin`) · `agenda_settings_slot` (5 a 240 e divisor de 1440, com `CASE` para `0` não virar `22012`) · `agenda_settings_buffer` (0 a 240) · `agenda_settings_checkout_cabe` e `agenda_settings_checkin_cabe` (o passo cabe no dia) · `agenda_settings_business_hours_array` · `(updated_by) WHERE updated_by IS NOT NULL` |
+| `agenda_blocks` | `agenda_blocks_periodo` (`ends_at > starts_at`) · `reason` não vazio e até 200 caracteres · gist `(property_id, tstzrange(starts_at, ends_at, '[)'))`, que cobre também a FK · `(created_by) WHERE created_by IS NOT NULL`. Sem `EXCLUDE`: bloqueio de horário sobreposto é aviso, não recusa |
 | quase todas | índice em toda FK — **não é "todas"**, e a diferença é medível |
 
 A linha anterior dizia `todas`. A consulta abaixo devolve hoje **17** chaves
-estrangeiras sem índice que comece por elas (reconferido em `20261009100000`: a mesma lista
-de antes; as nove FKs de `maintenance_orders`, as duas compostas inclusive, têm índice que
-começa pelas colunas delas, na ordem da FK):
+estrangeiras sem índice que comece por elas (reconferido em `20261013120000`: a mesma lista
+de antes. As nove FKs de `maintenance_orders`, as duas compostas inclusive, têm índice que
+começa pelas colunas delas, na ordem da FK, e as onze das três tabelas da agenda também):
 
 ```sql
 SELECT c.conrelid::regclass, c.conname
@@ -1369,7 +1607,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261009100000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261013120000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -1393,10 +1631,21 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20261007200000_congela_custo_na_conferencia` | `inventory_count_lines.replacement_cost_cents` (anulável, `CHECK > 0` em `inventory_count_lines_custo_positivo`): o custo de reposição **congelado no fechamento**, de onde sai a perda de cada divergência. Com ele, a conferência fechada devolve lida de volta a perda que apurou, e recotar o item não a reescreve (regra 7, §11). Backfill das conferências já fechadas com o custo **atual** do item: aproximação de desenvolvimento, porque `20261007170000` nunca chegou a produção. A tabela vai de 11 para 12 colunas, conferida pelo bloco `DO` da régua. O `down` derruba a coluna (e com ela o `CHECK` e o comentário) e é **lossy**: o custo congelado some, e o `up` seguinte o refaz com o custo do dia |
 | `20261007213000_codigo_do_comodo` | `unit_rooms.code` (`text NOT NULL`): a identidade estável do cômodo, que a API não deixa editar e que a importação do levantamento fotográfico e a cópia de inventário entre unidades usam como chave (§11). `unit_rooms_code_formato` (`CHECK` do `pattern` do contrato), `unit_rooms_code_tamanho` (`CHECK (length(code) <= 60)`) e `unit_rooms_code_unico` (`UNIQUE (unit_id, code)`). Backfill das linhas existentes, antes do `SET NOT NULL`, pela regra de derivação que a API repete (escrita na migration e em §11): sem acento por tabela explícita (`translate`, sem extensão nova e sem `lower()`), hífen no lugar de cada sequência fora de `[a-z0-9]`, corte em 60, `comodo` para nome que vira vazio e `-2`, `-3`… em colisão na unidade, em ordem de `(created_at, id)`. A tabela vai de 9 para 10 colunas, conferida pelo bloco `DO` da régua. O `down` derruba as três constraints e a coluna sem deixar sobra e é **lossy**: o `up` seguinte re-deriva os códigos do `name` atual |
 | `20261009100000_ordens_de_manutencao` | `maintenance_orders` (18 colunas, §11): a ordem de manutenção de uma unidade, com cômodo, bem e avaria opcionais, prioridade, estado, custo e o bloqueio de calendário em `stay_block_id` (`ON DELETE RESTRICT`: liberar é `cancelled`). O banco garante que o cômodo é da unidade (FK composta `maintenance_orders_room_id_fkey`), que a avaria traz cômodo e bem dela (`CHECK` + FK composta `maintenance_orders_issue_id_fkey`), no máximo uma ordem não encerrada por avaria (`maintenance_orders_avaria_aberta_idx`, o `409 MAINTENANCE_ORDER_ALREADY_OPEN`), um bloqueio por ordem (`maintenance_orders_bloqueio_idx`) e os estados impossíveis de `status`/`started_at`/`closed_at`/`closed_by`. Os alvos das FKs compostas são duas `UNIQUE` novas, `unit_rooms_id_unit_id_key` e `inventory_issues_id_room_id_item_id_key`. Bloco `DO` da régua. Sem gatilho de tempo real (o de `stay_blocks` já avisa o mapa). O recurso RBAC `maintenance` entra pelo seed, não pela migration. O `down` derruba a tabela e as duas `UNIQUE` sem deixar sobra e é **lossy**: as ordens somem, e as linhas de `stay_blocks` que elas criaram ficam como bloqueio operacional comum |
+| `20261013120000_agenda_operacional` | a agenda operacional (§9, F2-19), três tabelas. `agenda_settings` (10 colunas) guarda os horários da casa, uma linha por propriedade, com os valores **provisórios** da decisão 12 nos DEFAULTs; a migration cria a linha de toda propriedade existente. `agenda_events` (20 colunas) tem duas origens: `reservation` (sem unidade, titular nem título) e `manual`. O banco garante no máximo um check-in, um check-out e uma limpeza automáticos por reserva (`agenda_events_da_reserva_idx`), nenhum par de manuais agendados na mesma unidade ao mesmo tempo (`EXCLUDE agenda_events_unidade_sem_sobreposicao`), a forma de cada origem e os estados impossíveis. `agenda_blocks` (9 colunas) é o bloqueio de horário da operação, sem `EXCLUDE`. `manutencao` e `bloqueio` de unidade não são gravados: são lidos de `stay_blocks`. Bloco `DO` da régua, sem gatilho. O recurso RBAC `agenda` já existia; as quatro ações do corretor em `own` vêm pelo seed. O `down` derruba as três sem deixar sobra e é **lossy**: eventos, bloqueios e os horários confirmados pelo dono somem, e o `up` seguinte volta aos provisórios |
 
 ## 16. Seeds
 
-`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 26 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`) e, desde 03/10/2026, a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo).
+`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 26 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`), desde 03/10/2026 a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo) e, desde `20261013120000`, a **linha de `agenda_settings`** da propriedade e o **preenchimento da agenda** das reservas confirmadas antes de ela existir (abaixo).
+
+**Os horários da agenda** (etapa `agenda_settings`, `cmd/seed/agenda.go`). A etapa insere só `property_id`: os horários são os DEFAULTs da migration, provisórios e a confirmar pelo dono (§9). Faz `ON CONFLICT (property_id) DO NOTHING`, e **nunca** `DO UPDATE`. Aqui não existe divergência que o seed tenha o direito de corrigir, porque todo valor diferente do DEFAULT é decisão do dono, e um `DO UPDATE` desfaria a confirmação dele no deploy seguinte. É a regra 3 abaixo levada ao limite. A migration já cria a linha das propriedades que existiam; a etapa cobre o banco novo, em que a propriedade nasce depois, e roda também em produção. `TestSeedDaAgendaNuncaReescreveOsHorarios` reprova o `DO UPDATE` e qualquer coluna além de `property_id`; os testes de integração `TestSeedDaAgendaCriaALinhaProvisoria` e `TestSeedDaAgendaNaoReescreveOQueODonoGravou` provam as duas metades contra o banco.
+
+**A agenda das reservas confirmadas** (etapa `agenda_das_reservas_confirmadas`, `cmd/seed/agenda.go`, logo depois de `agenda_settings`). É ela que leva para a agenda as reservas `confirmed` e `checked_in` com saída de hoje em diante que foram confirmadas antes de a agenda existir (§9). A etapa não tem regra própria: chama `agenda.PreencherReservasConfirmadas` (`internal/modules/agenda`) na transação do seed, que usa o mesmo `regra.Plan` do `/confirm`, e vem depois de `agenda_settings` porque os horários dos eventos saem daquela linha. O seed não cria reserva, então não há etapa de reserva a esperar. Três consequências para quem lê o log ou mexe no deploy:
+
+- **A contagem é só do que nasceu.** `previstas` = `criadas`, e saber quantos eventos a etapa "quer ver" exigiria repetir aqui quais reservas entram e o "hoje" no fuso da casa, a segunda cópia que a chamada existe para evitar. Por isso, num banco com reservas, o `previstas` do total cresce na primeira execução e volta na segunda. Num banco limpo a etapa conta zero, e os totais medidos abaixo não mudam.
+- **Roda em todo deploy** (`infra/deploy.sh` roda o seed sempre). Depois da primeira execução, cria zero, e refaz o automático de qualquer reserva confirmada que tenha ficado sem ele. Uma falha nela derruba o seed e, portanto, o deploy.
+- **O seed passou a importar `internal/modules/agenda`.** Medido no binário compilado como na imagem (`-trimpath -ldflags="-s -w"`): mais 531 KB (+4,5%). Desses, 413 KB são do `time/tzdata`, o banco de fusos que `internal/domain/calendar` embute de propósito porque a imagem é `distroless`, e 118 KB são do código. Os outros quatro pacotes novos são `domain/agenda`, `domain/calendar`, `modules/agenda` e `platform/audit`, nenhum com `init()`. `net/http`, `chi`, `httpx`, `apperr` e `db` já estavam no seed. Não há ciclo possível: o módulo não importa `reservas` (é `reservas` que declara a interface que a agenda implementa) e pacote `main` não é importável.
+
+`TestPreenchimentoDaAgendaVemDepoisDosHorarios` reprova se a etapa sumir ou rodar antes de `agenda_settings`. O teste de integração `TestSeedPreencheAAgendaDasReservasConfirmadas` monta cinco reservas sem agenda, das quais só a confirmada futura e a hospedada entram, e exige 6 eventos na primeira execução e zero na segunda.
 
 **O corretor de desenvolvimento** (etapa `corretores_de_desenvolvimento`, `cmd/seed/corretores.go`). Sem ele, `corretor@wh.local` entra no painel com `broker_id` nulo, e a partir do F2-13 isso tem efeito: em escopo `own` o corretor só atribui venda ao próprio `users.broker_id`, e a API não tem como criar o vínculo (o CRUD de `/brokers` é do F2-17/Fase 3). São três escritas por conta de perfil `corretor` em `usuariosSeed`, na ordem que as FKs exigem: a ficha em `contacts` (chave natural: telefone; `+5585900000010`, base `contrato`, sem opt-in), o cadastro em `brokers` (chave natural: `UNIQUE (user_id)`) e o vínculo em `users.broker_id`. O `DO UPDATE` do cadastro corrige só `contact_id`; `goal_cents` e `active` são decisão da gestão e o seed não os reescreve — a mesma regra das contas, que não têm a senha reescrita. A etapa segue a trava das **contas** de desenvolvimento (`SEED_DEV_USERS`), não a dos contatos de demonstração: o cadastro é da conta. E termina com uma pós-condição conferida no banco — conta de corretor sem cadastro que aponte de volta para ela é erro, e o seed inteiro volta atrás —, porque os `JOIN`s da etapa descartariam em silêncio um e-mail digitado errado e a contagem diria "inalterada".
 
@@ -1416,7 +1665,7 @@ O de teste é **congelado**: é byte a byte o que o seed semeava até 03/10/2026
 
 **Um banco nunca fica com os dois catálogos vendendo.** Semear um catálogo **desativa** (`active = false`; nunca apaga — unidade tem histórico em `stay_blocks`) as unidades, os produtos, os feriados e os períodos **do outro catálogo** que não existem no escolhido; o que a gestão cadastrou pela tela não é de catálogo nenhum e não é tocado. E reativa os próprios, que o outro tinha desativado. Para os produtos do catálogo escolhido, a composição, as tarifas, os mínimos por produto e os pacotes ficam **exatamente** iguais à lista: o que falta entra e o que sobra é **removido** — sem isso a Completa real herdaria a `COB-01` e as diárias da Completa de teste. Antes de mexer, o seed confere venda viva (`hold`, `confirmed`, `checked_in`): se a troca mudasse a composição ou o `consumes` de um produto com reserva de pé, ele aborta com a mensagem nomeando produto, unidades e reservas (`o catálogo não pode ser trocado com venda viva: a composição mudaria — completa perderia AP-04, … (reservas: WH-2026-0001)`), e a transação inteira volta. Os gatilhos adiados do §5 reprovariam o mesmo no `COMMIT`, mas falando de invariante, não de seed.
 
-Contagens num banco recém-migrado, **medidas em 09/10/2026** em `20261009100000`, as duas num banco limpo. Catálogo `teste`: primeira execução `previstas 328, criadas 327, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 328`. Catálogo `real`: primeira `previstas 454, criadas 453, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 454`. Numa instalação já semeada antes de `maintenance`, a primeira execução nova dá `criadas 9, atualizadas 1`: o recurso, as quatro ações para `admin` e para `usuario`, e o `sort_order` de `channels`, que foi de 15 para 16. A segunda volta a `criadas 0, atualizadas 0`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`; 310 e 436 até `inventory.goods` (07/10/2026), que soma 9: o recurso e as quatro ações para `admin` e para `usuario`; e 319 e 445 até `maintenance` (09/10/2026), que soma os mesmos 9.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
+Contagens num banco recém-migrado, **medidas em 13/10/2026** em `20261013120000`, as duas num banco limpo. Catálogo `teste`: primeira execução `previstas 331, criadas 330, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 331`. Catálogo `real`: primeira `previstas 457, criadas 456, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 457`. Numa instalação já semeada antes da agenda (banco em `20261009100000` semeado pelo seed anterior, depois migrado), a primeira execução nova dá `criadas 2`: `agenda:editar` e `agenda:excluir` do corretor. A linha de `agenda_settings` já foi criada pela migration e conta como inalterada. A segunda volta a `criadas 0, atualizadas 0`. Se essa instalação tiver reservas confirmadas com saída de hoje em diante, a primeira execução soma três eventos por reserva, em `previstas` e em `criadas`: medido com três reservas assim, `previstas 466, criadas 11` (os 9 eventos e as 2 células); a segunda volta a `previstas 457, criadas 0`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`; 310 e 436 até `inventory.goods` (07/10/2026), que soma 9: o recurso e as quatro ações para `admin` e para `usuario`; 319 e 445 até `maintenance` (09/10/2026), que soma os mesmos 9; e 328 e 454 até a agenda (13/10/2026), que soma 3: as duas células do corretor e a linha de configuração.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
 
 **A conta de serviço da vitrine** (etapas `perfil_da_vitrine` e `conta_da_vitrine`, `cmd/seed/vitrine.go`). `POST /public/holds` (B1 de `docs/unificacao-site-crm.md`) roda o **mesmo** serviço de reserva e de contato do painel, e esses serviços exigem um usuário autenticado no contexto — dele saem escopo, `owner_id`/`created_by` e auditoria. Em vez de abrir um atalho "sem usuário" no domínio, o handler público carrega esta conta com `CarregarSessao` e chama o serviço como qualquer ator; o que o site grava aparece como "Site (vitrine)" na trilha.
 
@@ -1433,7 +1682,7 @@ A chave natural é o telefone (`UNIQUE(phone_e164)`), o que torna a etapa idempo
 
 1. Toda escrita é `INSERT ... ON CONFLICT` sobre a **chave natural** da tabela (`slug`, `code`, `(property_id, code)`, `(rate_table_id, unit_type_id, date_type)`…), nunca sobre id gerado — id novo a cada execução é exatamente o que duplicaria tudo na segunda rodada.
 2. O `DO UPDATE` leva `WHERE (colunas) IS DISTINCT FROM (EXCLUDED.colunas)`: linha já correta não é reescrita e não sobe `updated_at`. A segunda execução loga zero criadas e zero atualizadas — é essa a prova de idempotência.
-3. O seed **corrige divergência, mas não apaga acréscimo** — com uma exceção delimitada. Permissão que a gestão concedeu a mais na tela sobrevive; escopo que divergiu da matriz volta ao valor do seed. As exceções são duas: os produtos **do catálogo** — composição, tarifas, mínimos por produto e pacotes deles são mantidos exatamente iguais à lista (acima) — e a matriz do perfil **`vitrine`**, que fica com exatamente as suas duas células (acima). Nada fora disso leva `DELETE`, e nenhuma linha de cadastro (unidade, produto, feriado, período) é apagada — só desativada.
+3. O seed **corrige divergência, mas não apaga acréscimo** — com uma exceção delimitada. Permissão que a gestão concedeu a mais na tela sobrevive; escopo que divergiu da matriz volta ao valor do seed. As exceções são duas: os produtos **do catálogo** — composição, tarifas, mínimos por produto e pacotes deles são mantidos exatamente iguais à lista (acima) — e a matriz do perfil **`vitrine`**, que fica com exatamente as suas duas células (acima). Nada fora disso leva `DELETE`, e nenhuma linha de cadastro (unidade, produto, feriado, período) é apagada — só desativada. No sentido oposto há um caso em que o seed nem corrige: `agenda_settings` (acima), em que todo valor que não é o DEFAULT é decisão do dono.
 
 Desde `20260827110000` o seed também popula o **funil padrão** (`Funil de Reservas`, `is_default`), as **oito etapas** da spec §7 — Novo lead → Em atendimento → Disponibilidade consultada → Orçamento enviado → Negociação → Pré-reserva → Ganho / Perdido — com `probability`, `color`, `sla_days` e tarefa automática, e os **oito motivos de perda** que a constraint `crm_opportunities_perda_motivada` obriga a preencher. Chaves naturais: `(property_id, name)` no funil, `(pipeline_id, name)` na etapa, `(property_id, label)` no motivo.
 

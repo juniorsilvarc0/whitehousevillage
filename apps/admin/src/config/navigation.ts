@@ -172,8 +172,9 @@ export const CATALOGO: NavItem[] = [
 
   { title: "WhatsApp",      href: "/app/chat",          icon: MessageCircle,     group: "Comercial",     recurso: "chat",
     emConstrucao: true, quando: "Em breve — atendimento por WhatsApp dentro do sistema." },
-  { title: "Agenda",        href: "/app/agenda",        icon: CalendarDays,      group: "Operação",      recurso: "agenda",
-    emConstrucao: true, quando: "Em breve — agenda da operação e visitas do corretor." },
+  // Agenda operacional (spec §9, F2-21), desde 13/10/2026: check-in, check-out e
+  // limpeza nascem da reserva confirmada; visitas do corretor em escopo `own`.
+  { title: "Agenda",        href: "/app/agenda",        icon: CalendarDays,      group: "Operação",      recurso: "agenda" },
   { title: "Financeiro",    href: "/app/financeiro",    icon: Wallet,            group: "Análise",       recurso: "finance.receivables",
     emConstrucao: true, quando: "Em breve — contas a receber, a pagar e conferência de pagamentos." },
   { title: "Comissões",     href: "/app/comissoes",     icon: Users,             group: "Comercial",     recurso: "finance.commissions",
