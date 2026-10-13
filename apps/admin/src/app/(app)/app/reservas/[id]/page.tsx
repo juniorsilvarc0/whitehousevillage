@@ -72,6 +72,11 @@ export default async function ReservaPage({ params }: { params: Promise<{ id: st
   const permissoes = {
     editar: can(permissions, "reservations", "editar"),
     excluir: can(permissions, "reservations", "excluir"),
+    // A lista de hóspedes acha a pessoa pelo documento (`contacts:ver`) e, se
+    // não achar, cadastra (`contacts:criar`). Esconder não autoriza: a API
+    // responde 403 de qualquer jeito, e a tela diz o que pedir.
+    procurarPessoas: can(permissions, "contacts", "ver"),
+    cadastrarPessoas: can(permissions, "contacts", "criar"),
   };
 
   return (

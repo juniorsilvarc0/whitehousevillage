@@ -36,6 +36,7 @@ const COMERCIAL_TS = path.resolve(AQUI, "comercial.ts");
 const BENS_TS = path.resolve(AQUI, "../bens/tipos.ts");
 const MANUTENCAO_TS = path.resolve(AQUI, "../manutencao/tipos.ts");
 const AGENDA_TS = path.resolve(AQUI, "../agenda/tipos.ts");
+const RESERVAS_TS = path.resolve(AQUI, "../reservas/tipos.ts");
 const API = path.resolve(AQUI, "../../../../api/internal/modules");
 
 /** Tira comentários antes de procurar chave: `/** … *\/` tem `:` dentro. */
@@ -117,6 +118,12 @@ const CORPOS: { rota: string; tipoTS: string; arquivoGo: string; structGo: strin
   { rota: "POST /agenda/blocks", tipoTS: "BloqueioDeHorarioEntrada", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "BloqueioDeHorarioCriar" },
   { rota: "PUT /agenda/settings", tipoTS: "ConfiguracaoDaAgendaEntrada", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "ConfiguracaoDaAgendaEntrada" },
   { rota: "PUT /agenda/settings (intervalo)", tipoTS: "IntervaloDeFuncionamento", arquivoTS: AGENDA_TS, arquivoGo: "agenda/dto.go", structGo: "IntervaloDeFuncionamento" },
+  // Rooming list (F2-22). Os tipos moram em `lib/reservas/tipos.ts`; os DTOs,
+  // em `internal/modules/reservas/dto.go`. O `PATCH` que abre lugar na lista
+  // manda só `guests_count` (`NumeroDeHospedes`), mas o DTO que o recebe é o
+  // `ReservaAtualizar` inteiro.
+  { rota: "POST /reservations/{id}/guests", tipoTS: "HospedeAcrescentar", arquivoTS: RESERVAS_TS, arquivoGo: "reservas/dto.go", structGo: "HospedeAcrescentar" },
+  { rota: "PATCH /reservations/{id} (número de hóspedes)", tipoTS: "NumeroDeHospedes", arquivoTS: RESERVAS_TS, arquivoGo: "reservas/dto.go", structGo: "ReservaAtualizar" },
 ];
 
 describe("o corpo que o painel manda é o corpo que a API aceita", () => {
@@ -145,6 +152,6 @@ describe("o corpo que o painel manda é o corpo que a API aceita", () => {
   it("a lista de corpos não encolheu sem ninguém notar", () => {
     // Uma linha removida da tabela é cobertura que some em silêncio — o mesmo
     // modo de falha do teste que "passa" porque não afirma nada.
-    expect(CORPOS.length).toBeGreaterThanOrEqual(27);
+    expect(CORPOS.length).toBeGreaterThanOrEqual(29);
   });
 });

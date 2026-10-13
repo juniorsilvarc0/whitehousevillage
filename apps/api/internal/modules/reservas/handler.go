@@ -190,6 +190,69 @@ func (h *Handler) Completa(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, dado)
 }
 
+// ─────────────────────────── Lista de hóspedes ──────────────────────
+
+// ListarHospedes — GET /reservations/{id}/guests
+func (h *Handler) ListarHospedes(w http.ResponseWriter, r *http.Request) {
+	id, err := idDaRota(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	lista, err := h.svc.ListarHospedes(r.Context(), id)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	httpx.Envelope(w, http.StatusOK, lista.Hospedes, lista.Meta)
+}
+
+// AcrescentarHospede — POST /reservations/{id}/guests
+//
+// O corpo é decodificado ANTES de qualquer leitura do banco: corpo inválido é
+// 422 sem travar a reserva nem consultar a ficha.
+func (h *Handler) AcrescentarHospede(w http.ResponseWriter, r *http.Request) {
+	id, err := idDaRota(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	corpo, err := httpx.Decode[HospedeAcrescentar](r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+
+	hospede, err := h.svc.AcrescentarHospede(r.Context(), id, corpo)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	w.Header().Set("Location", localDoHospede(id, hospede.ContactID))
+	httpx.JSON(w, http.StatusCreated, hospede)
+}
+
+// RetirarHospede — DELETE /reservations/{id}/guests/{contactId}
+func (h *Handler) RetirarHospede(w http.ResponseWriter, r *http.Request) {
+	id, err := idDaRota(r)
+	if err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	// Como o id da reserva: identificador malformado é "esta pessoa não está
+	// na lista", 404 — e não 422, que confirmaria que o endereço existe.
+	contato, err := uuid.Parse(chi.URLParam(r, "contactId"))
+	if err != nil {
+		httpx.Error(w, r, apperr.NotFound("Hóspede"))
+		return
+	}
+	if err := h.svc.RetirarHospede(r.Context(), id, contato); err != nil {
+		httpx.Error(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ─────────────────────────── Ações ──────────────────────────────────
 
 // Confirmar — POST /reservations/{id}/confirm
@@ -413,6 +476,12 @@ func responder(w http.ResponseWriter, r *http.Request, res Resultado) {
 	if _, err := w.Write(corpo); err != nil {
 		slog.ErrorContext(r.Context(), "falha ao escrever a resposta", "err", err)
 	}
+}
+
+// localDoHospede é o Location do 201 do POST de hóspede: o caminho do DELETE
+// do vínculo. Não há GET do item — a leitura é a lista inteira.
+func localDoHospede(reserva, contato uuid.UUID) string {
+	return localDaReserva(reserva) + "/guests/" + contato.String()
 }
 
 // idDaRota traduz id malformado em 404, e não em 422: para quem chama, "esse

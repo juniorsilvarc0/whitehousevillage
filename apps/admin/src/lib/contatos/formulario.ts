@@ -10,15 +10,17 @@ import { ehCodigoDeContatos, mensagemDeContato } from "@/lib/contatos/codigos";
  * Leva a falha para dentro do formulário — **pelo código**, nunca pelo texto da
  * API.
  *
- * Existe porque `lib/acoes/formulario.ts#aplicarFalha` só aceita o vocabulário
+ * Existiu porque `lib/acoes/formulario.ts#aplicarFalha` só aceita o vocabulário
  * fechado de `lib/api/codigos.ts`, e os dois códigos do cadastro
- * (`CONTACT_DUPLICATE`, `CONTACT_ANONYMIZED`) ainda não estão lá. Em vez de
- * reescrever a função inteira, esta trata os dois casos que ela não conhece e
- * **delega o resto** — não há um segundo mapa de `details` → campo, que
- * divergiria do primeiro no dia em que só um fosse ajustado.
+ * (`CONTACT_DUPLICATE`, `CONTACT_ANONYMIZED`) não estavam lá. Em vez de
+ * reescrever a função inteira, esta trata os dois casos e **delega o resto** —
+ * não há um segundo mapa de `details` → campo, que divergiria do primeiro no
+ * dia em que só um fosse ajustado.
  *
- * No dia em que os códigos entrarem no espelho geral, este arquivo some e a
- * chamada volta a ser `aplicarFalha` direto.
+ * Os códigos entraram no espelho geral em 13/10/2026 (rooming list, F2-22):
+ * este arquivo pode sumir, com a chamada voltando a ser `aplicarFalha` direto.
+ * Fica até a limpeza dos contornos do cadastro, porque hoje dá o mesmo
+ * resultado.
  */
 export function aplicarFalhaDeContato<T extends FieldValues>(
   falha: FalhaDeContato,

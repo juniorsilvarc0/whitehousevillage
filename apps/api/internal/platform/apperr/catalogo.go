@@ -70,6 +70,7 @@ const (
 	CodeMaintenanceOrderClosed    = "MAINTENANCE_ORDER_CLOSED"
 	CodeMaintenanceOrderOpen      = "MAINTENANCE_ORDER_ALREADY_OPEN"
 	CodeAgendaEventClosed         = "AGENDA_EVENT_CLOSED"
+	CodeGuestListFull             = "GUEST_LIST_FULL"
 	CodeInternal                  = "INTERNAL"
 )
 
@@ -349,4 +350,30 @@ var (
 	AgendaEventClosed = definir(CodeAgendaEventClosed,
 		"Este evento da agenda já foi encerrado.",
 		http.StatusConflict)
+)
+
+// Erros da rooming list (F2-22, `/reservations/{id}/guests`).
+//
+// Nasceu com o contrato das rotas de hóspedes e antes do módulo que o emite,
+// pelo mesmo motivo dos da agenda: o enum da OpenAPI e o literal em Go entram
+// no mesmo commit, ou `contrato_de_erros_test.go` reprova. As outras recusas da
+// lista NÃO ganharam código: estado da reserva é `INVALID_STATE_TRANSITION`,
+// pessoa repetida é `CODE_IN_USE` (a chave natural `(reservation_id,
+// contact_id)`), titular que não sai é `RESOURCE_IN_USE` e ficha anonimizada é
+// `CONTACT_ANONYMIZED` — a ação de quem lê é a mesma de onde esses códigos já
+// saem.
+var (
+	// GuestListFull — a lista de hóspedes já nomeia `guests_count` pessoas.
+	// O teto é o número VENDIDO, não a capacidade do produto: a lista não
+	// nomeia mais gente do que a reserva diz acomodar. 422 e não 409, como
+	// CAPACITY_EXCEEDED, o irmão dele: não há disputa a esperar passar — o
+	// caminho é aumentar o número de hóspedes da reserva (validado contra a
+	// capacidade) e só então acrescentar o nome.
+	//
+	// Quem carimba é `internal/domain/guests` (CheckAdd e PlanEdit), com
+	// `details.guests_count`, `details.listed` e `details.capacity`: a tela
+	// usa os três para dizer se ainda dá para aumentar o número.
+	GuestListFull = definir(CodeGuestListFull,
+		"A lista já tem o número de hóspedes da reserva.",
+		http.StatusUnprocessableEntity)
 )

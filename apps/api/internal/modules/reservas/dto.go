@@ -115,6 +115,14 @@ const (
 	// reserva não consegue consumir — hoje, o excedente de uma remarcação para
 	// uma estadia mais barata. Ver `creditarExcedente` em service.go.
 	EventoCredito = "credit_issued"
+	// EventoHospedeAcrescentado e EventoHospedeRetirado são a rooming list na
+	// linha do tempo (F2-22). O payload é `{contact_id}` e nada mais: a
+	// timeline diz QUE a lista mudou e quem mexeu, nunca o nome, o documento
+	// ou o telefone de quem entrou ou saiu. A troca de titular não gera os
+	// dois — fica no `updated` da edição e no `audit_log` da reserva — e a
+	// remarcação também não: ela já está na linha do tempo da reserva nova.
+	EventoHospedeAcrescentado = "guest_added"
+	EventoHospedeRetirado     = "guest_removed"
 )
 
 // MotivoRemarcacao é o `cancel_reason` que a própria API grava ao remarcar —
@@ -213,15 +221,67 @@ type LinhaDoOrcamento struct {
 }
 
 // HospedeDaReserva é a rooming list (`reservation_guests`).
+//
+// A linha da lista guarda só o `contact_id`; o resto é lido da ficha a cada
+// leitura — corrigir a ficha corrige a lista, e a ficha anonimizada sai como
+// "Contato anonimizado #…", sem documento nem canal. Sai CHEIA (é a tela de
+// trabalho da recepção no check-in) e só em leitura de UMA reserva: a lista de
+// `/guests`, o `guests` do `/full` e a resposta do POST de hóspede, todas
+// registrando cada pessoa exibida em `pii_access_log` (`rooming_list`).
+//
+// É o mínimo necessário (spec §6): quem é a pessoa e como alcançá-la.
+// Nascimento, cidade e anotação ficam na ficha.
 type HospedeDaReserva struct {
 	ContactID uuid.UUID `json:"contact_id"`
 	Nome      string    `json:"name"`
-	Telefone  *string   `json:"phone_e164"`
+	// DocTipo e Documento vão cheios: é com eles que a recepção confere quem
+	// entra. Nulos quando a ficha não tem documento (ou foi anonimizada).
+	DocTipo   *string `json:"doc_type"`
+	Documento *string `json:"doc_number"`
+	Telefone  *string `json:"phone_e164"`
 	// Email vai cheio pelo mesmo motivo do telefone: é a ficha da reserva,
 	// de onde a gestão fala com o hóspede — e a mesma leitura já grava o
 	// rastro em pii_access_log.
-	Email   *string `json:"email"`
-	Titular bool    `json:"is_lead_guest"`
+	Email *string `json:"email"`
+	// Titular é sempre o `contact_id` da reserva, e um só por reserva — o
+	// banco garante os dois (`reservation_guests_titular_idx` e a FK adiada
+	// `reservation_guests_titular_fkey`). Não é campo de escrita.
+	Titular bool `json:"is_lead_guest"`
+}
+
+// MetaDaListaDeHospedes é o `meta` de GET /reservations/{id}/guests: o que a
+// tela precisa para desenhar os botões da seção "Hóspedes" sem uma segunda
+// cópia da regra de domínio.
+type MetaDaListaDeHospedes struct {
+	// GuestsCount é quantas pessoas a reserva acomoda — o teto da lista.
+	GuestsCount int `json:"guests_count"`
+	// Capacity é a capacidade declarada do produto: até onde `guests_count`
+	// pode subir.
+	Capacity int `json:"capacity"`
+	// Editable vem de `guests.Editable`: a lista aceita acrescentar, retirar
+	// e trocar o titular agora. A permissão é à parte (`reservations:editar`).
+	Editable bool `json:"editable"`
+}
+
+// ListaDeHospedes é o que GET /reservations/{id}/guests devolve: `data` e
+// `meta`.
+type ListaDeHospedes struct {
+	Hospedes []HospedeDaReserva
+	Meta     MetaDaListaDeHospedes
+}
+
+// HospedeAcrescentar é o corpo do POST /reservations/{id}/guests: só o
+// `contact_id` de uma ficha que JÁ existe.
+//
+// A pessoa nova se cadastra antes, em `POST /contacts` — é lá que a
+// deduplicação por documento e telefone vira `409 CONTACT_DUPLICATE` com o id
+// de quem já existe. Um corpo com nome e documento aqui seria uma segunda
+// porta de criação de gente, com a permissão errada (`reservations:editar` no
+// lugar de `contacts:criar`), e transformaria um CPF digitado num atalho para a
+// ficha de um estranho. `is_lead_guest` também não entra: campo desconhecido é
+// recusado pelo decoder, e o titular se troca pela reserva.
+type HospedeAcrescentar struct {
+	ContactID uuid.UUID `json:"contact_id" validate:"required"`
 }
 
 // EventoDaReserva é uma linha de `reservation_events` — append-only.
@@ -241,7 +301,10 @@ type ReservaCompleta struct {
 	Linhas   []LinhaDoOrcamento `json:"lines"`
 	Unidades []UnidadeAlocada   `json:"units"`
 	Hospedes []HospedeDaReserva `json:"guests"`
-	Timeline []EventoDaReserva  `json:"timeline"`
+	// HospedesEditaveis é o mesmo `meta.editable` de GET
+	// /reservations/{id}/guests, saído de `guests.Editable`.
+	HospedesEditaveis bool              `json:"guests_editable"`
+	Timeline          []EventoDaReserva `json:"timeline"`
 	// PreviaDoCancelamento é o mesmo cálculo do ?dry_run=1; nula quando a
 	// reserva não é mais cancelável.
 	PreviaDoCancelamento *ResultadoDeCancelamento `json:"cancellation_preview"`

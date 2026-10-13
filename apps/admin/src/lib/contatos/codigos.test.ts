@@ -4,22 +4,24 @@ import { normalizarCodigo } from "@/lib/api/codigos";
 import { mensagemDeContato, normalizarCodigoDeContato } from "@/lib/contatos/codigos";
 
 /**
- * Este arquivo fixa a **demonstração do defeito** que `lib/contatos/codigos.ts`
- * existe para contornar — e é o que dirá, no dia em que o espelho geral crescer,
- * que o contorno pode sair.
+ * Este arquivo fixava a **demonstração do defeito** que `lib/contatos/codigos.ts`
+ * existe para contornar, e avisou — ficando vermelho — no dia em que o espelho
+ * geral cresceu: a rooming list (F2-22, 13/10/2026) pôs os dois códigos do
+ * cadastro em `lib/api/codigos.ts`.
  *
- * `lib/api/codigos.ts` guarda o vocabulário fechado do painel e ainda não
- * conhece os dois códigos do cadastro. `normalizarCodigo()` descarta o que não
- * está na lista e cai no status — e `409` cai em `INTERNAL`.
+ * Antes disso, `normalizarCodigo()` descartava o que não estava na lista e caía
+ * no status — e `409` caía em `INTERNAL`. O primeiro caso agora prova o
+ * contrário, e é o que impede o espelho de encolher de volta sem ninguém notar.
  */
-describe("o espelho geral ainda não conhece os códigos do cadastro", () => {
-  it("`CONTACT_DUPLICATE` viraria `INTERNAL`", () => {
-    // O estrago é no gesto mais comum do cadastro: quem digita um telefone que
-    // já existe leria "erro no servidor" em vez de receber o caminho até a
-    // pessoa que já está lá. `INTERNAL` também apagaria o `details.contact_id`
-    // da leitura da tela, que é o que abre a ficha certa.
-    expect(normalizarCodigo("CONTACT_DUPLICATE", 409)).toBe("INTERNAL");
-    expect(normalizarCodigo("CONTACT_ANONYMIZED", 409)).toBe("INTERNAL");
+describe("o espelho geral conhece os códigos do cadastro", () => {
+  it("`CONTACT_DUPLICATE` e `CONTACT_ANONYMIZED` atravessam intactos, não viram `INTERNAL`", () => {
+    // O estrago, quando viravam `INTERNAL`, era no gesto mais comum do
+    // cadastro: quem digita um telefone que já existe lia "erro no servidor" em
+    // vez de receber o caminho até a pessoa que já está lá — e a tela da
+    // reserva, que segue com o `details.contact_id` no "Cadastrar pessoa" da
+    // rooming list, perderia o caminho do mesmo jeito.
+    expect(normalizarCodigo("CONTACT_DUPLICATE", 409)).toBe("CONTACT_DUPLICATE");
+    expect(normalizarCodigo("CONTACT_ANONYMIZED", 409)).toBe("CONTACT_ANONYMIZED");
   });
 
   it("o dicionário de contatos preserva os dois", () => {

@@ -46,8 +46,9 @@ export function notificarSucesso(titulo: string, descricao?: string): void {
  * A falha que impediu a tela de carregar, com o **código à vista**.
  *
  * Mesmo papel do `EstadoDeErro` da casca, com o vocabulário de contatos por
- * cima: `CONTACT_DUPLICATE` e `CONTACT_ANONYMIZED` ainda não existem no espelho
- * de `lib/api/codigos.ts`, e `EstadoDeErro` só aceita o tipo de lá.
+ * cima — as frases de `mensagemDeContato` e o cadeado no `FORBIDDEN`. Nasceu
+ * porque `CONTACT_DUPLICATE` e `CONTACT_ANONYMIZED` não existiam no espelho de
+ * `lib/api/codigos.ts`; existem desde 13/10/2026 (rooming list, F2-22).
  *
  * O código aparece na tela de propósito: nesta fase o módulo de contatos da API
  * está sendo escrito em paralelo, e a diferença entre "a rota ainda não existe"

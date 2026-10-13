@@ -26,6 +26,7 @@ Códigos de erro são **estáveis** e fazem parte do contrato — o front reage 
 | `DATE_CONFLICT` | 409 | Sobreposição de datas (`23P01` do Postgres) |
 | `MIN_STAY_NOT_MET` | 422 | Noites abaixo do mínimo do período |
 | `CAPACITY_EXCEEDED` | 422 | Hóspedes acima da capacidade |
+| `GUEST_LIST_FULL` | 422 | A lista de hóspedes já nomeia `guests_count` pessoas (o teto é o vendido, não a capacidade) |
 | `DISCOUNT_ABOVE_LIMIT` | 422 | Desconto acima da alçada |
 | `HOLD_EXPIRED` | 409 | Pré-reserva já expirou |
 | `IDEMPOTENCY_MISMATCH` | 409 | Mesma chave com corpo diferente |
@@ -104,6 +105,8 @@ POST /reservations            [Idempotency-Key]  cria como hold e aloca unidade(
 GET  /reservations?status&from&to&q&page
 GET|PATCH|DELETE /reservations/{id}
 GET  /reservations/{id}/full                   monta a tela inteira numa chamada
+GET|POST /reservations/{id}/guests             a lista de hóspedes (rooming list); POST acrescenta acompanhante por contact_id
+DELETE   /reservations/{id}/guests/{contactId} retira acompanhante (o titular se troca pelo PATCH da reserva)
 POST /reservations/{id}/confirm                registra sinal → confirmed
 POST /reservations/{id}/cancel[?dry_run=1]     aplica a política congelada
 POST /reservations/{id}/reschedule

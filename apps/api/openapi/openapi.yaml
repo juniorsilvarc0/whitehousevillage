@@ -109,7 +109,7 @@ info:
     |---|---|
     | `detail` | `GET /contacts/{id}` e `PATCH /contacts/{id}` |
     | `export` | `GET /contacts/{id}/export` |
-    | `rooming_list` | `GET /reservations/{id}/full` — uma linha por hóspede listado |
+    | `rooming_list` | `GET /reservations/{id}/full` e `GET /reservations/{id}/guests` — uma linha por hóspede listado; `POST /reservations/{id}/guests` — a pessoa acrescentada |
     | `opportunity` | `GET /crm/opportunities/{id}/full` — o contato da oportunidade |
     | `reservation_list` | `GET /reservations` — o cliente de cada reserva da página que tem telefone |
 
@@ -3335,6 +3335,18 @@ paths:
         (48 h por padrão). Um job expira o que vencer, libera as unidades e
         registra o evento.
 
+        ## O titular é o primeiro hóspede da lista
+
+        A reserva nasce com a lista de hóspedes contendo o titular
+        (`contact_id`, `is_lead_guest: true`), na mesma transação — os
+        acompanhantes entram depois, por `POST /reservations/{id}/guests`.
+        Por isso a regra de entrada da lista vale aqui também
+        (`guests.Admit`, F2-22): **ficha anonimizada não vira titular** —
+        `409 CONTACT_ANONYMIZED`, o mesmo que `POST /quotes?persist` já
+        responde. Ficha inexistente ou de outra propriedade continua `404`,
+        como sempre foi nesta rota. Vale para todo caminho que cria reserva
+        por aqui: o `/win` do CRM e a remarcação.
+
         ## Corretor da venda: quem pode gravar `broker_id`
 
         `broker_id` aponta para **`brokers(id)`** — o cadastro comercial do
@@ -3457,6 +3469,8 @@ paths:
             torna overbooking impossível mesmo sob concorrência.
 
             `IDEMPOTENCY_MISMATCH` — a chave já foi usada com outro corpo.
+
+            `CONTACT_ANONYMIZED` — o titular (`contact_id`) foi anonimizado.
           $ref: "#/components/responses/Erro"
         "422":
           description: |
@@ -3507,6 +3521,18 @@ paths:
         `broker_id` segue a regra de "Corretor da venda" em
         `POST /reservations`. No `PUT`, ausente volta ao **padrão do escopo**:
         `null` em `all`, o corretor da própria conta em `own`.
+
+        ## O titular e a lista de hóspedes (F2-22)
+
+        O titular é `contact_id`, e este é o único lugar onde ele se troca.
+        A lista de hóspedes acompanha **na mesma transação**, pelo plano de
+        `guests.PlanEdit`: a linha do titular anterior sai, a do novo entra
+        (ou é promovida, se ele já era acompanhante), e `reservations.contact_id`
+        muda. Quem garante que os dois não divergem é o banco: a FK adiada
+        `reservation_guests_titular_fkey` confere, no COMMIT, que a linha de
+        titular da lista é a do `contact_id` da reserva — trocar um sem o
+        outro falha inteiro. Regras da troca e do número de hóspedes em
+        `ReservaAtualizar.contact_id` e `ReservaAtualizar.guests_count`.
       x-rbac: { recurso: reservations, acao: editar }
       requestBody:
         required: true
@@ -3532,9 +3558,20 @@ paths:
             "broker_id"`; regra completa em `POST /reservations`.
           $ref: "#/components/responses/Erro"
         "404": { $ref: "#/components/responses/Erro" }
-        "409": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `CONTACT_ANONYMIZED` — o titular novo foi anonimizado.
+            `INVALID_STATE_TRANSITION` — troca de titular com a reserva fora de
+            `hold`, `confirmed` e `checked_in` (`details.field = "contact_id"`).
+          $ref: "#/components/responses/Erro"
         "422":
-          description: "`VALIDATION_ERROR` — inclusive `guests_count` acima da capacidade do produto (`CAPACITY_EXCEEDED`) e `broker_id` inexistente (`details.broker_id`, FK `reservations.broker_id → brokers(id)`)."
+          description: |
+            `VALIDATION_ERROR` — inclusive `guests_count` abaixo dos nomes da
+            lista de hóspedes (`details.guests_count`) e `broker_id` inexistente
+            (`details.broker_id`, FK `reservations.broker_id → brokers(id)`).
+            `CAPACITY_EXCEEDED` — `guests_count` acima da capacidade do produto.
+            `GUEST_LIST_FULL` — só em dado anterior ao F2-22: a troca de
+            titular faria a lista passar de `guests_count`.
           $ref: "#/components/responses/Erro"
     patch:
       tags: [Reservas]
@@ -3567,9 +3604,11 @@ paths:
           description: "`FORBIDDEN` — mesmas recusas de `broker_id` do `PUT` (`not_actor_broker`, `replaces_other_broker`, `reservation_confirmed`)."
           $ref: "#/components/responses/Erro"
         "404": { $ref: "#/components/responses/Erro" }
-        "409": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "Mesmas recusas do `PUT`: `CONTACT_ANONYMIZED` e `INVALID_STATE_TRANSITION` na troca de titular."
+          $ref: "#/components/responses/Erro"
         "422":
-          description: "`VALIDATION_ERROR` — inclusive `broker_id` inexistente (`details.broker_id`)."
+          description: "Mesmas recusas do `PUT`: `VALIDATION_ERROR` (inclusive `guests_count` abaixo dos nomes da lista e `broker_id` inexistente), `CAPACITY_EXCEEDED` e, só em dado anterior ao F2-22, `GUEST_LIST_FULL`."
           $ref: "#/components/responses/Erro"
     delete:
       tags: [Reservas]
@@ -3614,27 +3653,37 @@ paths:
 
         ## A rooming list sai cheia, e por isso registra
 
-        `guests` traz nome e telefone **cheios** de cada hóspede: é a tela de
-        trabalho da recepção — é dela que se liga para quem vai chegar —, e
-        mascarar o canal ali mandaria a recepção abrir uma ficha por hóspede
-        para fazer o check-in. Então esta leitura **grava `pii_access_log`**,
-        **uma linha por hóspede listado** (`reason: "rooming_list"`,
-        `contact_id` do hóspede), antes de a resposta sair e com falha
-        fechada: se o registro não entra, a tela não sai. Reserva fora do
-        escopo responde `404` sem gravar nada.
+        `guests` traz nome, documento, telefone e e-mail **cheios** de cada
+        hóspede — a mesma lista de `GET /reservations/{id}/guests`, no mesmo
+        schema. É a tela de trabalho da recepção — é dela que se liga para
+        quem vai chegar e se confere quem entra —, e mascarar ali mandaria a
+        recepção abrir uma ficha por hóspede para fazer o check-in. Então esta
+        leitura **grava `pii_access_log`**, **uma linha por hóspede listado**
+        (`reason: "rooming_list"`, `contact_id` do hóspede), antes de a
+        resposta sair e com falha fechada: se o registro não entra, a tela não
+        sai. Reserva fora do escopo responde `404` sem gravar nada.
 
         A Completa recebe até 24 pessoas; abrir a reserva de um evento grava
-        até 24 linhas. É o custo certo: são 24 pessoas cujo telefone foi
-        exibido, e a pergunta da LGPD ("quem viu o meu número?") é por
-        pessoa, não por tela.
+        até 24 linhas. É o custo certo: são 24 pessoas cujo documento e
+        telefone foram exibidos, e a pergunta da LGPD ("quem viu o meu
+        número?") é por pessoa, não por tela.
 
         Duas coisas que **não** acontecem, e que a revisão confere: a resposta
         não entra em log de aplicação nem em `audit_log` (que registra que a
-        lista **mudou**, nunca de quem para quem), e evento de tempo real
-        sobre hóspede, se existir, carrega `reservation_id` e nada mais.
+        lista **mudou** — por `contact_id`, nunca por nome nem documento), e
+        evento de tempo real sobre hóspede, se existir, carrega
+        `reservation_id` e nada mais.
 
-        A lista de reservas (`GET /reservations`) não carrega hóspede nem
-        canal de contato — só `contact_name` — e não grava.
+        `guests_editable` diz se a lista aceita acrescentar, retirar e trocar
+        o titular **agora** — é a mesma regra do domínio
+        (`guests.Editable`), para a tela não carregar uma segunda cópia dela.
+        A permissão é à parte: editar a lista pede `reservations:editar`.
+
+        A lista de reservas (`GET /reservations`) não carrega hóspede: traz o
+        `contact_name` e o `contact_phone_e164` do titular, e é ela que grava
+        `reservation_list` (ver `Reserva.contact_phone_e164`). Até 13/10/2026
+        esta frase dizia que a lista "não carrega canal de contato e não
+        grava" — o telefone entrou nela depois e a frase ficou velha.
       x-rbac: { recurso: reservations, acao: ver }
       responses:
         "200":
@@ -3646,6 +3695,258 @@ paths:
                 properties:
                   data: { $ref: "#/components/schemas/ReservaCompleta" }
         "404": { $ref: "#/components/responses/Erro" }
+
+  /reservations/{id}/guests:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Reservas]
+      summary: A lista de hóspedes da reserva — titular e acompanhantes
+      description: |
+        A rooming list (F2-22): quem **dorme** na casa nesta reserva. O titular
+        vem primeiro (`is_lead_guest: true`); os acompanhantes depois, por
+        nome e, no empate, por `contact_id`. É a mesma lista do `guests` do
+        `/full`; esta rota existe para quem precisa só dela.
+
+        A lista guarda o `contact_id`, nunca uma cópia da pessoa: nome,
+        documento, telefone e e-mail são lidos da ficha a cada leitura —
+        corrigir a ficha corrige a lista, e a ficha anonimizada aparece como
+        "Contato anonimizado #…", sem documento nem canal.
+
+        ## Cheia, e por isso registra
+
+        Documento, telefone e e-mail saem **cheios**: é a tela de trabalho da
+        recepção no check-in, e é a leitura de UMA reserva ("Dado pessoal na
+        resposta", no topo deste arquivo). Por isso esta leitura **grava
+        `pii_access_log`**: uma linha por hóspede listado
+        (`reason: "rooming_list"`, `contact_id` do hóspede), numa instrução só,
+        depois de todas as leituras e antes de a resposta sair, com falha
+        fechada — se o registro não entra, a lista não sai. Reserva fora do
+        escopo responde `404` sem gravar nada.
+
+        A resposta não entra em log de aplicação nem em `audit_log`. Nenhum
+        evento de tempo real fala da lista nesta fase; se um dia falar,
+        carrega `reservation_id` e nada mais.
+
+        ## Quem lê
+
+        `reservations:ver`. Em escopo `own` (o corretor semeado), só a lista
+        das reservas dele — `AND owner_id = <ator>` no SQL —, e a de outra
+        reserva é `404`, nunca `403`: dizer "existe, mas não é sua" já vaza
+        que existe.
+
+        `meta` traz o que a tela precisa para desenhar os botões sem uma
+        segunda cópia da regra: quantos foram vendidos, a capacidade do
+        produto e se a lista se edita agora.
+      x-rbac: { recurso: reservations, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/HospedeDaReserva" }
+                  meta: { $ref: "#/components/schemas/MetaDaListaDeHospedes" }
+        "404": { $ref: "#/components/responses/Erro" }
+    post:
+      tags: [Reservas]
+      summary: Acrescenta um acompanhante à lista de hóspedes
+      description: |
+        Põe na lista uma pessoa que **já tem ficha** em `contacts`, como
+        acompanhante (`is_lead_guest: false`). O titular não entra por aqui:
+        ele é o `contact_id` da reserva e está na lista desde que ela nasceu
+        (troca-se o titular pelo `PATCH /reservations/{id}`).
+
+        ## A ficha nasce antes, em `/contacts`
+
+        O corpo é só `contact_id`. Pessoa nova se cadastra primeiro, em
+        `POST /contacts`, e só então entra na lista. Não é burocracia — é a
+        deduplicação por documento:
+
+        - **um caminho só cria pessoa.** O documento é único por propriedade
+          (`contacts_doc_unico_idx`) e o telefone é único
+          (`contacts_phone_idx`); quem traduz a colisão é `POST /contacts`, com
+          `409 CONTACT_DUPLICATE` e `details.contact_id` de quem já existe. Uma
+          segunda porta de criação aqui teria de repetir a validação do CPF, a
+          normalização do telefone, a recusa do e-mail mascarado, a base legal
+          e a trilha — e a primeira que divergir é a que grava a pessoa
+          duplicada;
+        - **o documento repetido não vira atalho para a ficha de outra
+          pessoa.** Se esta rota recebesse nome e CPF e, na colisão, ligasse à
+          reserva quem já tem aquele CPF, digitar um CPF qualquer devolveria
+          nome, telefone e e-mail de um estranho na resposta — a base inteira,
+          um número por vez, sem passar pela ficha;
+        - **criar pessoa é outra permissão.** Esta rota pede
+          `reservations:editar`; cadastrar gente é `contacts:criar`. Um corpo
+          com nome e documento faria a primeira valer pela segunda — e RBAC é
+          dado (regra 8 do CLAUDE.md): uma rota, uma célula da matriz.
+
+        O fluxo do balcão: procura-se por `GET /contacts?doc_number=` (o
+        filtro compara o número cheio no servidor; a linha volta mascarada e
+        não grava); achou, acrescenta-se pelo `contact_id`; não achou,
+        `POST /contacts` e depois aqui. O `409 CONTACT_DUPLICATE` do cadastro
+        traz o `contact_id` de quem já existe, e o segundo passo segue com ele.
+        Se o segundo passo falhar (lista cheia, reserva encerrada), a ficha
+        criada fica no cadastro, sem vínculo — é uma pessoa real cujo dado foi
+        colhido para a estadia, e a tela diz o que falta para acrescentá-la.
+
+        ## Regras (`internal/domain/guests`, `CheckAdd`)
+
+        Na ordem em que são conferidas:
+
+        1. **A reserva está de pé** — `hold`, `confirmed` ou `checked_in`.
+           Fora disso, `409 INVALID_STATE_TRANSITION` (`details.status`,
+           `details.allowed`). A lista de uma estadia que terminou
+           (`checked_out`, `closed`) é o registro de quem dormiu na casa e não
+           muda mais; a de uma venda cancelada, vencida ou sem comparecimento
+           fica como estava.
+        2. **A ficha existe nesta propriedade** — senão
+           `422 VALIDATION_ERROR` em `details.contact_id`. Inexistente e de
+           outra casa são a mesma resposta, de propósito.
+        3. **A ficha não foi anonimizada** — senão `409 CONTACT_ANONYMIZED`.
+           Quem exerceu o direito de eliminação não volta a ser associado a
+           uma estadia; se voltar a se hospedar, recadastra-se (o documento e
+           o telefone dele foram liberados para isso).
+        4. **A pessoa ainda não está na lista**, nem como titular — senão
+           `409 CODE_IN_USE`, com `details.contact_id` e
+           `details.is_lead_guest`. Sob concorrência quem garante é a chave
+           primária `(reservation_id, contact_id)`, e o `23505` dela sai com o
+           mesmo código.
+        5. **Cabe** — a lista nomeia no máximo `guests_count` pessoas, o
+           número **vendido**. Senão `422 GUEST_LIST_FULL`, com
+           `details.guests_count`, `details.listed` e `details.capacity`.
+           Chegou mais gente, aumenta-se `guests_count` pelo
+           `PATCH /reservations/{id}` (que confere a capacidade do produto) e
+           só então se acrescenta o nome. A capacidade não é o teto da lista:
+           com ela, a reserva diria 6 e teriam dormido 9, e todo relatório de
+           hóspedes leria o número errado.
+
+        O passo 3 e a anonimização não se cruzam: a escrita lê a ficha com
+        `FOR KEY SHARE`, a anonimização a trava em `FOR UPDATE` — uma espera a
+        outra. A contagem do passo 5 é feita com a linha da reserva travada
+        (`FOR UPDATE`), a mesma trava de toda escrita na lista e da edição de
+        `guests_count`: dois acréscimos simultâneos no último lugar não entram
+        os dois.
+
+        Sem `Idempotency-Key`: acrescentar alguém não cria reserva nem move
+        dinheiro, e repetir o pedido é seguro por construção — o segundo
+        responde `409 CODE_IN_USE`.
+
+        ## O que fica registrado
+
+        `audit_log` grava que a lista mudou — `reservation_guests.criado`,
+        `entity_id` = a reserva, `after` = `{contact_id, is_lead_guest}` —,
+        **nunca** nome, documento ou telefone; a linha do tempo da reserva
+        ganha `guest_added` com `{contact_id}`. A resposta traz a pessoa
+        acrescentada, cheia, e por isso grava **uma** linha em
+        `pii_access_log` (`rooming_list`).
+
+        O corretor semeado tem `reservations` em `ver` e `criar` (`own`) e não
+        tem `editar`: lê a lista das reservas dele e não a edita. Quem
+        completa a lista é a recepção, no check-in.
+      x-rbac: { recurso: reservations, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HospedeAcrescentar" }
+      responses:
+        "201":
+          description: Acompanhante na lista
+          headers:
+            Location:
+              description: |
+                URI do vínculo criado — `/api/v1/reservations/{id}/guests/{contactId}`,
+                o caminho do `DELETE`. Não há `GET` do item: a leitura é a
+                lista inteira, e cada leitura grava rastro.
+              schema: { type: string, example: /api/v1/reservations/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11/guests/3b2d6f7a-1c4e-4a8b-9d0f-5e6a7b8c9d01 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/HospedeDaReserva" }
+        "404":
+          description: "`NOT_FOUND` — reserva inexistente ou fora do escopo do ator."
+          $ref: "#/components/responses/Erro"
+        "409":
+          description: |
+            `INVALID_STATE_TRANSITION` — a reserva não está em `hold`,
+            `confirmed` nem `checked_in`. `CONTACT_ANONYMIZED` — a ficha foi
+            anonimizada. `CODE_IN_USE` — a pessoa já está na lista.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — `contact_id` ausente, malformado, de ficha
+            inexistente ou de outra propriedade, ou campo desconhecido no corpo
+            (inclusive `is_lead_guest`: o titular se troca pela reserva).
+            `GUEST_LIST_FULL` — a lista já tem `guests_count` nomes.
+          $ref: "#/components/responses/Erro"
+
+  /reservations/{id}/guests/{contactId}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      - { name: contactId, in: path, required: true, schema: { type: string, format: uuid }, description: "O `contact_id` do acompanhante." }
+    delete:
+      tags: [Reservas]
+      summary: Retira um acompanhante da lista de hóspedes
+      description: |
+        Apaga a linha da lista; a ficha da pessoa continua em `contacts`. O
+        que aconteceu fica na trilha: `audit_log`
+        (`reservation_guests.excluido`, `before` = `{contact_id,
+        is_lead_guest}`) e `guest_removed` na linha do tempo — sempre por id,
+        nunca por nome.
+
+        Regras (`internal/domain/guests`, `CheckRemove`), na ordem:
+
+        1. **A reserva está de pé** (`hold`, `confirmed`, `checked_in`) —
+           senão `409 INVALID_STATE_TRANSITION`. Com o hóspede dentro,
+           retirar é para corrigir (a pessoa errada foi acrescentada); quem
+           foi embora antes da hora continua na lista, porque dormiu na casa.
+        2. **Não é o titular** — senão `409 RESOURCE_IN_USE`, com
+           `details.is_lead_guest: true`. A linha do titular é a projeção de
+           `reservations.contact_id`: troca-se o titular editando a reserva,
+           e a lista acompanha.
+        3. **A pessoa está na lista** — senão `404 NOT_FOUND`. O segundo
+           clique num "retirar" repetido cai aqui, e a tela o trata como "já
+           saiu".
+
+        Sem corpo de resposta e sem dado pessoal: não grava `pii_access_log`.
+
+        ## Por que o item só tem `DELETE`, e não os seis verbos
+
+        `/reservations/{id}/guests` é **sub-recurso de vínculo**, como
+        `/unit-types/{id}/members`: cada item é o par (reserva, pessoa) e não
+        tem atributo próprio para substituir ou remendar.
+
+        - A pessoa se edita em `/contacts/{id}`. Editá-la por aqui seria uma
+          segunda porta para escrever dado pessoal, com a permissão errada
+          (`reservations:editar` no lugar de `contacts:editar`).
+        - O único campo do vínculo é `is_lead_guest`, e um `PUT`/`PATCH` dele
+          seria justamente a segunda fonte do titular que o F2-22 elimina: o
+          titular é `reservations.contact_id`, e a lista segue a reserva.
+        - Não há `GET` do item porque a leitura é a lista, que já registra
+          cada pessoa exibida; um `GET` por pessoa seria a mesma leitura em 24
+          chamadas.
+
+        O teste de contrato exige os seis verbos das coleções da raiz
+        (`/recurso` e `/recurso/{id}`); sub-recurso declara aqui o que expõe e
+        por quê.
+      x-rbac: { recurso: reservations, acao: editar }
+      responses:
+        "204": { description: Retirado da lista }
+        "404":
+          description: "`NOT_FOUND` — reserva inexistente ou fora do escopo, ou a pessoa não está na lista."
+          $ref: "#/components/responses/Erro"
+        "409":
+          description: |
+            `RESOURCE_IN_USE` — é o titular. `INVALID_STATE_TRANSITION` — a
+            reserva não está em `hold`, `confirmed` nem `checked_in`.
+          $ref: "#/components/responses/Erro"
 
   /reservations/{id}/confirm:
     parameters:
@@ -3834,6 +4135,20 @@ paths:
         quando nasce `confirmed`, ganha os três dela (`agenda.Plan`) nas datas
         novas, pelos horários vigentes. O que foi ajustado à mão na original —
         responsável, horário, anotação — não é copiado: valia para outra data.
+
+        **A lista de hóspedes vai junto (F2-22).** A reserva nova nasce com o
+        mesmo titular e com os acompanhantes da original (`guests.Carry`), na
+        mesma transação; a original fica com a lista dela, como estava — é a
+        história da venda remarcada. Ficha anonimizada não é carregada. Se o
+        titular e os acompanhantes não cabem no `guests_count` da reserva nova
+        (o pedido, ou o da original), a remarcação é recusada **antes de
+        qualquer escrita** com `422 VALIDATION_ERROR` em
+        `details.guests_count`: ninguém é escolhido para ficar de fora —
+        retira-se alguém da lista da original, ou remarca-se com mais
+        hóspedes. Cada carregado entra no `audit_log` como qualquer acréscimo
+        (`reservation_guests.criado`, um por pessoa, por `contact_id`); a
+        linha do tempo da nova não repete um `guest_added` por pessoa — a
+        remarcação já está nela.
       x-rbac: { recurso: reservations, acao: editar }
       parameters:
         - name: Idempotency-Key
@@ -3869,9 +4184,13 @@ paths:
             `DATE_CONFLICT` — a data nova não está livre (nada foi alterado).
             `INVALID_STATE_TRANSITION` — só `hold` e `confirmed` remarcam.
             `IDEMPOTENCY_MISMATCH` — chave reutilizada com outro corpo.
+            `CONTACT_ANONYMIZED` — o titular foi anonimizado: a reserva nova
+            não nasce com ele (a mesma regra de `POST /reservations`). Só
+            aparece com dado antigo — a anonimização já recusa quem está numa
+            lista de hóspedes viva.
           $ref: "#/components/responses/Erro"
         "422":
-          description: "As mesmas regras do orçamento: `MIN_STAY_NOT_MET`, `CAPACITY_EXCEEDED`, `DISCOUNT_ABOVE_LIMIT`, `RATE_NOT_FOUND`, `COMPOSITION_INCOMPLETE`, `VALIDATION_ERROR`. Remarcar para um produto que a casa não consegue entregar é o mesmo erro de vendê-lo pela primeira vez."
+          description: "As mesmas regras do orçamento: `MIN_STAY_NOT_MET`, `CAPACITY_EXCEEDED`, `DISCOUNT_ABOVE_LIMIT`, `RATE_NOT_FOUND`, `COMPOSITION_INCOMPLETE`, `VALIDATION_ERROR`. Remarcar para um produto que a casa não consegue entregar é o mesmo erro de vendê-lo pela primeira vez. E `VALIDATION_ERROR` em `details.guests_count` quando a lista de hóspedes da original não cabe no número da reserva nova."
           $ref: "#/components/responses/Erro"
 
   /reservations/{id}/check-in:
@@ -5527,7 +5846,10 @@ paths:
         "409":
           description: |
             `OPPORTUNITY_ALREADY_CLOSED` · `DATE_CONFLICT` (com o intervalo em
-            conflito em `details`) · `IDEMPOTENCY_MISMATCH`.
+            conflito em `details`) · `IDEMPOTENCY_MISMATCH` ·
+            `CONTACT_ANONYMIZED` — o contato foi anonimizado depois da emissão
+            do orçamento, e a reserva não nasce com titular anonimizado
+            (`POST /reservations`, "O titular é o primeiro hóspede da lista").
           $ref: "#/components/responses/Erro"
         "422":
           description: |
@@ -8686,6 +9008,7 @@ components:
                            COUNT_ALREADY_OPEN, COUNT_CLOSED, COUNT_HAS_PENDING_LINES,
                            MAINTENANCE_ORDER_CLOSED, MAINTENANCE_ORDER_ALREADY_OPEN,
                            AGENDA_EVENT_CLOSED,
+                           GUEST_LIST_FULL,
                            INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
@@ -10072,19 +10395,62 @@ components:
     HospedeDaReserva:
       type: object
       description: |
-        Rooming list — titular e acompanhantes (`reservation_guests`).
+        Rooming list — titular e acompanhantes (`reservation_guests`). A
+        linha guarda o `contact_id`; o resto é lido da ficha a cada leitura.
 
-        Sai em leitura de UM registro (`GET /reservations/{id}/full`) com o
-        telefone **cheio**, e por isso cada hóspede exibido grava uma linha
-        em `pii_access_log` com `reason: "rooming_list"` — ver a rota. Campo
-        de documento que a rooming list ganhar (F2-22) segue a mesma regra:
-        cheio aqui, com rastro; mascarado em qualquer coleção.
+        Sai em leitura de UMA reserva — `GET /reservations/{id}/guests`, o
+        `guests` do `/full` e a resposta do `POST` de hóspede — com documento,
+        telefone e e-mail **cheios**, e por isso cada hóspede exibido grava
+        uma linha em `pii_access_log` com `reason: "rooming_list"`. Em
+        coleção de várias reservas este schema não aparece; se um dia
+        aparecer, mascara ("Dado pessoal na resposta", no topo deste arquivo).
+
+        Mínimo necessário (spec §6): quem é a pessoa e como alcançá-la. Não
+        traz nascimento, cidade nem anotação — quem precisa disso abre a
+        ficha, que registra a própria leitura.
+      required: [contact_id, name, doc_type, doc_number, phone_e164, email, is_lead_guest]
       properties:
         contact_id:    { type: string, format: uuid }
-        name:          { type: string }
+        name:          { type: string, description: "Da ficha, lido agora. Ficha anonimizada: \"Contato anonimizado #…\"." }
+        doc_type:      { oneOf: [{ $ref: "#/components/schemas/TipoDeDocumento" }, { type: "null" }] }
+        doc_number:    { type: [string, "null"], example: "12345678909", description: "Cheio — é com ele que a recepção confere quem entra. Esta leitura registra cada hóspede em `pii_access_log`." }
         phone_e164:    { type: [string, "null"], example: "+5585999990000", description: "Cheio — esta leitura registra cada hóspede em `pii_access_log`." }
         email:         { type: [string, "null"], format: email, description: "Cheio, pela mesma regra do telefone: é de onde a gestão fala com o hóspede." }
-        is_lead_guest: { type: boolean, description: O titular da estadia. }
+        is_lead_guest:
+          type: boolean
+          description: |
+            O titular da estadia — sempre o `contact_id` da reserva, e um só
+            por reserva. Os dois são garantidos pelo banco: o índice único
+            parcial `reservation_guests_titular_idx` e a FK adiada
+            `reservation_guests_titular_fkey`. Não é campo de escrita: troca-se
+            o titular pelo `contact_id` de `PATCH /reservations/{id}`.
+
+    HospedeAcrescentar:
+      type: object
+      additionalProperties: false
+      description: |
+        Corpo do `POST /reservations/{id}/guests`. Só o `contact_id`: a ficha
+        nasce antes, em `POST /contacts` (o porquê está na rota), e o titular
+        não entra por aqui.
+      required: [contact_id]
+      properties:
+        contact_id: { type: string, format: uuid, description: "Ficha desta propriedade, não anonimizada, que ainda não está na lista." }
+
+    MetaDaListaDeHospedes:
+      type: object
+      description: |
+        O que a tela precisa para desenhar a seção "Hóspedes" sem uma segunda
+        cópia da regra de domínio.
+      required: [guests_count, capacity, editable]
+      properties:
+        guests_count: { type: integer, minimum: 1, description: "Quantas pessoas a reserva acomoda — o teto da lista." }
+        capacity:     { type: integer, minimum: 1, description: "Capacidade declarada do produto: até onde `guests_count` pode subir." }
+        editable:
+          type: boolean
+          description: |
+            A lista aceita acrescentar, retirar e trocar o titular agora: a
+            reserva está em `hold`, `confirmed` ou `checked_in`
+            (`guests.Editable`). A permissão é à parte (`reservations:editar`).
 
     EventoDaReserva:
       type: object
@@ -10099,7 +10465,14 @@ components:
           description: |
             Vocabulário aberto, gravado pelo módulo: `created`, `confirmed`,
             `hold_extended`, `unit_reassigned`, `rescheduled`, `credit_issued`,
-            `checked_in`, `checked_out`, `cancelled`, `expired`, `no_show`.
+            `checked_in`, `checked_out`, `cancelled`, `expired`, `no_show`,
+            `updated`, `guest_added`, `guest_removed`.
+
+            `guest_added` e `guest_removed` (F2-22) carregam `{contact_id}` e
+            nada mais: a linha do tempo diz QUE a lista mudou e quem mexeu,
+            nunca o nome, o documento ou o telefone de quem entrou ou saiu.
+            A troca de titular não gera os dois: fica no `updated` da edição e
+            no `audit_log` da reserva, com `contact_id` antes e depois.
 
             `credit_issued` é o dinheiro do hóspede que a reserva nova não
             consumiu numa remarcação para estadia mais barata. `payload`:
@@ -10144,6 +10517,14 @@ components:
             Cada item exibido aqui é uma linha nova em `pii_access_log`
             (`reason: "rooming_list"`).
           items: { $ref: "#/components/schemas/HospedeDaReserva" }
+        guests_editable:
+          type: boolean
+          description: |
+            A lista aceita acrescentar, retirar e trocar o titular agora — a
+            reserva está em `hold`, `confirmed` ou `checked_in`
+            (`guests.Editable`). É o mesmo `meta.editable` de
+            `GET /reservations/{id}/guests`. A permissão é à parte
+            (`reservations:editar`).
         timeline:
           type: array
           description: Ordenada do mais recente para o mais antigo.
@@ -10206,7 +10587,29 @@ components:
         é `/reschedule`, quem muda unidade é `/reassign-unit`, quem muda estado é
         a ação correspondente.
       properties:
-        contact_id:   { type: string, format: uuid }
+        contact_id:
+          type: string
+          format: uuid
+          description: |
+            O **titular** — e é por aqui, e só por aqui, que ele se troca (F2-22).
+            A lista de hóspedes acompanha na mesma transação
+            (`guests.PlanEdit`): o titular novo entra (ou, se já era
+            acompanhante, é promovido) e o anterior **sai** da lista — não vira
+            acompanhante. Troca de titular é quase sempre correção (contato
+            errado, homônimo, a agência no lugar do hóspede), e rebaixar a
+            pessoa deixaria um estranho associado à estadia; se o anterior
+            também vem, a recepção o acrescenta de volta.
+
+            Reenviar o titular de sempre não é troca e passa em qualquer
+            estado. A troca de verdade:
+            - só com a reserva em `hold`, `confirmed` ou `checked_in` — senão
+              `409 INVALID_STATE_TRANSITION` com `details.field =
+              "contact_id"`: trocar o titular de estadia encerrada é
+              reescrever quem dormiu na casa;
+            - nunca para ficha anonimizada — `409 CONTACT_ANONYMIZED`;
+            - ficha inexistente ou de outra propriedade continua `404`, como
+              sempre foi nesta rota (a lista de hóspedes responde `422` para o
+              mesmo caso; a divergência está registrada para o squad lead).
         broker_id:
           type: [string, "null"]
           format: uuid
@@ -10219,7 +10622,17 @@ components:
             FORBIDDEN`. Reenviar o valor gravado não é troca. Inexistente é
             `422 VALIDATION_ERROR`. Regra completa em "Corretor da venda",
             `POST /reservations`.
-        guests_count: { type: integer, minimum: 1, description: "Validado contra a capacidade do produto — acima dela, `CAPACITY_EXCEEDED`." }
+        guests_count:
+          type: integer
+          minimum: 1
+          description: |
+            Validado contra a capacidade do produto — acima dela,
+            `CAPACITY_EXCEEDED`. E, desde o F2-22, contra a lista de hóspedes:
+            o número não desce abaixo dos nomes que a lista já tem
+            (`422 VALIDATION_ERROR` em `details.guests_count`; retira-se
+            alguém da lista antes). Reenviar o número de sempre não é mudança
+            e passa, mesmo que a lista (dado anterior ao F2-22) esteja acima
+            dele.
         is_event:     { type: boolean }
         event_type:   { type: [string, "null"] }
         source:       { type: string }

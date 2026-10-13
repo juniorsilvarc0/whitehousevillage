@@ -1,4 +1,5 @@
 import type { LinhaDoOrcamento, TipoDeData } from "@/lib/api/comercial";
+import type { TipoDeDocumento } from "@/lib/contatos/tipos";
 
 /**
  * Tipos do módulo de reservas — espelho literal de `apps/api/openapi/openapi.yaml`
@@ -95,13 +96,56 @@ export type NoiteDaReserva = {
   price_cents: number;
 };
 
-/** Rooming list. Não confundir com `guests_count`, que é quantos foram vendidos. */
+/**
+ * Rooming list (F2-22). Não confundir com `guests_count`, que é quantos foram
+ * vendidos.
+ *
+ * A lista guarda o `contact_id`; o resto é lido da ficha a cada leitura —
+ * corrigir a ficha corrige a lista. Documento, telefone e e-mail chegam
+ * **cheios** (é a tela de trabalho da recepção no check-in), e cada leitura
+ * grava uma linha de `pii_access_log` por hóspede. Por isso nada daqui vai
+ * para `localStorage`, para a URL nem para o console. Ficha anonimizada chega
+ * como "Contato anonimizado #…", sem documento nem canal.
+ */
 export type HospedeDaReserva = {
   contact_id: string;
   name: string;
+  doc_type: TipoDeDocumento | null;
+  /** Cheio — é com ele que a recepção confere quem entra. */
+  doc_number: string | null;
   phone_e164: string | null;
   email: string | null;
+  /** O titular — sempre o `contact_id` da reserva, um só, garantido pelo
+   *  banco. Não sai da lista: troca-se pela edição da reserva. */
   is_lead_guest: boolean;
+};
+
+/** Corpo do `POST /reservations/{id}/guests`. Só o `contact_id`: a ficha nasce
+ *  antes, em `POST /contacts`, e o titular não entra por aqui. */
+export type HospedeAcrescentar = {
+  contact_id: string;
+};
+
+/**
+ * Corpo do `PATCH /reservations/{id}` que o painel manda para abrir lugar na
+ * lista: **só** `guests_count`. É o caminho que o contrato dá quando chega mais
+ * gente — aumenta-se o número de hóspedes (o servidor confere contra a
+ * capacidade) e depois se acrescenta o nome. O DTO do Go é o
+ * `ReservaAtualizar` inteiro; chave ausente não muda nada.
+ */
+export type NumeroDeHospedes = {
+  guests_count: number;
+};
+
+/** `details` do `422 GUEST_LIST_FULL` — os três números que a tela usa para
+ *  dizer se ainda dá para aumentar o número de hóspedes. */
+export type ListaCheia = {
+  /** O número **vendido** — o teto da lista. */
+  guests_count: number;
+  /** Quantos nomes a lista já tem. */
+  listed: number;
+  /** A capacidade declarada do produto: até onde `guests_count` pode subir. */
+  capacity: number;
 };
 
 /** Linha de `reservation_events` — append-only, nada é editado nem apagado. */
@@ -145,7 +189,15 @@ export type ReservaCompleta = {
   /** As noites agrupadas por tipo de tarifa, como no orçamento. */
   lines: LinhaDoOrcamento[];
   units: UnidadeAlocada[];
+  /** As **pessoas** — titular primeiro, acompanhantes por nome. Pode ter menos
+   *  nomes que `reservation.guests_count`, de propósito. */
   guests: HospedeDaReserva[];
+  /**
+   * A lista aceita acrescentar, retirar e trocar o titular **agora**
+   * (`guests.Editable` no domínio). A tela desenha os botões a partir daqui, sem
+   * uma segunda cópia da regra. A permissão é à parte (`reservations:editar`).
+   */
+  guests_editable: boolean;
   /** Do mais recente para o mais antigo. */
   timeline: EventoDaReserva[];
   /** O mesmo cálculo do `?dry_run=1`, já pronto. `null` quando não é cancelável. */

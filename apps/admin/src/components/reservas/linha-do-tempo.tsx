@@ -29,6 +29,13 @@ const ROTULOS: Record<string, string> = {
   cancelled: "Reserva cancelada",
   expired: "Pré-reserva expirada",
   no_show: "Hóspede não compareceu",
+  updated: "Dados da reserva alterados",
+  // Rooming list (F2-22). O evento carrega só `{contact_id}` — a linha do tempo
+  // diz QUE a lista mudou e quem mexeu, nunca quem entrou ou saiu: nome e
+  // documento ficam na lista, que registra cada leitura. Por isso a tela também
+  // não resolve o id num nome aqui.
+  guest_added: "Hóspede acrescentado à lista",
+  guest_removed: "Hóspede retirado da lista",
 };
 
 export function LinhaDoTempo({ eventos }: { eventos: EventoDaReserva[] }) {
@@ -37,7 +44,8 @@ export function LinhaDoTempo({ eventos }: { eventos: EventoDaReserva[] }) {
       <h2 className="font-display text-base">Linha do tempo</h2>
       <p className="mt-1 text-xs text-muted-foreground">
         Tudo o que aconteceu com a reserva: criação, confirmação, extensão de prazo, troca de apartamento,
-        remarcação, check-in, check-out e cancelamento. O histórico não pode ser editado nem apagado.
+        remarcação, mudanças na lista de hóspedes, check-in, check-out e cancelamento. O histórico não pode ser
+        editado nem apagado.
       </p>
 
       {eventos.length === 0 ? (
@@ -99,6 +107,9 @@ const TEXTOS: Record<string, string> = {
   hours: "horas",
   policy_version: "política",
   status: "estado",
+  // O `updated` da edição carrega o número de hóspedes que ficou — é o rastro
+  // do "aumentar o número" que abre lugar na lista.
+  guests_count: "hóspedes",
 };
 
 function DetalhesDoEvento({ payload }: { payload: Record<string, unknown> | null }) {
