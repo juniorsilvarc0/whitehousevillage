@@ -135,14 +135,14 @@ risco R5 acontecendo com o próprio backlog.
 | F2-16 | aberto | — | — |
 | F2-17 | aberto | — | e soma a **D11** do roadmap: o painel ainda trata a lista mascarada de contatos como ficha cheia |
 | F2-18 | aberto | — | — |
-| F2-19 | aberto | — | — |
-| F2-20 | aberto | — | — |
-| F2-21 | aberto | — | — |
+| F2-19 | **feito** | 13/10/2026 (PR #18) | migration `20261013120000`: `agenda_settings` (horários como dado, provisórios a confirmar — decisão 12), `agenda_events` (`agenda_events_da_reserva_idx` único parcial; `agenda_events_unidade_sem_sobreposicao` EXCLUDE) e `agenda_blocks`; `agenda_events.contact_id` é FK e guarda o id, não o nome |
+| F2-20 | **feito** sem os recebíveis | 13/10/2026 (PR #18) | entrou **antes** do F2-12: `/confirm` cria check-in, check-out e limpeza na mesma transação, por `reservas.EfeitoDaConfirmacao` — o gancho onde o F2-12 e o F2-13 entram depois. Cancelar, remarcar, check-in, check-out e realocar mexem na agenda; `own` é `assignee_id = $ator` no SQL, 404 fora do escopo. `TestConfirmarPoeOsTresEventosERepetirAChaveNaoDuplica` e a bateria `agenda_qa_*` |
+| F2-21 | **feito** | 13/10/2026 (PR #18) | `/app/agenda` com as quatro visões; "hoje" é o `settings.today` do servidor; helper único em `lib/fuso.ts` (ver a prova corrigida no item) |
 | F2-22 | **parcial** | Rodada 5 | a leitura de hóspedes que **já existia** em `GET /reservations/{id}/full` passou a gravar uma linha `rooming_list` de `pii_access_log` por hóspede exibido, com falha fechada (`TestFullDaReservaRegistraCadaHospedeExibido`). As rotas `/reservations/{id}/guests` e o índice único parcial de titular continuam faltando |
 | F2-23 | **feito** na API | Rodada 5 | coleção mascarada (`ContatoNaLista`, sem `birth_date` e `notes`); `PATCH` grava `detail`; e-mail com `*` dá 422; `TestColecaoDeContatosNaoServeDocumentoCheioComoCorretor`, `TestPatchDeContatoRegistraLeituraERecusaEmailMascarado`. O painel não acompanhou: **D11** |
 | F2-24 | aberto | — | entrada F2-10, F2-12, F2-22 |
 
-Saldo: **9 feitos, 2 parciais, 13 abertos.** O Bloco 0 está fechado; o Bloco 1
+Saldo em 13/10/2026: **12 feitos, 2 parciais, 10 abertos** — a agenda (F2-19 a F2-21) entrou antes do Bloco 1, porque não dependia das decisões 9 e 10. Saldo em 02/10/2026: 9 feitos, 2 parciais, 13 abertos. O Bloco 0 está fechado; o Bloco 1
 começou pelo F2-09, fora da ordem do quadro (o F2-08, que é entrada dele, está
 aberto), porque a metade do F2-09 que importava — a FK — não dependia da decisão
 que o F2-08 tinha de tomar: o `docs/db.md` §10 já previa `brokers`, e foi para
@@ -805,8 +805,10 @@ Este item saiu de uma medida feita hoje e **não estava em nenhuma lista de dív
 - **Entrada**: F2-08. Roda **em paralelo** com F2-19 e F2-20.
 - **Prova**: `make smoke-stack` cobre `/app/agenda` (reprova em 404); as quatro
   visões — dia, semana, mês e lista — têm teste de componente; o helper de fuso é
-  **o único do painel** (`lib/tempo-real/`), e não uma segunda cópia dentro de
-  `lib/agenda/` — `grep -rn "America/Fortaleza" apps/admin/src` devolve um lugar só.
+  **o único do painel** (`lib/fuso.ts` — o texto antigo dizia `lib/tempo-real/`,
+  que não é onde ele mora), e não uma segunda cópia dentro de `lib/agenda/` —
+  `grep -rn '"America/Fortaleza"' apps/admin/src` (com as aspas: sem elas o grep
+  conta os comentários) devolve um lugar só.
   Fortaleza mudando de regra tem de ter um arquivo para consertar.
 - **Bloqueia**: ninguém.
 

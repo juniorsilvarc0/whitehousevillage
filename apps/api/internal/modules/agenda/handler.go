@@ -16,7 +16,6 @@ package agenda
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -348,17 +347,19 @@ func filtroDeEventos(r *http.Request) (FiltroDeEventos, error) {
 			f.Status = append(f.Status, regra.Status(s))
 		}
 	}
-	// `unassigned` ilegível é 422, e não "sem filtro": `unassigned=sim`
-	// devolvendo a agenda inteira é fingir que filtrou (D12). Lido aqui, e não
-	// por httpx.ParseBool, que trata ilegível como ausente nas outras rotas.
-	if bruto := httpx.Query(r, "unassigned"); bruto != "" {
-		v, err := strconv.ParseBool(bruto)
+	// `unassigned` é `true` ou `false`, EXATAMENTE — o schema do parâmetro é
+	// `boolean`, e `1`, `t` ou `TRUE` não são nem um nem outro. Qualquer outro
+	// valor é 422, e não "sem filtro": devolver a agenda inteira seria fingir
+	// que filtrou (D12). Nem `httpx.ParseBool` (que trata ilegível como
+	// ausente) nem `strconv.ParseBool` (que aceita `1` e `T`) servem aqui.
+	if bruto := r.URL.Query().Get("unassigned"); bruto != "" {
 		switch {
-		case err != nil:
+		case bruto != "true" && bruto != "false":
 			falhas["unassigned"] = "use true ou false."
 		case f.ResponsavelID != nil:
 			falhas["unassigned"] = "não combina com assignee_id: um pede os sem responsável, o outro os de alguém."
 		default:
+			v := bruto == "true"
 			f.SemResponsavel = &v
 		}
 	}

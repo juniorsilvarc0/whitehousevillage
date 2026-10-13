@@ -10,7 +10,8 @@ import (
 )
 
 // A agenda lê a reserva em SQL com o vocabulário DESTE módulo — os estados que
-// aceitam evento e o tipo do evento de check-in na timeline —, mas não pode
+// aceitam evento, o tipo do evento de check-in na timeline e o recurso RBAC
+// das reservas —, mas não pode
 // importá-lo (a reserva importa a agenda). As duas cópias são conferidas aqui:
 // renomear um estado de um lado só faria a agenda deixar de achar as reservas
 // confirmadas, sem erro nenhum.
@@ -20,6 +21,9 @@ func TestAAgendaLeAReservaComOMesmoVocabulario(t *testing.T) {
 		"confirmed":          {agenda.ReservaConfirmada, EstadoConfirmada},
 		"checked_in":         {agenda.ReservaHospedada, EstadoCheckIn},
 		"evento de check-in": {agenda.EventoDeEntradaNaReserva, EventoCheckIn},
+		// O recurso RBAC cujo escopo de `ver` decide a que reserva um evento
+		// pode se ligar.
+		"recurso": {agenda.RecursoDasReservas, Recurso},
 	}
 	for nome, par := range pares {
 		if par[0] != par[1] {

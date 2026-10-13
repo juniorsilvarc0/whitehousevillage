@@ -71,12 +71,11 @@ type EventoDaAgenda struct {
 	// Unidades são as que o evento OCUPA: no automático, as da reserva hoje;
 	// no manual, a gravada ou, sem ela, as da reserva ligada.
 	Unidades []UnidadeDoEventoDaAgenda `json:"units"`
-	// UnidadeID é a unidade GRAVADA no evento manual — nula no automático, no
-	// manual que ocupa a reserva inteira e no que não ocupa unidade. Não está
-	// no schema `EventoDaAgenda` (que só tem `units`), e é o que faltava para o
-	// `PUT` dar a volta: sem ela, quem reenvia o evento lido não sabe se
-	// `units` veio do evento ou da reserva, e o anulável omitido vira `null`.
-	// Aditiva (o schema não fecha `additionalProperties`); ver o relatório.
+	// UnidadeID é a unidade GRAVADA no evento manual — nula no automático (que
+	// lê a unidade da reserva, em `units`), no manual que ocupa as unidades da
+	// reserva e no que não ocupa unidade; nula também no derivado. É o que o
+	// `PUT` devolve para a ida e volta do formulário: sem ela, quem reenvia o
+	// evento lido não saberia se `units` veio do evento ou da reserva.
 	UnidadeID           *uuid.UUID `json:"unit_id"`
 	ReservaID           *uuid.UUID `json:"reservation_id"`
 	ReservaCodigo       *string    `json:"reservation_code"`

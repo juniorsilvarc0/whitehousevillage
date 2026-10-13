@@ -350,6 +350,78 @@ func TestEscopoOwnSoAlcancaOsEventosDoProprioResponsavel(t *testing.T) {
 	exigir(t, a.chamar(t, http.MethodGet, caminho, tokenAna, nil), http.StatusOK, "detalhe próprio")
 }
 
+// O corretor em `own` só liga o evento a uma reserva que ele ENXERGA pelo
+// escopo dele em `reservations:ver` — a dele. A do colega é 422 em
+// `reservation_id` COMO SE NÃO EXISTISSE (a mesma frase da reserva
+// inexistente), no POST, no PUT e no PATCH, e nada dela — código, unidades —
+// aparece no corpo: ligada, a resposta do evento devolveria os dois.
+func TestEscopoOwnNaoLigaOEventoAReservaDoColega(t *testing.T) {
+	a := subir(t)
+	_, gestor := a.gestor(t)
+	celulas := append([]string{"reservations:ver", "reservations:criar"}, celulasDaAgenda...)
+	ana, tokenAna := a.usuario(t, a.perfil(t, auth.EscopoOwn, celulas...), "Ana Corretora")
+	beto, _ := a.usuario(t, a.perfil(t, auth.EscopoOwn, celulas...), "Beto Corretor")
+	contato := a.contato(t)
+	daAna := a.criarReserva(t, gestor, a.produto(t, "cobertura"), contato, a.hoje.AddDays(790), a.hoje.AddDays(793))
+	doBeto := a.criarReserva(t, gestor, a.produto(t, "cobertura"), contato, a.hoje.AddDays(796), a.hoje.AddDays(799))
+	// Cada corretor é dono da sua venda — o eixo do `own` de reservations.
+	for reserva, dono := range map[uuid.UUID]uuid.UUID{daAna.ID: ana, doBeto.ID: beto} {
+		if _, err := a.pool.Exec(a.ctx, `UPDATE reservations SET owner_id = $2 WHERE id = $1`, reserva, dono); err != nil {
+			t.Fatal(err)
+		}
+	}
+	diaDoBeto := a.hoje.AddDays(797)
+
+	semNadaDoColega := func(t *testing.T, r resposta, contexto string) {
+		t.Helper()
+		exigirErro(t, r, http.StatusUnprocessableEntity, "VALIDATION_ERROR", contexto)
+		if r.detalhes(t)["reservation_id"] == nil {
+			t.Fatalf("%s: o 422 é no reservation_id: %s", contexto, r.Corpo)
+		}
+		for _, segredo := range []string{doBeto.Codigo, "COB-01", doBeto.ID.String()} {
+			if strings.Contains(string(r.Corpo), segredo) {
+				t.Errorf("%s: o corpo vazou %q da reserva do colega: %s", contexto, segredo, r.Corpo)
+			}
+		}
+	}
+
+	// POST: a reserva do colega é a mesma resposta da reserva que não existe.
+	doColega := a.chamar(t, http.MethodPost, "/agenda/events", tokenAna, map[string]any{
+		"type": "visita", "title": "Visita na venda do Beto", "reservation_id": doBeto.ID,
+		"starts_at": a.rfc(diaDoBeto, "10:00"), "ends_at": a.rfc(diaDoBeto, "11:00")})
+	semNadaDoColega(t, doColega, "POST na reserva do colega")
+	inexistente := a.chamar(t, http.MethodPost, "/agenda/events", tokenAna, map[string]any{
+		"type": "visita", "title": "x", "reservation_id": uuid.New(), "starts_at": a.rfc(diaDoBeto, "10:00")})
+	exigirErro(t, inexistente, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "POST em reserva inexistente")
+	if doColega.detalhes(t)["reservation_id"] != inexistente.detalhes(t)["reservation_id"] {
+		t.Errorf("a do colega e a inexistente respondem diferente — um oráculo: %v × %v",
+			doColega.detalhes(t)["reservation_id"], inexistente.detalhes(t)["reservation_id"])
+	}
+
+	// A dela, sim.
+	ligada := a.marcar(t, tokenAna, map[string]any{
+		"type": "visita", "title": "Visita na venda da Ana", "reservation_id": daAna.ID,
+		"starts_at": a.rfc(a.hoje.AddDays(791), "10:00"), "ends_at": a.rfc(a.hoje.AddDays(791), "11:00")}).Data
+	if ligada.ReservaCodigo == nil || *ligada.ReservaCodigo != daAna.Codigo {
+		t.Fatalf("ligada à reserva dela: %+v", ligada.ReservaCodigo)
+	}
+
+	// PATCH e PUT da visita dela para a reserva do colega: o mesmo 422.
+	caminho := "/agenda/events/" + ligada.ID.String()
+	semNadaDoColega(t, a.chamar(t, http.MethodPatch, caminho, tokenAna, map[string]any{"reservation_id": doBeto.ID}),
+		"PATCH para a reserva do colega")
+	semNadaDoColega(t, a.chamar(t, http.MethodPut, caminho, tokenAna, map[string]any{
+		"type": "visita", "title": "Visita", "reservation_id": doBeto.ID,
+		"starts_at": a.rfc(diaDoBeto, "10:00"), "ends_at": a.rfc(diaDoBeto, "11:00")}), "PUT para a reserva do colega")
+
+	if n := a.contar(t, `SELECT count(*) FROM agenda_events WHERE reservation_id = $1`, doBeto.ID); n != 0 {
+		t.Fatalf("%d eventos ligados à reserva do colega", n)
+	}
+	// Em `all`, a gestão liga a qualquer uma.
+	a.marcar(t, gestor, map[string]any{"type": "visita", "title": "Visita da gestão", "reservation_id": doBeto.ID,
+		"starts_at": a.rfc(diaDoBeto, "15:00"), "ends_at": a.rfc(diaDoBeto, "16:00")})
+}
+
 // ─────────────────────────── A lista ────────────────────────────────
 
 // A lista traz, no mesmo envelope, os eventos gravados e a manutenção e o

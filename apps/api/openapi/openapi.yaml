@@ -8157,7 +8157,12 @@ paths:
           ligado a uma reserva ocupa **as unidades da reserva** (o casamento do
           grupo que alugou a Completa ocupa a casa); sem nenhum dos dois, não
           ocupa unidade (a reunião com o fornecedor).
-        - `reservation_id` é uma reserva da propriedade em `hold`, `confirmed`
+        - `reservation_id` é uma reserva **que o ator enxerga** pelo escopo
+          dele em `reservations:ver` — em `own`, a que é dele (`owner_id`, o
+          mesmo predicado do `own` de `GET /reservations/{id}`); a de outro é
+          `422` em `reservation_id` como se não existisse,
+          porque a resposta devolveria o código e as unidades dela. E é uma
+          reserva da propriedade em `hold`, `confirmed`
           ou `checked_in`; com `unit_id`, a unidade tem de ser uma das dela
           (`422` em `unit_id`). Cancelar a reserva segue `agenda.OnCancel`:
           se o hóspede não chegou a entrar, cancela todo evento `agendado`
@@ -8261,10 +8266,17 @@ paths:
         horário, o responsável e a anotação mudam. `type`, `title`, `all_day`,
         `unit_id`, `reservation_id` e `contact_id` são da reserva — omitidos
         ficam como estão, repetidos passam, diferentes são `422` no campo
-        ("segue a reserva"). Check-in e check-out mudam de **hora**, não de dia
-        (o dia é o da reserva). A limpeza pode ir para depois — inclusive para
-        outro dia, quando a equipe só vem amanhã —, nunca para antes do fim do
-        check-out da reserva. Mover o check-out para depois pode cruzar a
+        ("segue a reserva"). **`null` também é diferente**: o valor que o
+        evento mostra é o da reserva (o titular, as unidades), e aceitar `null`
+        com `200` faria a tela achar que tirou o cliente sem ter tirado.
+        **`type` não se envia** para o automático: o corpo só aceita os tipos
+        manuais (`TipoDeEventoManual`), e mandar `checkin`/`checkout` é `422` —
+        omita o campo. Check-in e check-out mudam de **hora**, não de dia (o dia
+        é o da reserva). A limpeza pode ir para depois — inclusive para outro
+        dia, quando a equipe só vem amanhã —, nunca para antes do fim do
+        check-out da reserva; **com o check-out cancelado** (a reserva caiu com
+        o hóspede dentro e a unidade esvaziou na hora), o limite é o instante
+        em que a reserva foi cancelada, e não o check-out original. Mover o check-out para depois pode cruzar a
         limpeza da mesma unidade: é `409 UNIT_NOT_AVAILABLE`, e a ordem certa é
         mover a limpeza primeiro.
 

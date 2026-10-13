@@ -71,6 +71,12 @@ const (
 	EventoDeEntradaNaReserva = "checked_in"
 )
 
+// RecursoDasReservas é o recurso RBAC das reservas (`reservas.Recurso`): o
+// evento só se liga a uma reserva que o ator enxerga pelo escopo dele em
+// `reservations:ver`. Repetido aqui pelo mesmo motivo do vocabulário acima, e
+// conferido pelo mesmo teste.
+const RecursoDasReservas = "reservations"
+
 // estadosQueAceitamVinculo são os estados em que uma reserva pode receber um
 // evento manual (contrato: "reserva em hold, confirmed ou checked_in").
 var estadosQueAceitamVinculo = []string{ReservaEmHold, ReservaConfirmada, ReservaHospedada}
@@ -529,13 +535,25 @@ func (r *Repository) AutomaticosAgendadosDesde(ctx context.Context, prop uuid.UU
 	return escanearEventos(linhas)
 }
 
-// FimDoCheckOut é o fim do check-out automático da reserva, quando ele existe
-// e não foi cancelado — o `AutoBounds.CheckoutEnd` da limpeza.
+// FimDoCheckOut é o limite da limpeza automática da reserva — o
+// `AutoBounds.CheckoutEnd` —, lido do check-out automático:
+//
+//   - agendado ou concluído: o fim gravado dele (o combinado, ou o da saída
+//     antecipada);
+//   - CANCELADO: o instante do cancelamento (`cancelled_at`). É o caso da
+//     reserva que caiu com o hóspede dentro (`regra.OnCancel`): a unidade
+//     esvaziou na hora, a limpeza veio para hoje, e o check-out original —
+//     dias depois — não pode mais segurá-la (contrato, `PUT
+//     /agenda/events/{id}`).
+//
+// Nil quando a reserva não tem check-out automático (quem chama cai no horário
+// da configuração).
 func (r *Repository) FimDoCheckOut(ctx context.Context, reserva uuid.UUID) (*time.Time, error) {
 	var fim time.Time
 	err := r.exec(ctx).QueryRow(ctx, `
-		SELECT ends_at FROM agenda_events
-		 WHERE reservation_id = $1 AND origin = 'reservation' AND type = 'checkout' AND status <> 'cancelado'`,
+		SELECT CASE WHEN status = 'cancelado' THEN cancelled_at ELSE ends_at END
+		  FROM agenda_events
+		 WHERE reservation_id = $1 AND origin = 'reservation' AND type = 'checkout'`,
 		reserva).Scan(&fim)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -703,10 +721,17 @@ func (r *Repository) Unidade(ctx context.Context, prop, id uuid.UUID) (unidadeDo
 // `/cancel` em voo (FOR UPDATE na reserva) termina antes desta leitura — e
 // ela enxerga o `cancelled` —, ou espera o evento nascer e o cancela junto.
 // Sem a trava, a visita nasceria ligada a uma reserva que acabou de cair.
-func (r *Repository) EstadoDaReserva(ctx context.Context, prop, id uuid.UUID) (string, bool, error) {
+//
+// `dono` não nulo é o escopo `own` de `reservations:ver` aplicado NO SQL, com o
+// mesmo predicado de `reservas` (`owner_id = <ator>`): a reserva que o ator
+// não enxerga não existe para ele (achou=false) — a resposta do evento
+// devolveria o código e as unidades dela.
+func (r *Repository) EstadoDaReserva(ctx context.Context, prop, id uuid.UUID, dono *uuid.UUID) (string, bool, error) {
 	var status string
-	err := r.exec(ctx).QueryRow(ctx,
-		`SELECT status FROM reservations WHERE id = $1 AND property_id = $2 FOR KEY SHARE`, id, prop).Scan(&status)
+	err := r.exec(ctx).QueryRow(ctx, `
+		SELECT status FROM reservations
+		 WHERE id = $1 AND property_id = $2 AND ($3::uuid IS NULL OR owner_id = $3::uuid)
+		   FOR KEY SHARE`, id, prop, dono).Scan(&status)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

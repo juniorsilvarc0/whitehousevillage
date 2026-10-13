@@ -136,7 +136,7 @@ type proposta struct {
 // exibido é o que a leitura MOSTRA do evento automático e não está gravado
 // nele: o título composto, o titular e as unidades da reserva. Reenviar o que
 // foi lido não é mudança — o formulário que devolve o evento inteiro não pode
-// falhar pelo que não tocou.
+// falhar pelo que não tocou —, e qualquer outra coisa, `null` inclusive, é.
 type exibido struct {
 	titulo   string
 	contato  *uuid.UUID
@@ -180,14 +180,26 @@ func (p *proposta) diaInteiro(v bool) {
 	}
 }
 
+// No automático, a unidade e o titular são comparados com o que o evento
+// MOSTRA — os da reserva —, e não com a coluna gravada, que é sempre nula
+// nele: `null` é diferente do titular exibido (contrato, `PUT
+// /agenda/events/{id}`), e responder 200 a ele faria a tela achar que tirou o
+// cliente sem ter tirado.
 func (p *proposta) unidade(v *uuid.UUID, ex exibido) {
-	if mesmoID(v, p.alvo.UnidadeID) || (p.automatico() && v != nil && ex.unidades[*v]) {
+	if p.automatico() {
+		// O que o evento mostra é a lista das unidades da reserva: um id dela
+		// é repetição; `null` só é repetição se a lista for vazia.
+		exibida := (v == nil && len(ex.unidades) == 0) || (v != nil && ex.unidades[*v])
+		if !exibida {
+			p.identidade = append(p.identidade, "unit_id")
+		}
+		return
+	}
+	if mesmoID(v, p.alvo.UnidadeID) {
 		return
 	}
 	p.identidade = append(p.identidade, "unit_id")
-	if !p.automatico() {
-		p.alvo.UnidadeID = v
-	}
+	p.alvo.UnidadeID = v
 }
 
 func (p *proposta) reserva(v *uuid.UUID) {
@@ -201,13 +213,17 @@ func (p *proposta) reserva(v *uuid.UUID) {
 }
 
 func (p *proposta) contato(v *uuid.UUID, ex exibido) {
-	if mesmoID(v, p.alvo.ContatoID) || (p.automatico() && mesmoID(v, ex.contato)) {
+	if p.automatico() {
+		if !mesmoID(v, ex.contato) {
+			p.identidade = append(p.identidade, "contact_id")
+		}
+		return
+	}
+	if mesmoID(v, p.alvo.ContatoID) {
 		return
 	}
 	p.identidade = append(p.identidade, "contact_id")
-	if !p.automatico() {
-		p.alvo.ContatoID = v
-	}
+	p.alvo.ContatoID = v
 }
 
 // Substituir é o PUT. No manual: substitui tudo que o POST aceita (anulável
@@ -472,7 +488,8 @@ func (s *Service) editar(ctx context.Context, id uuid.UUID, verbo regra.Write,
 }
 
 // fimDoCheckOut é o limite da limpeza automática: o fim do check-out gravado
-// da reserva, ou o da configuração quando ele não existe.
+// da reserva — ou, com ele cancelado, o instante do cancelamento
+// (`Repository.FimDoCheckOut`) —, e o da configuração quando ele não existe.
 func (s *Service) fimDoCheckOut(ctx context.Context, res reservaDaAgenda, cfg configuracaoGravada, rel relogio) (time.Time, error) {
 	gravado, err := s.repo.FimDoCheckOut(ctx, res.ID)
 	if err != nil {
@@ -575,11 +592,13 @@ func (s *Service) conferirVinculos(ctx context.Context, prop uuid.UUID, alvo eve
 		}
 	}
 	if m.reserva && alvo.ReservaID != nil {
-		status, achou, err := s.repo.EstadoDaReserva(ctx, prop, *alvo.ReservaID)
+		status, achou, err := s.estadoDaReservaVisivel(ctx, prop, *alvo.ReservaID)
 		switch {
 		case err != nil:
 			return err
 		case !achou:
+			// A reserva que não existe e a que o ator não enxerga respondem a
+			// MESMA coisa: "existe, mas não é sua" já vaza que existe.
 			falhas["reservation_id"] = "reserva não encontrada nesta propriedade."
 		case !aceitaVinculo(status):
 			falhas["reservation_id"] = fmt.Sprintf(
@@ -626,6 +645,26 @@ func (s *Service) conferirVinculos(ctx context.Context, prop uuid.UUID, alvo eve
 		return apperr.Validation(falhas)
 	}
 	return nil
+}
+
+// estadoDaReservaVisivel lê a reserva pelo escopo do ator em
+// `reservations:ver` (contrato, `POST /agenda/events`): em `all`, qualquer uma
+// da casa; em `own`, só a dele (`owner_id`), filtrada no SQL; sem a célula,
+// nenhuma — quem não enxerga reservas não liga evento a elas.
+func (s *Service) estadoDaReservaVisivel(ctx context.Context, prop, id uuid.UUID) (string, bool, error) {
+	var dono *uuid.UUID
+	switch auth.ScopeOf(ctx, RecursoDasReservas, auth.AcaoVer) {
+	case auth.EscopoAll:
+	case auth.EscopoOwn:
+		ator, ok := auth.UsuarioID(ctx)
+		if !ok {
+			return "", false, apperr.Unauthorized
+		}
+		dono = &ator
+	default:
+		return "", false, nil
+	}
+	return s.repo.EstadoDaReserva(ctx, prop, id, dono)
 }
 
 func aceitaVinculo(status string) bool {

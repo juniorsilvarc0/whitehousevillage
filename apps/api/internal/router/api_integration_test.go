@@ -63,10 +63,15 @@ func subirAPI(t *testing.T) *ambiente {
 		MediaDir: t.TempDir(),
 	}
 
-	h, err := New(Opcoes{Config: cfg, Pool: pool})
+	h, fechar, err := NovoComFechamento(Opcoes{Config: cfg, Pool: pool})
 	if err != nil {
 		t.Fatalf("montando o router: %v", err)
 	}
+	// A escuta do tempo real segura uma conexão própria. Sem fechar, cada
+	// teste deixava uma aberta e a suíte esgotava as 100 conexões do Postgres
+	// do CI. Registrado DEPOIS do pool: Cleanup é LIFO, então a escuta cai
+	// antes de o pool fechar.
+	t.Cleanup(fechar)
 
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)

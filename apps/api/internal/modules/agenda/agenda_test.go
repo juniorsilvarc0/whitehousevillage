@@ -204,7 +204,7 @@ func TestFiltroPadraoDaLista(t *testing.T) {
 		len(f.Status) != 2 || f.Status[0] != regra.Scheduled || f.Status[1] != regra.Done || f.PorPagina != 25 {
 		t.Errorf("padrão: %+v", f)
 	}
-	f, d = filtro(t, "reservation_id="+uuid.NewString()+"&type=checkin,%20checkout&status=cancelado&sort=-starts_at&unassigned=1")
+	f, d = filtro(t, "reservation_id="+uuid.NewString()+"&type=checkin,%20checkout&status=cancelado&sort=-starts_at&unassigned=true")
 	if d != nil {
 		t.Fatal(d)
 	}
@@ -223,6 +223,11 @@ func TestFiltroInvalidoNuncaViraSemFiltro(t *testing.T) {
 		"from=2026-11-01&to=2027-02-02": "to",
 		"from=01/11/2026&to=2026-11-08": "from",
 		janela + "unassigned=sim":       "unassigned",
+		janela + "unassigned=1":         "unassigned",
+		janela + "unassigned=0":         "unassigned",
+		janela + "unassigned=t":         "unassigned",
+		janela + "unassigned=TRUE":      "unassigned",
+		janela + "unassigned=False":     "unassigned",
 		janela + "unassigned=true&assignee_id=" + uuid.NewString(): "unassigned",
 		janela + "type=xpto":       "type",
 		janela + "type=,":          "type",
@@ -238,6 +243,9 @@ func TestFiltroInvalidoNuncaViraSemFiltro(t *testing.T) {
 	}
 	if _, d := filtro(t, "from=2026-11-01&to=2027-02-01"); d != nil {
 		t.Errorf("92 dias cabem: %v", d)
+	}
+	if f, d := filtro(t, janela+"unassigned=false"); d != nil || f.SemResponsavel == nil || *f.SemResponsavel {
+		t.Errorf("unassigned=false: %+v %v", f.SemResponsavel, d)
 	}
 }
 
@@ -339,14 +347,26 @@ func TestPropostaDoAutomaticoNaoGravaIdentidade(t *testing.T) {
 	p := proposta{alvo: antes}
 	p.titulo("  Check-in · WH-1 ", ex)
 	p.contato(&contato, ex)
-	p.contato(nil, ex)
 	p.unidade(&unidade, ex)
-	p.unidade(nil, ex)
 	p.reserva(&reserva)
 	p.diaInteiro(false)
 	p.tipo("checkin")
 	if len(p.identidade) != 0 {
 		t.Fatalf("o eco do automático virou mudança: %v", p.identidade)
+	}
+
+	// `null` é DIFERENTE do titular e das unidades que o evento mostra — ainda
+	// que a coluna gravada seja nula.
+	nulos := proposta{alvo: antes}
+	nulos.contato(nil, ex)
+	nulos.unidade(nil, ex)
+	if strings.Join(nulos.identidade, ",") != "contact_id,unit_id" || nulos.alvo.ContatoID != nil || nulos.alvo.UnidadeID != nil {
+		t.Fatalf("null no automático: %v %+v", nulos.identidade, nulos.alvo)
+	}
+	semUnidades := proposta{alvo: antes}
+	semUnidades.unidade(nil, exibido{unidades: map[uuid.UUID]bool{}})
+	if len(semUnidades.identidade) != 0 {
+		t.Fatalf("sem unidade exibida, null é repetição: %v", semUnidades.identidade)
 	}
 
 	outro := uuid.New()
