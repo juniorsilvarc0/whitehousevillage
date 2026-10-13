@@ -67,6 +67,7 @@ func TestCorretorNaoAlcancaFinanceiroGlobalNemConfiguracoes(t *testing.T) {
 	proibidos := []string{
 		"finance.receivables", "finance.payables",
 		"inventory", "inventory.goods", "channels",
+		"maintenance", // a ordem bloqueia a unidade sem passar por `calendar` (spec §12)
 		auth.RecursoUsuarios, auth.RecursoPerfis, "settings", "integrations", "audit",
 		"site", // o conteúdo do site fala em nome da casa (docs/site-cms.md)
 	}
@@ -233,6 +234,82 @@ func TestBensSaoRecursoSeparadoDoCadastro(t *testing.T) {
 	for chave := range concedido {
 		if p := strings.SplitN(chave, ":", 2)[0]; p != "admin" && p != "usuario" {
 			t.Errorf("%s recebeu %s — só a gestão e a operação contam bens", chave, bens)
+		}
+	}
+}
+
+// As ordens de manutenção (spec §12, 20261009100000) são recurso próprio, com
+// as quatro ações, sem dono, e só da gestão e da operação.
+//
+// O que torna a concessão delicada: a ordem BLOQUEIA a unidade dela no
+// calendário sem pedir `calendar:*` (contrato, tag Manutenção). Quem recebe
+// `maintenance` recebe, na prática, o poder de tirar uma unidade da venda.
+// Por isso o corretor — que em `calendar` só mexe no que é dele — e a conta de
+// serviço do site — cuja matriz vale para a internet inteira — ficam de fora.
+func TestManutencaoEhDaOperacao(t *testing.T) {
+	const manutencao = "maintenance"
+
+	catalogo := map[string]recurso{}
+	for _, r := range catalogoSeed {
+		catalogo[r.codigo] = r
+	}
+	r, ok := catalogo[manutencao]
+	if !ok {
+		t.Fatalf("recurso %q fora do catálogo — as rotas /maintenance-orders não teriam como ser autorizadas", manutencao)
+	}
+	if strings.Join(r.acoes, ",") != strings.Join(tudo, ",") {
+		t.Errorf("%s com ações %v; o contrato é as quatro (excluir = cancelar a ordem)", manutencao, r.acoes)
+	}
+	if r.suportaOwn {
+		t.Errorf("%s com suportaOwn=true; a ordem é da casa, não de quem a abriu", manutencao)
+	}
+	if r.grupo != catalogo["inventory.goods"].grupo {
+		t.Errorf("%s no grupo %q; é Operação, ao lado dos bens", manutencao, r.grupo)
+	}
+
+	linhas, err := montarMatriz()
+	if err != nil {
+		t.Fatal(err)
+	}
+	vitrine, err := matrizDaVitrine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	concedido := map[string]bool{}
+	for _, l := range append(linhas, vitrine...) {
+		if l.recurso != manutencao {
+			continue
+		}
+		if l.escopo != escopoAll {
+			t.Errorf("%s com escopo %q em %s:%s — o recurso não tem dono", l.perfil, l.escopo, manutencao, l.acao)
+		}
+		concedido[l.perfil+":"+l.acao] = true
+	}
+	for _, perfil := range []string{"admin", "usuario"} {
+		for _, a := range tudo {
+			if !concedido[perfil+":"+a] {
+				t.Errorf("%s sem %s:%s — a operação não conseguiria abrir, acompanhar ou cancelar a ordem", perfil, manutencao, a)
+			}
+		}
+	}
+	for chave := range concedido {
+		if p := strings.SplitN(chave, ":", 2)[0]; p != "admin" && p != "usuario" {
+			t.Errorf("%s recebeu %s — a ordem bloqueia a unidade no calendário, e só a gestão e a operação a abrem", chave, manutencao)
+		}
+	}
+
+	// O formulário da ordem escolhe cômodo e bem pelas rotas de `inventory.goods`
+	// (contrato, tag Manutenção). Perfil do seed com `maintenance:criar` e sem
+	// `inventory.goods:ver` teria um formulário que não carrega.
+	temBens := map[string]bool{}
+	for _, l := range linhas {
+		if l.recurso == "inventory.goods" && l.acao == ver {
+			temBens[l.perfil] = true
+		}
+	}
+	for chave := range concedido {
+		if p := strings.SplitN(chave, ":", 2)[0]; !temBens[p] {
+			t.Errorf("%s recebeu %s sem inventory.goods:ver — o formulário não acharia cômodo nem bem", p, manutencao)
 		}
 	}
 }

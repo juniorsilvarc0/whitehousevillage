@@ -67,6 +67,8 @@ const (
 	CodeCountAlreadyOpen          = "COUNT_ALREADY_OPEN"
 	CodeCountClosed               = "COUNT_CLOSED"
 	CodeCountHasPendingLines      = "COUNT_HAS_PENDING_LINES"
+	CodeMaintenanceOrderClosed    = "MAINTENANCE_ORDER_CLOSED"
+	CodeMaintenanceOrderOpen      = "MAINTENANCE_ORDER_ALREADY_OPEN"
 	CodeInternal                  = "INTERNAL"
 )
 
@@ -292,5 +294,35 @@ var (
 	// `details.pending` e `details.pending_by_room`.
 	CountHasPendingLines = definir(CodeCountHasPendingLines,
 		"Ainda há itens sem contagem nesta conferência. Conte o que falta ou cancele a conferência.",
+		http.StatusConflict)
+)
+
+// Erros da ordem de manutenção (spec §12, `docs/db.md` §11).
+//
+// Nasceram com o contrato de `/maintenance-orders` e antes do módulo que os
+// emite, pelo mesmo motivo dos três da conferência: o enum da OpenAPI e o
+// literal em Go entram no mesmo commit, ou `contrato_de_erros_test.go` reprova.
+var (
+	// MaintenanceOrderClosed — escrita numa ordem `concluida` ou `cancelada`
+	// que o estado não aceita: transição (`/start`, `/complete`, `DELETE`),
+	// edição de qualquer campo que não o custo, e qualquer mexida no
+	// bloqueio. Encerrada não reabre: retrabalho é ordem nova.
+	//
+	// Quem carimba é `internal/domain/maintenance` (Next e CheckEdit), com
+	// `details.status` e `details.editable` (`so_custo` na concluída, `nada`
+	// na cancelada) — a tela usa o segundo para explicar por que o campo
+	// travou. O módulo acrescenta `details.closed_at`.
+	MaintenanceOrderClosed = definir(CodeMaintenanceOrderClosed,
+		"Esta ordem de manutenção já foi encerrada: retrabalho é uma ordem nova.",
+		http.StatusConflict)
+
+	// MaintenanceOrderOpen — a avaria citada já tem uma ordem aberta ou em
+	// andamento. Decidido pelo índice único PARCIAL sobre `issue_id` das
+	// ordens não encerradas, traduzindo o `23505` — o segundo toque em "Abrir
+	// ordem de manutenção" no celular é a corrida que um SELECT antes do
+	// INSERT perderia. `details.maintenance_order_id` leva à ordem que já
+	// existe, para o toque repetido virar navegação em vez de beco.
+	MaintenanceOrderOpen = definir(CodeMaintenanceOrderOpen,
+		"Esta avaria já tem uma ordem de manutenção em aberto.",
 		http.StatusConflict)
 )

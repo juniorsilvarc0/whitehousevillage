@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 )
@@ -295,18 +296,126 @@ func TestNomesExatosSeguemORegimeDoEncodingJSON(t *testing.T) {
 			t.Errorf("%s deveria ser recusado (caixa diferente do nome exato)", corpo)
 		}
 	}
-	nomes := nomesExatos(reflect.TypeFor[comEmbutidaESemTag]())
+	campos := camposExatos(reflect.TypeFor[comEmbutidaESemTag]())
 	for _, fora := range []string{"Ignorado", "-", "interno", "baseDeTeste"} {
-		if nomes[fora] {
-			t.Errorf("%q não é nome aceito no topo: %v", fora, nomes)
+		if _, ok := campos[fora]; ok {
+			t.Errorf("%q não é nome aceito no topo: %v", fora, campos)
 		}
 	}
 	_ = comEmbutidaESemTag{}.interno
 }
 
-// Topo em lista (a matriz de permissões) não tem chave de topo a conferir.
-func TestTopoEmListaFicaForaDaRegraDeCaixa(t *testing.T) {
-	if nomes := nomesExatos(reflect.TypeFor[matrizDeTeste]()); nomes != nil {
-		t.Fatalf("lista no topo não tem nomes de chave: %v", nomes)
+// Lista de escalares no topo não tem chave a conferir.
+func TestTopoEmListaDeEscalaresFicaForaDaRegraDeCaixa(t *testing.T) {
+	if alvo := alvoDaConferencia(reflect.TypeFor[matrizDeTeste]()); alvo == nil {
+		t.Fatal("a lista é atravessada; o que fica fora são os elementos escalares")
+	}
+	if alvoDaConferencia(reflect.TypeFor[string]()) != nil {
+		t.Fatal("escalar não tem chave")
+	}
+	if _, err := Decode[matrizDeTeste](post(`["A","b"]`)); err != nil {
+		t.Fatalf("valores de uma lista de texto são dado, não chave: %v", err)
+	}
+}
+
+// ─────────── A conferência desce nos objetos aninhados ───────────
+//
+// Medido pelo QA em 09/10/2026: `"block": {"From": …, "To": …}` no POST da
+// ordem de manutenção respondia 201 e bloqueava a casa; com `from` e `From`
+// juntos, o servidor gravava o ÚLTIMO, e o cliente lia o outro.
+
+type periodoDeTeste struct {
+	De  string `json:"from"`
+	Ate string `json:"to"`
+}
+
+type faixaDeTeste struct {
+	Rotulo string `json:"label"`
+	Pct    int    `json:"refund_pct"`
+}
+
+type eventoDeTeste struct {
+	Tipo string `json:"event_type"`
+}
+
+type aninhadoDeTeste struct {
+	Titulo    string                  `json:"title"`
+	Bloqueio  *periodoDeTeste         `json:"block"`
+	Fixo      periodoDeTeste          `json:"fixed"`
+	Evento    Opt[eventoDeTeste]      `json:"event"`
+	Faixas    []faixaDeTeste          `json:"tiers"`
+	Par       [2]periodoDeTeste       `json:"pair"`
+	Ponteiros []*faixaDeTeste         `json:"pointers"`
+	Livre     map[string]string       `json:"free"`
+	Mapa      map[string]faixaDeTeste `json:"by_key"`
+	Quando    time.Time               `json:"when"`
+	Qualquer  any                     `json:"anything"`
+}
+
+func TestCaixaEhConferidaEmTodoNivel(t *testing.T) {
+	casos := map[string]struct{ corpo, caminho, nome string }{
+		"struct por ponteiro":       {`{"block":{"From":"2026-10-18","to":"2026-10-20"}}`, "block.From", "from"},
+		"chave duplicada com caixa": {`{"block":{"from":"2026-10-29","From":"2026-10-30","to":"2026-11-01"}}`, "block.From", "from"},
+		"struct por valor":          {`{"fixed":{"from":"a","TO":"b"}}`, "fixed.TO", "to"},
+		"dentro de Opt":             {`{"event":{"Event_Type":"casamento"}}`, "event.Event_Type", "event_type"},
+		"elemento de slice":         {`{"tiers":[{"label":"a","refund_pct":10},{"Label":"b","refund_pct":0}]}`, "tiers[1].Label", "label"},
+		"elemento de array":         {`{"pair":[{"from":"a","to":"b"},{"From":"c","to":"d"}]}`, "pair[1].From", "from"},
+		"slice de ponteiros":        {`{"pointers":[{"LABEL":"x"}]}`, "pointers[0].LABEL", "label"},
+	}
+	for nome, c := range casos {
+		t.Run(nome, func(t *testing.T) {
+			_, err := Decode[aninhadoDeTeste](post(c.corpo))
+			if err == nil {
+				t.Fatalf("chave aninhada com outra caixa passou: %s", c.corpo)
+			}
+			msg := detalhes(t, err)[c.caminho]
+			if !strings.Contains(msg, "maiúsculas") || !strings.Contains(msg, `"`+c.nome+`"`) {
+				t.Fatalf("details[%q] deveria nomear o campo do contrato %q: %v", c.caminho, c.nome, detalhes(t, err))
+			}
+		})
+	}
+}
+
+func TestCaixaAninhadaCertaPassaEOQueDecodificaASiFicaFora(t *testing.T) {
+	corpo := `{"title":"x","block":{"from":"a","to":"b"},"fixed":{"from":"c","to":"d"},
+		"event":{"event_type":"casamento"},"tiers":[{"label":"a","refund_pct":10}],
+		"pair":[{"from":"a","to":"b"},{"from":"c","to":"d"}],"pointers":[{"label":"p"},null],
+		"free":{"QualquerChave":"vale","OUTRA":"também"},
+		"by_key":{"Chave":{"label":"x","refund_pct":1}},
+		"when":"2026-10-09T10:00:00Z","anything":{"Livre":{"Dentro":1}}}`
+	if _, err := Decode[aninhadoDeTeste](post(corpo)); err != nil {
+		t.Fatalf("corpo com as chaves exatas foi recusado: %v", err)
+	}
+	// Anulável com null e Opt nulo não têm chave a conferir.
+	if _, err := Decode[aninhadoDeTeste](post(`{"block":null,"event":null,"tiers":null}`)); err != nil {
+		t.Fatalf("null em campo aninhado: %v", err)
+	}
+	// Valor de map é dado: nem a chave do map nem (hoje) as chaves do valor
+	// são conferidas — nenhum DTO de entrada usa map de struct.
+	if _, err := Decode[aninhadoDeTeste](post(`{"by_key":{"x":{"Label":"y"}}}`)); err != nil {
+		t.Fatalf("map fica livre: %v", err)
+	}
+}
+
+// O Opt decodifica a si mesmo com `json.Unmarshal`, que NÃO recusa campo
+// desconhecido: até 09/10/2026, `{"event": {"xpto": 1}}` passava calado pelo
+// `DisallowUnknownFields` do topo. A conferência que desce pelo Opt fecha isso.
+func TestCampoDesconhecidoDentroDeOptEhRecusado(t *testing.T) {
+	_, err := Decode[aninhadoDeTeste](post(`{"event":{"event_type":"casamento","xpto":1}}`))
+	if err == nil {
+		t.Fatal("campo desconhecido dentro de Opt[struct] passou")
+	}
+	if msg := detalhes(t, err)["event.xpto"]; !strings.Contains(msg, "campo desconhecido") {
+		t.Fatalf("details deveria apontar event.xpto: %v", detalhes(t, err))
+	}
+}
+
+func TestCaixaNaListaDoTopoEhConferidaPorElemento(t *testing.T) {
+	_, err := Decode[[]faixaDeTeste](post(`[{"label":"a","refund_pct":1},{"Refund_Pct":2,"label":"b"}]`))
+	if err == nil {
+		t.Fatal("lista de objetos no topo aceitou chave com outra caixa no segundo elemento")
+	}
+	if msg := detalhes(t, err)["[1].Refund_Pct"]; !strings.Contains(msg, `"refund_pct"`) {
+		t.Fatalf("details deveria apontar [1].Refund_Pct: %v", detalhes(t, err))
 	}
 }

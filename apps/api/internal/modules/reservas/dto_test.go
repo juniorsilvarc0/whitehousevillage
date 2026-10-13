@@ -104,15 +104,15 @@ func TestBloqueioTemDuracaoMaxima(t *testing.T) {
 	// O limite é inclusivo dos dois lados: um ano cheio passa, um dia a mais não.
 	noLimite := base
 	noLimite.De = "2026-05-10"
-	noLimite.Ate = calendar.MustParse(noLimite.De).AddDays(tetoDeNoitesPorBloqueio).String()
+	noLimite.Ate = calendar.MustParse(noLimite.De).AddDays(calendar.MaxBlockNights).String()
 	if falhas := noLimite.Validar(); len(falhas) != 0 {
-		t.Fatalf("%d noites deveriam passar: %v", tetoDeNoitesPorBloqueio, falhas)
+		t.Fatalf("%d noites deveriam passar: %v", calendar.MaxBlockNights, falhas)
 	}
 
 	umDiaAMais := noLimite
-	umDiaAMais.Ate = calendar.MustParse(umDiaAMais.De).AddDays(tetoDeNoitesPorBloqueio + 1).String()
+	umDiaAMais.Ate = calendar.MustParse(umDiaAMais.De).AddDays(calendar.MaxBlockNights + 1).String()
 	if umDiaAMais.Validar()["to"] == "" {
-		t.Fatalf("%d noites deveriam ser recusadas", tetoDeNoitesPorBloqueio+1)
+		t.Fatalf("%d noites deveriam ser recusadas", calendar.MaxBlockNights+1)
 	}
 }
 

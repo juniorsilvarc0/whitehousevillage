@@ -34,6 +34,7 @@ import { describe, expect, it } from "vitest";
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const COMERCIAL_TS = path.resolve(AQUI, "comercial.ts");
 const BENS_TS = path.resolve(AQUI, "../bens/tipos.ts");
+const MANUTENCAO_TS = path.resolve(AQUI, "../manutencao/tipos.ts");
 const API = path.resolve(AQUI, "../../../../api/internal/modules");
 
 /** Tira comentários antes de procurar chave: `/** … *\/` tem `:` dentro. */
@@ -95,6 +96,15 @@ const CORPOS: { rota: string; tipoTS: string; arquivoGo: string; structGo: strin
   { rota: "POST /inventory/placements", tipoTS: "ColocacaoCriarEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "ColocacaoCriar" },
   { rota: "PUT /inventory/placements/{id}", tipoTS: "ColocacaoSubstituirEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "ColocacaoSubstituir" },
   { rota: "POST /inventory/issues", tipoTS: "AvariaCriarEntrada", arquivoTS: BENS_TS, arquivoGo: "bens/dto.go", structGo: "AvariaCriar" },
+  // Ordens de manutenção (`maintenance`). Os tipos moram em
+  // `lib/manutencao/tipos.ts`; os DTOs, em `internal/modules/manutencao/dto.go`.
+  // O `PATCH` do painel só manda o custo (`CustoDaOrdemEntrada`), mas o DTO que
+  // o recebe é o `OrdemDeManutencaoAtualizar` inteiro.
+  { rota: "POST /maintenance-orders", tipoTS: "OrdemCriarEntrada", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "OrdemDeManutencaoCriar" },
+  { rota: "PUT /maintenance-orders/{id}", tipoTS: "OrdemSubstituirEntrada", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "OrdemDeManutencaoSubstituir" },
+  { rota: "PATCH /maintenance-orders/{id}", tipoTS: "CustoDaOrdemEntrada", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "OrdemDeManutencaoAtualizar" },
+  { rota: "POST /maintenance-orders/{id}/complete", tipoTS: "ConclusaoEntrada", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "ConclusaoDaOrdem" },
+  { rota: "PUT /maintenance-orders/{id}/block", tipoTS: "PeriodoDoBloqueio", arquivoTS: MANUTENCAO_TS, arquivoGo: "manutencao/dto.go", structGo: "PeriodoDoBloqueio" },
 ];
 
 describe("o corpo que o painel manda é o corpo que a API aceita", () => {
@@ -123,6 +133,6 @@ describe("o corpo que o painel manda é o corpo que a API aceita", () => {
   it("a lista de corpos não encolheu sem ninguém notar", () => {
     // Uma linha removida da tabela é cobertura que some em silêncio — o mesmo
     // modo de falha do teste que "passa" porque não afirma nada.
-    expect(CORPOS.length).toBeGreaterThanOrEqual(16);
+    expect(CORPOS.length).toBeGreaterThanOrEqual(21);
   });
 });

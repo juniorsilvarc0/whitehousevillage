@@ -82,7 +82,19 @@ var catalogoSeed = []recurso{
 	{"inventory", "Cadastro de unidades e produtos", "Operação", tudo, false, 13},
 	{"inventory.goods", "Bens e enxoval por ambiente", "Operação", tudo, false, 14},
 
-	{"channels", "Canais e OTA", "Operação", tudo, false, 15},
+	// Ordens de manutenção (spec §12, `maintenance_orders`, 20261009100000).
+	// Recurso próprio, e não `inventory.goods` nem `calendar`: a ordem BLOQUEIA
+	// a unidade dela no calendário, e conceder `maintenance` é conceder isso
+	// sem `calendar:*`. Pendurá-la nos bens faria quem conta taças bloquear a
+	// casa para venda; pendurá-la no calendário faria quem bloqueia data
+	// lançar custo de serviço.
+	//
+	// Sem dono (`supports_own = false`): a ordem é da casa, não de quem a
+	// abriu. `opened_by` é auditoria, como `stay_blocks.created_by` — escopo
+	// `own` sobre ele faria a ordem sumir da tela de quem vai consertá-la.
+	{"maintenance", "Ordens de manutenção", "Operação", tudo, false, 15},
+
+	{"channels", "Canais e OTA", "Operação", tudo, false, 16},
 
 	{"quotes", "Orçamentos", "Comercial", tudo, true, 20},
 	{"contacts", "Contatos", "Comercial", tudo, false, 21},
@@ -221,6 +233,16 @@ var matrizSeed = map[string][]concessao{
 		// passou a permitir.
 		{"inventory.goods", nil, escopoAll},
 
+		// As ordens de manutenção em `all`, pelo mesmo motivo dos bens: quem
+		// opera a casa abre, acompanha e fecha a ordem de qualquer unidade, e
+		// o encanador do AP-03 hoje é o da GV-01 amanhã. Vai junto com
+		// `inventory.goods` porque o formulário da ordem escolhe cômodo e bem
+		// pelas rotas dos bens (contrato, tag Manutenção). As quatro ações:
+		// `excluir` é CANCELAR a ordem (`DELETE /maintenance-orders/{id}`), e
+		// quem pode abrir e bloquear tem de poder desistir e soltar — a
+		// assimetria de `calendar` no corretor (abaixo) é a lição.
+		{"maintenance", nil, escopoAll},
+
 		{"channels", nil, escopoAll},
 		{"quotes", nil, escopoAll},
 		{"contacts", nil, escopoAll},
@@ -279,7 +301,10 @@ var matrizSeed = map[string][]concessao{
 		// canais e configurações ficam de fora (spec §11) — e os DOIS
 		// inventários também: o corretor não cadastra unidade nem conta taça.
 		// Dar-lhe `inventory.goods` seria conceder a tela de conferência da
-		// casa a quem nunca entra nela.
+		// casa a quem nunca entra nela. `maintenance` também fica de fora
+		// (spec §12): a ordem bloqueia a unidade no calendário sem passar por
+		// `calendar`, e no corretor isso seria um bloqueio em escopo `all`
+		// pela porta dos fundos do `calendar` em `own`.
 		{"brokers", somenteLeitura, escopoOwn},
 		{"finance.commissions", somenteLeitura, escopoOwn},
 	},

@@ -125,7 +125,9 @@ POST /blocks  ·  DELETE /blocks/{id}           bloqueio operacional
 
 **Corretores** `/brokers` CRUD · `/brokers/{id}/commissions` · `/brokers/me/{leads,opportunities,commissions}`
 
-**Operação** `/inventory/items` · `/inventory/stock` · `/housekeeping/tasks` · `/maintenance/orders`
+**Operação** `/rooms` · `/inventory/items` · `/inventory/placements` · `/inventory/counts` (+`/{id}/close`, `/{id}/lines/{lineId}`) · `/inventory/issues` · `/maintenance-orders` (+`/{id}/start`, `/{id}/complete`, `/{id}/block`) · `/inventory/stock` · `/housekeeping/tasks`
+
+`/maintenance-orders`, e não `/maintenance/orders` como esta linha dizia até 09/10/2026: o módulo tem uma coleção só, e um namespace `/maintenance/` de um item seria prefixo sem conteúdo. `/inventory/stock` e `/housekeeping/tasks` continuam projeto.
 
 **Canais** `/channels` · `/channels/{id}/listings` · `POST /channels/{id}/sync` · `/channels/conflicts` · `GET /ical/{export_token}.ics` *(público, token no path)*
 

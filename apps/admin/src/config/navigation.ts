@@ -1,7 +1,7 @@
 import type { ComponentType } from "react";
 import {
   CalendarRange, LayoutGrid, ClipboardList, Columns3, ContactRound, MessageCircle,
-  CalendarDays, Wallet, Users, Armchair, Share2, ChartLine, SlidersHorizontal, Calculator, BookUser, Globe,
+  CalendarDays, Wallet, Users, Armchair, Share2, ChartLine, SlidersHorizontal, Calculator, BookUser, Globe, Wrench,
 } from "lucide-react";
 
 import type { RecursoCodigo } from "@/lib/auth/recursos";
@@ -184,6 +184,10 @@ export const CATALOGO: NavItem[] = [
   // `inventory`: são duas permissões de propósito, porque quem conta taça pelo
   // celular não deve poder apagar um produto que a casa vende (docs/db.md §11).
   { title: "Inventário",    href: "/app/inventario",    icon: Armchair,          group: "Operação",      recurso: "inventory.goods" },
+  // Ordens de manutenção (spec §12), recurso `maintenance` desde 09/10/2026.
+  // Separado de `inventory.goods` porque a ordem bloqueia o CALENDÁRIO da
+  // unidade: quem conta taça não precisa poder tirar um apartamento da venda.
+  { title: "Manutenção",    href: "/app/manutencao",    icon: Wrench,            group: "Operação",      recurso: "maintenance" },
   { title: "Canais",        href: "/app/canais",        icon: Share2,            group: "Administração", recurso: "channels",
     emConstrucao: true, quando: "Em breve — reservas do Airbnb e do Booking direto no calendário." },
   { title: "Relatórios",    href: "/app/relatorios",    icon: ChartLine,         group: "Análise",       recurso: "reports",

@@ -19,6 +19,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/manutencao"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/site"
@@ -99,6 +100,10 @@ func New(o Opcoes) (http.Handler, error) {
 		// Bens por ambiente; as fotos vão para MEDIA_DIR/bens. Montar é
 		// OBRIGATÓRIO: rotas_inventario_bens.go não guarda contra handler nulo.
 		Bens: bens.NovoHandler(o.Pool, tx, o.Config.MediaDir),
+
+		// Ordens de manutenção. Montar é OBRIGATÓRIO: rotas_manutencao.go não
+		// guarda contra handler nulo.
+		Manutencao: manutencao.NovoHandler(o.Pool, tx),
 	}
 
 	prepararVolumeDeMidia(o.Config.MediaDir)

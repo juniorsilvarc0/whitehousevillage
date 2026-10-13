@@ -933,13 +933,13 @@ func (s *Servico) conferirHorizonteDoBloqueio(ctx context.Context, propriedade u
 	if err != nil {
 		return err
 	}
-	limite := hoje.AddDays(horizonteMaximoDoBloqueio)
+	limite := hoje.AddDays(calendar.BlockHorizonDays)
 	if de.After(limite) {
 		return apperr.Validation(map[string]string{
 			"from": fmt.Sprintf(
 				"o bloqueio começa em %s, além do horizonte de %s (%d dias). "+
 					"Calendário se bloqueia dentro do horizonte de venda; retirada permanente é `active = false` no inventário.",
-				de, limite, horizonteMaximoDoBloqueio),
+				de, limite, calendar.BlockHorizonDays),
 		})
 	}
 	return nil

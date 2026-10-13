@@ -231,7 +231,7 @@ func (s *Service) ApagarAmbiente(ctx context.Context, id uuid.UUID) error {
 		return errContagem
 	}
 	return apperr.ResourceInUse.
-		WithMessage("Este ambiente já entrou em conferência ou avaria e não pode ser apagado. " +
+		WithMessage("Este ambiente já entrou em conferência, avaria ou ordem de manutenção e não pode ser apagado. " +
 			`Para tirá-lo de linha sem apagar o histórico, desative-o (PATCH {"active": false}).`).
 		WithCause(err).
 		WithDetails(v)
@@ -364,9 +364,10 @@ func (s *Service) gravarBem(ctx context.Context, id uuid.UUID, mudar func(*bemGr
 	return gravado, err
 }
 
-// ApagarBem apaga o item nunca colocado, conferido nem avariado. Quem recusa é
-// a FK RESTRICT (`room_inventory`, `inventory_count_lines`, `inventory_issues`);
-// os `details` separam os três motivos, e a mensagem diz o caminho de cada um.
+// ApagarBem apaga o item nunca colocado, conferido, avariado nem citado por
+// ordem de manutenção. Quem recusa é a FK RESTRICT (`room_inventory`,
+// `inventory_count_lines`, `inventory_issues`, `maintenance_orders`); os
+// `details` separam os motivos, e a mensagem diz o caminho de cada um.
 func (s *Service) ApagarBem(ctx context.Context, id uuid.UUID) error {
 	prop, err := propriedadeDoAtor(ctx)
 	if err != nil {
@@ -392,8 +393,8 @@ func (s *Service) ApagarBem(ctx context.Context, id uuid.UUID) error {
 	}
 	msg := "Este bem ainda está colocado em algum ambiente. Tire-o dos ambientes antes de apagar, " +
 		`ou desative-o (PATCH {"active": false}).`
-	if v.LinhasDeConferencia > 0 || v.Avarias > 0 {
-		msg = "Este bem já entrou em conferência ou avaria e não pode ser apagado. " +
+	if v.LinhasDeConferencia > 0 || v.Avarias > 0 || v.OrdensDeManutencao > 0 {
+		msg = "Este bem já entrou em conferência, avaria ou ordem de manutenção e não pode ser apagado. " +
 			`Para tirá-lo de linha sem apagar o histórico, desative-o (PATCH {"active": false}).`
 	}
 	return apperr.ResourceInUse.WithMessage(msg).WithCause(err).WithDetails(v)

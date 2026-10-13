@@ -241,6 +241,108 @@ func TestBlocoConcluidoNaoSeLibera(t *testing.T) {
 	}
 }
 
+// TestBloqueioDeOrdemDeManutencaoNaoSeLiberaPelaRotaDeCalendario.
+//
+// O bloqueio de uma ordem de manutenção só se solta pela ordem
+// (`DELETE /maintenance-orders/{id}/block` ou o encerramento dela). Soltá-lo
+// por `DELETE /blocks/{id}` deixaria a ordem dizendo "bloqueado até sexta"
+// com a unidade à venda — e o conserto em curso receberia hóspede.
+func TestBloqueioDeOrdemDeManutencaoNaoSeLiberaPelaRotaDeCalendario(t *testing.T) {
+	a := subir(t)
+	token := a.gestor(t)
+
+	sp := a.unidade(t, "SP-03")
+	resp := a.chamar(t, http.MethodPost, "/blocks", token, map[string]any{
+		"unit_ids": []uuid.UUID{sp}, "from": a.dia(770), "to": a.dia(773), "source": "maintenance",
+	})
+	if resp.Status != http.StatusCreated {
+		t.Fatalf("POST /blocks = %d (%s)", resp.Status, resp.Corpo)
+	}
+	bloco := dado[[]struct {
+		ID uuid.UUID `json:"id"`
+	}](t, resp)[0].ID
+	t.Cleanup(func() { a.executar(t, `DELETE FROM stay_blocks WHERE id = $1`, bloco) })
+
+	// A ordem entra pelo banco: este módulo só precisa saber que ela existe.
+	var ordem uuid.UUID
+	if err := a.pool.QueryRow(a.ctx, `
+		INSERT INTO maintenance_orders (property_id, unit_id, title, stay_block_id)
+		VALUES ($1, $2, 'Pintura da fachada', $3) RETURNING id`, a.propriedade, sp, bloco).Scan(&ordem); err != nil {
+		t.Fatalf("criando a ordem: %v", err)
+	}
+	// Registrada depois da do bloqueio, roda ANTES dela: a FK é RESTRICT.
+	t.Cleanup(func() { a.executar(t, `DELETE FROM maintenance_orders WHERE id = $1`, ordem) })
+
+	r := a.chamar(t, http.MethodDelete, "/blocks/"+bloco.String(), token, nil)
+	if r.Status != http.StatusConflict || r.codigoDoErro() != "INVALID_STATE_TRANSITION" {
+		t.Fatalf("DELETE do bloqueio da ordem = %d/%s (%s)", r.Status, r.codigoDoErro(), r.Corpo)
+	}
+	if r.detalhes(t)["maintenance_order_id"] != ordem.String() {
+		t.Fatalf("details.maintenance_order_id: %s", r.Corpo)
+	}
+	var status string
+	if err := a.pool.QueryRow(a.ctx, `SELECT status FROM stay_blocks WHERE id = $1`, bloco).Scan(&status); err != nil || status != "confirmed" {
+		t.Fatalf("o bloqueio da ordem continua ocupando: %s %v", status, err)
+	}
+}
+
+// TestBloqueioDeManutencaoTerminadoNaoSeLibera.
+//
+// Bloqueio de manutenção cujo período JÁ TERMINOU (`to <= hoje`, no fuso da
+// casa) é o histórico do conserto — inclusive quando nenhuma ordem o cita
+// mais (o antigo de uma remarcação) — e noite que já passou não muda: 409 com
+// `details.period`, e a linha continua `confirmed`. Bloqueio de OUTRA origem
+// terminado continua liberável, como sempre foi.
+func TestBloqueioDeManutencaoTerminadoNaoSeLibera(t *testing.T) {
+	a := subir(t)
+	token := a.gestor(t)
+	sp := a.unidade(t, "SP-03")
+
+	criar := func(origem string, de, ate int) uuid.UUID {
+		t.Helper()
+		resp := a.chamar(t, http.MethodPost, "/blocks", token, map[string]any{
+			"unit_ids": []uuid.UUID{sp}, "from": a.dia(de), "to": a.dia(ate), "source": origem,
+		})
+		if resp.Status != http.StatusCreated {
+			t.Fatalf("POST /blocks (%s) = %d (%s)", origem, resp.Status, resp.Corpo)
+		}
+		id := dado[[]struct {
+			ID uuid.UUID `json:"id"`
+		}](t, resp)[0].ID
+		t.Cleanup(func() { a.executar(t, `DELETE FROM stay_blocks WHERE id = $1`, id) })
+		return id
+	}
+
+	manutencao := criar("maintenance", -40, -37)
+	r := a.chamar(t, http.MethodDelete, "/blocks/"+manutencao.String(), token, nil)
+	if r.Status != http.StatusConflict || r.codigoDoErro() != "INVALID_STATE_TRANSITION" {
+		t.Fatalf("DELETE do bloqueio de manutenção terminado = %d/%s (%s)", r.Status, r.codigoDoErro(), r.Corpo)
+	}
+	if p := r.detalhes(t)["period"]; p != "["+a.dia(-40)+", "+a.dia(-37)+")" {
+		t.Fatalf("details.period: %s", r.Corpo)
+	}
+	var status string
+	if err := a.pool.QueryRow(a.ctx, `SELECT status FROM stay_blocks WHERE id = $1`, manutencao).Scan(&status); err != nil || status != "confirmed" {
+		t.Fatalf("o histórico continua confirmed: %s %v", status, err)
+	}
+
+	// Terminando HOJE (`to` = hoje) também já terminou: a noite de hoje não é dele.
+	ateHoje := criar("maintenance", -3, 0)
+	if r := a.chamar(t, http.MethodDelete, "/blocks/"+ateHoje.String(), token, nil); r.Status != http.StatusConflict {
+		t.Fatalf("bloqueio de manutenção com to = hoje: %d (%s)", r.Status, r.Corpo)
+	}
+	// Ainda não terminou: libera.
+	vivo := criar("maintenance", 790, 792)
+	if r := a.chamar(t, http.MethodDelete, "/blocks/"+vivo.String(), token, nil); r.Status != http.StatusNoContent {
+		t.Fatalf("bloqueio de manutenção em curso continua liberável: %d (%s)", r.Status, r.Corpo)
+	}
+	// Outra origem, terminado: continua como era.
+	proprietario := criar("owner_hold", -36, -34)
+	if r := a.chamar(t, http.MethodDelete, "/blocks/"+proprietario.String(), token, nil); r.Status != http.StatusNoContent {
+		t.Fatalf("uso do proprietário terminado continua liberável: %d (%s)", r.Status, r.Corpo)
+	}
+}
+
 // ─────────────────────────── BAIXO 9 ────────────────────────────────
 
 // TestRealocarRecusaHoldVencido.

@@ -2,6 +2,7 @@ package bens
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 
@@ -244,7 +245,7 @@ func (s *Service) ApagarAvaria(ctx context.Context, id uuid.UUID) error {
 	if err != nil {
 		return err
 	}
-	return s.tx.Do(ctx, func(ctx context.Context) error {
+	err = s.tx.Do(ctx, func(ctx context.Context) error {
 		antes, err := s.repo.TravarAvaria(ctx, prop, id)
 		if err != nil {
 			return err
@@ -266,4 +267,24 @@ func (s *Service) ApagarAvaria(ctx context.Context, id uuid.UUID) error {
 		}
 		return audit.Exclusao(ctx, s.repo.pool, entidadeAvaria, audit.VerboExcluido, id, antes)
 	})
+	if !errors.Is(err, errEmUso) {
+		return err
+	}
+
+	// Quem decidiu foi a FK RESTRICT de `maintenance_orders`; a transação já
+	// foi desfeita, e a ordem que segura vem de uma leitura nova — informação
+	// para a tela levar até ela, não segunda decisão.
+	ordem, errOrdem := s.repo.OrdemDaAvaria(ctx, prop, id)
+	if errOrdem != nil {
+		return errOrdem
+	}
+	detalhes := map[string]any{}
+	if ordem != nil {
+		detalhes["maintenance_order_id"] = *ordem
+	}
+	return apperr.ResourceInUse.
+		WithMessage("Esta avaria é citada por uma ordem de manutenção e não pode ser apagada. " +
+			`Se ela não procede, encerre-a com "resolution": "descartado" (PATCH) e cancele a ordem.`).
+		WithCause(err).
+		WithDetails(detalhes)
 }

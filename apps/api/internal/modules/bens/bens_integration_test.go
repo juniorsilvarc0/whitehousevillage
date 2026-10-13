@@ -134,6 +134,17 @@ func subir(t *testing.T) *ambiente {
 func (a *ambiente) limpar(t *testing.T) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	// As ordens de manutenção primeiro: as FKs delas (avaria, cômodo, bem,
+	// unidade, usuário) são todas RESTRICT.
+	for _, u := range a.unidades {
+		a.executar(t, `DELETE FROM maintenance_orders WHERE unit_id = $1`, u)
+	}
+	for _, i := range a.itens {
+		a.executar(t, `DELETE FROM maintenance_orders WHERE item_id = $1`, i)
+	}
+	for _, uid := range a.usuarios {
+		a.executar(t, `DELETE FROM maintenance_orders WHERE opened_by = $1 OR closed_by = $1`, uid)
+	}
 	for _, u := range a.unidades {
 		a.executar(t, `DELETE FROM inventory_issues WHERE room_id IN (SELECT id FROM unit_rooms WHERE unit_id = $1)
 		                  OR count_id IN (SELECT id FROM inventory_counts WHERE unit_id = $1)`, u)

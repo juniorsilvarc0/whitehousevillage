@@ -1031,10 +1031,10 @@ func TestNenhumaRotaComCorpoAceitaCampoDesconhecido(t *testing.T) {
 	alvos["/crm/opportunities"] = a.oportunidadeDeVarredura(t, propriedade, contato)
 	alvos["/crm/activities"] = a.atividadeDeVarredura(t, propriedade, alvos["/crm/opportunities"])
 
-	// Inventário de bens: os handlers leem o corpo ANTES de procurar o registro,
-	// então um id bem formado basta; se um deles passar a buscar antes, a
-	// varredura acusa 404 em vez de passar verde.
-	for _, prefixo := range []string{"/rooms", "/inventory/items", "/inventory/counts", "/inventory/issues"} {
+	// Inventário de bens e ordens de manutenção: os handlers leem o corpo ANTES
+	// de procurar o registro, então um id bem formado basta; se um deles passar
+	// a buscar antes, a varredura acusa 404 em vez de passar verde.
+	for _, prefixo := range []string{"/rooms", "/inventory/items", "/inventory/counts", "/inventory/issues", "/maintenance-orders"} {
 		alvos[prefixo] = uuid.New()
 	}
 

@@ -44,7 +44,19 @@ depois comitado e migrado pelo `cmd/migrate`, no PG 16 do desenvolvimento (`en_U
 num PG 17 descartável em `locale C`, com resultado idêntico. Formato, tamanho e `UNIQUE`
 foram provados com `INSERT` que deve falhar. O ciclo rodou `up` → `down 1` → `up` no
 desenvolvimento e `up` → `down 1` → `up` → `down -all` → `up` no descartável, e o
-`pg_dump --schema-only` depois de cada `down 1` é idêntico ao de antes da migration. Para
+`pg_dump --schema-only` depois de cada `down 1` é idêntico ao de antes da migration. Em
+**09/10/2026**, §1, §11, §14, §15 e §16 foram conferidos em `20261009100000`
+(`maintenance_orders`, as duas `UNIQUE` que servem de alvo às FKs compostas e o recurso RBAC
+`maintenance`), num PG 17 descartável no host (o Docker estava parado). As 18 colunas, as
+constraints e os índices foram lidos de `information_schema`/`pg_constraint`/`pg_indexes`. Cada
+`CHECK`, cada FK (as compostas inclusive) e cada chave parcial foi provada com `INSERT`,
+`UPDATE` ou `DELETE` que deve falhar, com o `SQLSTATE` e o nome da constraint conferidos, num
+cenário em que só a constraint provada segura cada caso: 37 recusas e 11 controles que devem
+passar, 48 casos sem nenhum resultado inesperado. A régua de 25 colunas, uma das 37, foi provada
+acrescentando 8 colunas e rodando o bloco `DO`. O ciclo rodou `up` → `down 1`
+→ `up` e `down -all` → `up`; o `pg_dump --schema-only` depois de `down 1` é idêntico ao de antes
+da migration, e o de cada `up` é idêntico ao do primeiro. Os dois catálogos foram semeados duas
+vezes cada, num banco recém-migrado e alternando no mesmo banco. Para
 repetir a conferência de qualquer afirmação daqui:
 
 ```bash
@@ -146,6 +158,14 @@ Três decisões que valem o projeto inteiro:
 O custo aceito, dito por inteiro: o banco deixa de impedir duas estadias concluídas sobrepostas na mesma unidade. Como a transição é sempre `confirmed → completed` sobre linha que já esteve protegida, isso só nasceria de um `INSERT` retroativo — o mesmo caso de importação que queremos deixar passar.
 
 > **Consequência para quem escreve consulta**: "ocupa o inventário" e "aparece no mapa" deixaram de ser o mesmo predicado. Bloqueio de venda é `('hold','confirmed')`; desenho do mapa, ocupação e ADR/RevPAR são `('hold','confirmed','completed')`.
+
+**O bloqueio de uma ordem de manutenção é uma linha daqui** (desde `20261009100000`, §11):
+`source = 'maintenance'`, `confirmed`, apontada por `maintenance_orders.stay_block_id`. É a
+mesma tabela de propósito — a manutenção impede a venda pela mesma `EXCLUDE` que impede duas
+vendas. Liberar é `status = 'cancelled'` (ou o período cortado), **nunca `DELETE`**: a FK da
+ordem é `ON DELETE RESTRICT`, e um `DELETE` numa linha citada falha com `23503` em
+`maintenance_orders_stay_block_id_fkey`. Esta tabela não ganhou coluna, índice nem constraint
+por causa disso (§11 diz por que a unidade e a fonte da linha apontada são garantia da API).
 
 ### `owner_id` × `created_by` em `stay_blocks`
 
@@ -651,11 +671,12 @@ Comissão incide sobre diárias, nunca sobre limpeza ou caução. Caução é `r
 
 ---
 
-## 11. Operação — inventário de bens por ambiente
+## 11. Operação — inventário de bens por ambiente e ordens de manutenção
 
 Entregue em `20261007170000`; o custo congelado na linha da conferência veio em
-`20261007200000`, e a identidade estável do cômodo (`unit_rooms.code`) em
-`20261007213000`. **Oito tabelas existem**; três continuam projeto (abaixo).
+`20261007200000`, a identidade estável do cômodo (`unit_rooms.code`) em
+`20261007213000`, e as ordens de manutenção (`maintenance_orders`, subseção própria abaixo)
+em `20261009100000`. **Nove tabelas existem**; duas continuam projeto (no fim da seção).
 
 Esta seção projetava, desde 20/08/2026, duas tabelas que nunca foram criadas —
 `inventory_items(… min_stock, cost_cents)` e `unit_inventory(unit_id, item_id,
@@ -671,6 +692,7 @@ unit_rooms(id, property_id, unit_id → units, name, kind, sort_order, active,
            created_at, updated_at, code)                                  -- 10 colunas
         -- kind: quarto | banheiro | cozinha | sala | area_externa | lavanderia | varanda | outro
         -- UNIQUE (unit_id, name); UNIQUE (unit_id, code); unit_id ON DELETE RESTRICT
+        -- UNIQUE (id, unit_id): só alvo da FK composta de maintenance_orders (20261009100000)
         -- code: ^[a-z0-9]+(-[a-z0-9]+)*$, até 60, não editável pela API
 inventory_items(id, property_id, name, description?, category, unit_measure,
                 replacement_cost_cents?, active, source_ref?, created_at, updated_at)
@@ -696,6 +718,12 @@ inventory_issues(id, property_id, room_id, item_id, kind, qty, note?, reservatio
                  resolved_at?, updated_at)                                -- 15 colunas
         -- kind: quebrado | faltando | avariado | outro
         -- resolution: reposto | consertado | cobrado | perda_aceita | descartado
+        -- UNIQUE (id, room_id, item_id): só alvo da FK composta de maintenance_orders
+maintenance_orders(id, property_id, unit_id, room_id?, item_id?, issue_id?, title,
+                   description?, priority, status, stay_block_id?, cost_cents?,
+                   opened_at, opened_by?, started_at?, closed_at?, closed_by?,
+                   updated_at)                                            -- 18 colunas
+        -- subseção "Ordens de manutenção", abaixo
 ```
 
 **O item é CATÁLOGO da propriedade; a quantidade é COLOCAÇÃO por ambiente.** A
@@ -858,7 +886,8 @@ inverso — um toque na tela de distância. Decidido em 07/10/2026, no `catalogo
   Grupo "Operação", as quatro ações, `supports_own = false`, `sort_order` 13.
 - **`inventory.goods`** ("Bens e enxoval por ambiente", grupo "Operação", as quatro ações,
   `supports_own = false` — cômodo não tem dono no sentido do RBAC, `sort_order` 14, e
-  `channels` foi para 15) é o recurso das oito tabelas deste módulo. Namespace com ponto
+  `channels` foi para 15; desde 09/10/2026 está em 16, porque `maintenance` entrou em 15)
+  é o recurso das oito tabelas deste módulo. Namespace com ponto
   como `crm.*` e `finance.*`. Concedido em `all` ao `admin` (catálogo inteiro) e ao perfil
   de operação `usuario`; **não** ao `corretor` nem à conta de serviço `vitrine` — nenhum
   dos dois tem o que fazer com bens.
@@ -899,18 +928,183 @@ O `code` resolve o rename. Não resolve tudo, e duas cautelas continuam valendo:
   importado com `code` novo e `name` já usado na unidade falha com `23505` nessa
   constraint. Esse é um conflito real, a mostrar, e não a resolver em silêncio.
 
+### Ordens de manutenção (`maintenance_orders`)
+
+Entregue em `20261009100000`. Contrato em `/maintenance-orders` (tag Manutenção), regras
+puras em `internal/domain/maintenance`, resumo em spec §12. Esta seção projetava, desde
+20/08/2026, `maintenance_orders(id, unit_id, title, description, priority, status,
+stay_block_id?, opened_at, closed_at, cost_cents)`. Faltavam nela o **cômodo** e o **bem** (o
+ar-condicionado é da suíte 1 do AP-03, não "do AP-03"), a **avaria** que originou a ordem (é
+ela que a conclusão encerra com `consertado`), `property_id` e quem abriu, começou e fechou.
+
+```
+maintenance_orders(
+  id            uuid PK DEFAULT gen_random_uuid(),
+  property_id   uuid NOT NULL → properties,
+  unit_id       uuid NOT NULL → units ON DELETE RESTRICT,
+  room_id       uuid?          -- FK composta (room_id, unit_id) → unit_rooms(id, unit_id)
+  item_id       uuid? → inventory_items ON DELETE RESTRICT,
+  issue_id      uuid?          -- FK composta (issue_id, room_id, item_id) → inventory_issues
+  title         text NOT NULL  -- btrim <> '' · char_length <= 200
+  description   text?          -- char_length <= 4000
+  priority      text NOT NULL DEFAULT 'normal'  -- baixa | normal | alta | urgente
+  status        text NOT NULL DEFAULT 'aberta'  -- aberta | em_andamento | concluida | cancelada
+  stay_block_id uuid? → stay_blocks ON DELETE RESTRICT,
+  cost_cents    bigint?        -- > 0
+  opened_at     timestamptz NOT NULL DEFAULT now(),   -- é o created_at desta tabela
+  opened_by     uuid? → users,
+  started_at    timestamptz?,
+  closed_at     timestamptz?,
+  closed_by     uuid? → users,
+  updated_at    timestamptz NOT NULL DEFAULT now())   -- 18 colunas
+```
+
+Os vocabulários de `priority` e `status` são, palavra por palavra, as constantes de
+`internal/domain/maintenance` (`Priority`, `Status`). `opened_at` é o `created_at` da tabela,
+como em `inventory_counts`. Não há gatilho de `updated_at` (nenhuma tabela deste banco tem um):
+quem escreve o grava.
+
+**O que o banco garante**, porque escrita concorrente e `psql` não passam pela API:
+
+- **O cômodo é da unidade da ordem.** `maintenance_orders_room_id_fkey` é a FK composta
+  `(room_id, unit_id) → unit_rooms(id, unit_id)`. O alvo é uma `UNIQUE (id, unit_id)` nova em
+  `unit_rooms` (`unit_rooms_id_unit_id_key`), que não restringe nada além do que a PK já
+  restringia: existe para ser alvo, como `brokers_id_user_id_key` (§2). Com `MATCH SIMPLE`,
+  cômodo nulo não é conferido, e está certo. Como `unit_id` é `NOT NULL`, cômodo preenchido é
+  sempre conferido. A mesma FK recusa, com `23503`, mover a ordem para outra unidade deixando o
+  cômodo para trás, mudar a unidade de um cômodo citado e apagar um cômodo citado.
+- **A avaria traz o cômodo e o bem dela.** São duas peças. A primeira é
+  `maintenance_orders_avaria_exige_comodo_e_bem`, o `CHECK (issue_id IS NULL OR (room_id IS
+  NOT NULL AND item_id IS NOT NULL))`. A segunda é `maintenance_orders_issue_id_fkey`, a FK
+  composta `(issue_id, room_id, item_id) → inventory_issues(id, room_id, item_id) ON DELETE
+  RESTRICT`, cujo alvo é a `UNIQUE` nova `inventory_issues_id_room_id_item_id_key`. O `CHECK`
+  não é redundante. Em `MATCH SIMPLE`, basta **uma** coluna nula para a FK composta inteira não
+  ser conferida, e sem ele `(issue_id, NULL, NULL)` passaria citando avaria sem conferir nada.
+  Somada à FK do cômodo, a avaria fica obrigatoriamente na unidade da ordem: não existe ordem
+  do AP-03 citando avaria da GV-01. `RESTRICT` é deliberado. A ordem diz o que foi consertado,
+  e por isso `DELETE /inventory/issues/{id}` de avaria citada é `409 RESOURCE_IN_USE` (o `23503`
+  sai com `constraint = maintenance_orders_issue_id_fkey`). A mesma FK recusa trocar o cômodo
+  ou o bem de uma avaria citada, que a API também não aceita (`AvariaSubstituir`).
+- **No máximo uma ordem não encerrada por avaria.** É o índice único parcial
+  `maintenance_orders_avaria_aberta_idx ON (issue_id) WHERE issue_id IS NOT NULL AND status IN
+  ('aberta','em_andamento')`, e a API traduz o `23505` **neste nome** para `409
+  MAINTENANCE_ORDER_ALREADY_OPEN`. É a defesa contra o segundo toque no celular. `SELECT` antes
+  do `INSERT` seria TOCTOU, como em `inventory_counts_aberta_idx`. É parcial porque a avaria
+  acumula ordens encerradas: a primeira cancelada e a segunda que consertou, ou o retrabalho
+  depois de uma concluída. Uma `UNIQUE` comum recusaria o retrabalho. Precedência medida: o
+  índice único é conferido na inserção, e as FKs só por gatilho, no fim da instrução. Com
+  ordem aberta na avaria, até um par cômodo/bem divergente sai como `23505` neste índice, e não
+  como `23503`. A API valida o par antes (`422`), então o caso só aparece na corrida, que é
+  justamente a que o índice existe para decidir.
+- **Um bloqueio pertence a no máximo uma ordem.** `maintenance_orders_bloqueio_idx`, `UNIQUE
+  (stay_block_id) WHERE stay_block_id IS NOT NULL`. Sem ele, duas ordens apontando para a mesma
+  linha fariam o encerramento de uma liberar o calendário no meio do serviço da outra.
+- **Os estados impossíveis.** São quatro `CHECK`, separados para o nome da constraint dizer à
+  API qual regra caiu:
+  - `maintenance_orders_fechamento` — `(status IN ('concluida','cancelada')) = (closed_at IS
+    NOT NULL)`, a forma de `inventory_counts_fechamento`. `cancelada` também tem `closed_at`: é
+    quando se desistiu.
+  - `maintenance_orders_inicio` — `status IN ('concluida','cancelada') OR (started_at IS NOT
+    NULL) = (status = 'em_andamento')`. `em_andamento` tem `started_at`, e `aberta` não tem,
+    porque a máquina não tem "desfazer o início". Encerrada fica livre, porque concluir ou
+    cancelar direto de `aberta` é permitido e deixa `started_at` nulo, o que é verdade e não
+    lacuna.
+  - `maintenance_orders_cronologia` — `started_at IS NULL OR closed_at IS NULL OR started_at <=
+    closed_at`. Os instantes são do servidor, e a regra compara dois deles. Por isso os três
+    (`opened_at`, `started_at`, `closed_at`) devem sair do mesmo relógio, o `now()` do banco
+    que já é o `DEFAULT` de `opened_at`. Um `time.Now()` do Go num deles abriria espaço para
+    deriva entre relógios.
+  - `maintenance_orders_fechador` — `closed_by IS NULL OR closed_at IS NOT NULL`. `closed_by`
+    continua anulável (encerramento por rotina não tem autor), mas autor de um encerramento
+    que não aconteceu é estado impossível.
+- **Custo e texto.** `maintenance_orders_custo_positivo` (`cost_cents IS NULL OR > 0`): `NULL`
+  é "não lançado", e zero não é um segundo jeito de escrever "não sei", como em
+  `inventory_items`. `maintenance_orders_title_nao_vazio`, `_title_tamanho` (200) e
+  `_description_tamanho` (4000) usam `char_length` e não `length` em bytes, porque o
+  `maxLength` do contrato conta caracteres.
+
+**O que fica com a API, e por quê:**
+
+- **A fonte e a unidade do `stay_block` apontado.** A API cria a linha de `stay_blocks`
+  (`source = 'maintenance'`, `confirmed`, na unidade da ordem) na mesma transação da ordem.
+  Fechar isso no banco exigiria FK composta `(stay_block_id, unit_id) → stay_blocks(id,
+  unit_id)` e, portanto, um índice único novo em `stay_blocks`. Seria pago em toda reserva, na
+  tabela mais quente do sistema, para defender um escritor só e sem exploit medido.
+- **"Encerrada não reabre"** (`maintenance.Next`). `CHECK` não enxerga o valor anterior, e
+  gatilho para um escritor só é a decisão que esta seção já recusou para `expected_qty` e
+  `unit_rooms.code`. O mesmo vale para "concluída só aceita o custo" (`maintenance.CheckEdit`).
+- **"Liberar o bloqueio" é `stay_blocks.status = 'cancelled'`, ou o período cortado em D,
+  nunca `DELETE`** (`maintenance.ReleaseOn`). A ordem continua apontando para a linha, que é a
+  história de "esteve bloqueada de tal a tal". A FK é `RESTRICT` justamente para que um
+  `DELETE` esquecido em algum caminho falhe alto, com `23503` em
+  `maintenance_orders_stay_block_id_fkey`, em vez de soltar a ordem do próprio histórico.
+  Remarcar um bloqueio que já terminou ou foi liberado cria linha **nova** e a ordem passa a
+  apontar para ela. A antiga fica no calendário, sem ordem que a cite.
+- **A propriedade.** Como nas outras tabelas desta seção, nada no banco impede uma ordem da
+  propriedade A citar unidade da propriedade B. A API filtra tudo por `property_id`.
+
+**Índices: a lista de trabalho não tem índice que a ordene, e não poderia ter.** A ordem
+padrão é "abertas primeiro; entre elas, da mais urgente para a menos e, na mesma prioridade, a
+mais antiga". A escada de prioridade chega como **parâmetro**
+(`array_position($1::text[], priority)`, de `maintenance.ByUrgency()`), e nenhum índice casa
+com expressão sobre parâmetro. Uma expressão fixa no índice seria a segunda cópia da escada que
+o domínio existe para não ter. O que o índice faz é entregar barato o conjunto que ela ordena:
+
+- `maintenance_orders_abertas_idx ON (property_id, opened_at, id) WHERE status IN
+  ('aberta','em_andamento')` — as não encerradas, que são poucas e são o que a tela do celular
+  abre (`open=true`, `status=aberta|em_andamento`). Elas saem por antiguidade, e a prioridade é
+  ordenada em memória sobre dezenas de linhas (plano com `enable_seqscan = off`, já que a
+  tabela da prova estava vazia: `Index Scan using maintenance_orders_abertas_idx` + `Sort`
+  pela chave da escada). É parcial pelo argumento do
+  kanban (§7) e de `inventory_issues_abertas_idx`: as encerradas acumulam para sempre e nunca
+  entram na lista de trabalho. A lista de histórico (sem filtro, ou só encerradas) lê a maior
+  parte da tabela, e `meta.total` conta cada linha filtrada de qualquer jeito. Ali nenhum
+  índice ganha de uma varredura, na escala de uma casa de doze unidades. Filtro só por
+  `priority` (quatro valores) também não é seletivo o bastante para pagar índice.
+- `maintenance_orders_unidade_idx (unit_id, opened_at DESC, id)` — histórico da unidade, o
+  filtro `unit_id` e a FK.
+- `maintenance_orders_comodo_idx (room_id, unit_id) WHERE room_id IS NOT NULL` e
+  `maintenance_orders_avaria_idx (issue_id, room_id, item_id) WHERE issue_id IS NOT NULL` — as
+  FKs compostas, com as colunas na ordem da FK, e os filtros `room_id` e `issue_id`. São
+  parciais porque a maioria das ordens não tem cômodo nem avaria. A igualdade da FK implica
+  `IS NOT NULL`, então o Postgres usa o índice parcial na conferência (medido com plano
+  genérico: `Index Cond: ((room_id = $1) AND (unit_id = $2))`).
+  `maintenance_orders_avaria_aberta_idx` não serviria à FK da avaria: só enxerga as não
+  encerradas, e a FK precisa achar a ordem **concluída** que cita a avaria.
+- `maintenance_orders_bem_idx (item_id, opened_at DESC, id) WHERE item_id IS NOT NULL` — "o
+  bem que dá defeito toda temporada" e a FK. `maintenance_orders_bloqueio_idx` cobre a FK do
+  bloqueio, e `_autor_idx`/`_fechador_idx` (parciais) cobrem `opened_by` e `closed_by`.
+- `property_id` fica coberto só pelo índice **parcial** das abertas, como
+  `inventory_issues.property_id`. A consulta de §14 o conta como coberto, porque não lê o
+  predicado. Uma conferência de FK ao apagar uma propriedade não usaria esse índice, e
+  propriedade não se apaga.
+
+**Sem gatilho de tempo real nesta tabela.** O mapa é avisado pelo gatilho de `stay_blocks`
+(§13a) quando o bloqueio da ordem nasce, muda ou é liberado, e uma ordem sem bloqueio não muda
+o mapa. A migration termina com o bloco `DO` da régua de 25 colunas (a tabela tem 18).
+
+**Permissão: o recurso `maintenance`** ("Ordens de manutenção", grupo "Operação", as quatro
+ações, `supports_own = false`, `sort_order` 15; `channels` foi para 16). É recurso próprio, e
+não `inventory.goods` nem `calendar`, porque a ordem **bloqueia a unidade dela** no calendário
+sem pedir `calendar:*` (contrato, tag Manutenção). Pendurada nos bens, quem conta taças
+bloquearia a casa para venda. Pendurada no calendário, quem bloqueia data lançaria custo de
+serviço. Sem dono porque a ordem é da casa: `opened_by` é auditoria, como
+`stay_blocks.created_by` (§1), e escopo `own` sobre ele faria a ordem sumir da tela de quem vai
+consertá-la. Concedido em `all` ao `admin` (catálogo inteiro) e ao `usuario`, que também tem
+`inventory.goods:ver`, de que o formulário precisa para escolher cômodo e bem. **Não** é
+concedido ao `corretor`, porque seria um bloqueio de calendário em escopo `all` pela porta dos
+fundos do `calendar` em `own`. Também não é concedido à conta de serviço `vitrine`, cuja matriz
+o seed mantém com exatamente duas células (§16). `TestManutencaoEhDaOperacao`
+(`cmd/seed/acesso_test.go`) reprova qualquer outra concessão.
+
 ### O que ainda não existe (operação)
 
-> **Ainda não existe no banco.** Nenhuma das três foi criada.
+> **Ainda não existe no banco.** Nenhuma das duas foi criada.
 
 ```
 stock_movements(id, item_id, qty, kind, reservation_id?, unit_id?, at, created_by)
 housekeeping_tasks(id, unit_id, reservation_id?, scheduled_for, status, checklist jsonb, assignee_id)
-maintenance_orders(id, unit_id, title, description, priority, status,
-                   stay_block_id?, opened_at, closed_at, cost_cents)
 ```
-
-Ordem de manutenção cria `stay_block` de origem `maintenance` — bloqueia o calendário como qualquer outra ocupação.
 
 ---
 
@@ -1100,15 +1294,21 @@ inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta d
 | `inventory_counts` | `inventory_counts_aberta_idx` `UNIQUE (unit_id) WHERE status = 'aberta'` — no máximo **uma** conferência aberta por unidade; parcial porque a unidade acumula fechadas para sempre (§11) · `CHECK ((status = 'aberta') = (closed_at IS NULL))` · `(unit_id, opened_at DESC, id)` e `(property_id, opened_at DESC, id)` — histórico ordenado com desempate |
 | `inventory_items` | `inventory_items_source_ref_idx` `UNIQUE (property_id, source_ref) WHERE source_ref IS NOT NULL` — é o que torna a importação idempotente · `CHECK (replacement_cost_cents IS NULL OR > 0)` — zero não é sinônimo de "não cotado" · `(property_id, category, name, id)` — a tela do catálogo, filtro e ordenação no mesmo índice |
 | `inventory_count_lines` | `UNIQUE (count_id, room_id, item_id)` — linha duplicada mostraria a divergência em dobro · `CHECK ((counted_qty IS NULL) = (counted_at IS NULL))` · `(count_id, room_id, item_id) WHERE counted_qty IS NULL` — o que falta contar · `inventory_count_lines_custo_positivo` `CHECK (replacement_cost_cents IS NULL OR replacement_cost_cents > 0)` — zero entraria na conta como perda de R$ 0,00. `expected_qty` é **congelada** na abertura e `replacement_cost_cents` no fechamento (regra 7, §11) |
-| `inventory_issues` | `CHECK ((resolution IS NULL) = (resolved_at IS NULL))` — pendência aberta é `resolution IS NULL`, e não há coluna `status` ao lado · `CHECK (qty > 0)` · `(property_id, reported_at DESC, id) WHERE resolution IS NULL` — a lista de pendências, parcial pelo mesmo motivo do índice do kanban · `(reservation_id) WHERE reservation_id IS NOT NULL` — o que cobrar da estadia |
-| `unit_rooms` | `UNIQUE (unit_id, name)` — dois "Suíte 1" fazem contar a mesma cama duas vezes · `unit_rooms_code_unico` `UNIQUE (unit_id, code)` — a identidade estável que a importação e a cópia usam; único na unidade, e não na propriedade, porque o mesmo `cozinha` em dois duplex é o que casa origem e destino da cópia (§11) · `unit_rooms_code_formato` `CHECK (code ~ '^[a-z0-9]+(-[a-z0-9]+)*$')` e `unit_rooms_code_tamanho` `CHECK (length(code) <= 60)` — separadas para o nome da constraint dizer à API qual regra caiu · `CHECK` do vocabulário de `kind` · `(unit_id, sort_order, name, id)` — a lista de conferência sai ordenada do índice, com desempate determinístico |
+| `inventory_issues` | `CHECK ((resolution IS NULL) = (resolved_at IS NULL))` — pendência aberta é `resolution IS NULL`, e não há coluna `status` ao lado · `CHECK (qty > 0)` · `(property_id, reported_at DESC, id) WHERE resolution IS NULL` — a lista de pendências, parcial pelo mesmo motivo do índice do kanban · `(reservation_id) WHERE reservation_id IS NOT NULL` — o que cobrar da estadia · `inventory_issues_id_room_id_item_id_key` `UNIQUE (id, room_id, item_id)` — só alvo da FK composta de `maintenance_orders` (`20261009100000`) |
+| `unit_rooms` | `UNIQUE (unit_id, name)` — dois "Suíte 1" fazem contar a mesma cama duas vezes · `unit_rooms_id_unit_id_key` `UNIQUE (id, unit_id)` — só alvo da FK composta de `maintenance_orders` (`20261009100000`): o cômodo da ordem é da unidade dela · `unit_rooms_code_unico` `UNIQUE (unit_id, code)` — a identidade estável que a importação e a cópia usam; único na unidade, e não na propriedade, porque o mesmo `cozinha` em dois duplex é o que casa origem e destino da cópia (§11) · `unit_rooms_code_formato` `CHECK (code ~ '^[a-z0-9]+(-[a-z0-9]+)*$')` e `unit_rooms_code_tamanho` `CHECK (length(code) <= 60)` — separadas para o nome da constraint dizer à API qual regra caiu · `CHECK` do vocabulário de `kind` · `(unit_id, sort_order, name, id)` — a lista de conferência sai ordenada do índice, com desempate determinístico |
 | `inventory_media` | `inventory_media_storage_key_unica` `UNIQUE (storage_key)` · `UNIQUE (thumb_key) WHERE thumb_key IS NOT NULL` e `CHECK (thumb_key <> storage_key)` — as duas chaves moram no mesmo namespace do volume, e a colisão sobrescreveria a foto |
 | `inventory_item_media` | `PRIMARY KEY (item_id, media_id)` — muitos-para-muitos · `(item_id, sort_order, media_id)` — a capa é o menor `sort_order`, desempatado por `media_id` |
 | `room_inventory` | `PRIMARY KEY (room_id, item_id)` · `CHECK (expected_qty >= 0)` · `(item_id)` — "em que ambientes este item está", e é por ele que o `RESTRICT` passa ao tentar apagar um item |
+| `maintenance_orders` | `maintenance_orders_avaria_aberta_idx` `UNIQUE (issue_id) WHERE issue_id IS NOT NULL AND status IN ('aberta','em_andamento')` — no máximo **uma** ordem não encerrada por avaria; o `23505` neste nome é o `409 MAINTENANCE_ORDER_ALREADY_OPEN` · `maintenance_orders_bloqueio_idx` `UNIQUE (stay_block_id) WHERE stay_block_id IS NOT NULL` — um bloqueio, no máximo uma ordem (§11) |
+| `maintenance_orders` | `maintenance_orders_room_id_fkey` `(room_id, unit_id) → unit_rooms(id, unit_id)` — o cômodo é da unidade · `maintenance_orders_issue_id_fkey` `(issue_id, room_id, item_id) → inventory_issues(id, room_id, item_id) ON DELETE RESTRICT` + `maintenance_orders_avaria_exige_comodo_e_bem` — a avaria traz cômodo e bem dela, e por isso é da unidade · `stay_block_id`, `item_id` e `unit_id` em `ON DELETE RESTRICT` — liberar bloqueio é `cancelled`, nunca `DELETE` |
+| `maintenance_orders` | `maintenance_orders_fechamento` `CHECK ((status IN ('concluida','cancelada')) = (closed_at IS NOT NULL))` · `maintenance_orders_inicio` (`em_andamento` ⇔ `started_at`, fora das encerradas) · `maintenance_orders_cronologia` (`started_at <= closed_at`) · `maintenance_orders_fechador` (`closed_by` só com `closed_at`) · `maintenance_orders_custo_positivo` (`cost_cents > 0`) · vocabulários de `priority` e `status` · `title` não vazio e até 200 caracteres, `description` até 4000 |
+| `maintenance_orders` | `(property_id, opened_at, id) WHERE status IN ('aberta','em_andamento')` — a lista de trabalho; a prioridade chega como parâmetro e é ordenada em memória (§11) · `(unit_id, opened_at DESC, id)` · `(room_id, unit_id)`, `(issue_id, room_id, item_id)`, `(item_id, opened_at DESC, id)`, `(opened_by)`, `(closed_by)` parciais em `IS NOT NULL` — cada FK, as compostas na ordem da FK |
 | quase todas | índice em toda FK — **não é "todas"**, e a diferença é medível |
 
 A linha anterior dizia `todas`. A consulta abaixo devolve hoje **17** chaves
-estrangeiras sem índice que comece por elas:
+estrangeiras sem índice que comece por elas (reconferido em `20261009100000`: a mesma lista
+de antes; as nove FKs de `maintenance_orders`, as duas compostas inclusive, têm índice que
+começa pelas colunas delas, na ordem da FK):
 
 ```sql
 SELECT c.conrelid::regclass, c.conname
@@ -1148,6 +1348,13 @@ Nem toda uma delas é dívida. Quatro grupos, e só o terceiro custa alguma cois
   `Index Scan using users_broker_idx … Index Cond: (broker_id = $1) Filter: (id = $2)`.
   Um índice `(broker_id, id)` ao lado seria um segundo índice para a mesma busca.
 
+O erro oposto também existe, e a consulta não o vê: ela não lê o **predicado** do índice.
+`inventory_issues.property_id` e `maintenance_orders.property_id` contam como cobertas, mas o
+único índice que começa por elas é parcial (`resolution IS NULL`; `status IN
+('aberta','em_andamento')`), e a conferência de FK ao apagar uma propriedade
+(`WHERE property_id = $1`) não o usaria. Fica assim porque propriedade não se apaga. Já os
+índices parciais em `IS NOT NULL` servem à FK, porque a igualdade da FK implica o predicado.
+
 Fica escrito em vez de virar migration porque índice que ninguém mede é peso de
 escrita comprado no escuro.
 
@@ -1162,7 +1369,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261007213000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261009100000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -1185,10 +1392,11 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20261007170000_inventario_de_bens_por_ambiente` | o inventário de bens físicos por ambiente (§11), oito tabelas: `unit_rooms` (o cômodo, conceito novo no banco), `inventory_items` (catálogo da propriedade, com `source_ref` único parcial para importação idempotente), `room_inventory` (a colocação — é o `unit_inventory` projetado, com o cômodo no lugar da unidade), `inventory_media` + `inventory_item_media` (foto própria, muitos-para-muitos; **não** `site_media`, que não tem `property_id` e cai no `down` do CMS), `inventory_counts` + `inventory_count_lines` (conferência, com no máximo uma aberta por unidade e `expected_qty` congelada na abertura) e `inventory_issues` (quebrado/faltando/avariado, com `reservation_id` para cobrar o hóspede). `min_stock` fica para `stock_movements`; `cost_cents` virou `replacement_cost_cents`. O `down` derruba as oito e não deixa sobra |
 | `20261007200000_congela_custo_na_conferencia` | `inventory_count_lines.replacement_cost_cents` (anulável, `CHECK > 0` em `inventory_count_lines_custo_positivo`): o custo de reposição **congelado no fechamento**, de onde sai a perda de cada divergência. Com ele, a conferência fechada devolve lida de volta a perda que apurou, e recotar o item não a reescreve (regra 7, §11). Backfill das conferências já fechadas com o custo **atual** do item: aproximação de desenvolvimento, porque `20261007170000` nunca chegou a produção. A tabela vai de 11 para 12 colunas, conferida pelo bloco `DO` da régua. O `down` derruba a coluna (e com ela o `CHECK` e o comentário) e é **lossy**: o custo congelado some, e o `up` seguinte o refaz com o custo do dia |
 | `20261007213000_codigo_do_comodo` | `unit_rooms.code` (`text NOT NULL`): a identidade estável do cômodo, que a API não deixa editar e que a importação do levantamento fotográfico e a cópia de inventário entre unidades usam como chave (§11). `unit_rooms_code_formato` (`CHECK` do `pattern` do contrato), `unit_rooms_code_tamanho` (`CHECK (length(code) <= 60)`) e `unit_rooms_code_unico` (`UNIQUE (unit_id, code)`). Backfill das linhas existentes, antes do `SET NOT NULL`, pela regra de derivação que a API repete (escrita na migration e em §11): sem acento por tabela explícita (`translate`, sem extensão nova e sem `lower()`), hífen no lugar de cada sequência fora de `[a-z0-9]`, corte em 60, `comodo` para nome que vira vazio e `-2`, `-3`… em colisão na unidade, em ordem de `(created_at, id)`. A tabela vai de 9 para 10 colunas, conferida pelo bloco `DO` da régua. O `down` derruba as três constraints e a coluna sem deixar sobra e é **lossy**: o `up` seguinte re-deriva os códigos do `name` atual |
+| `20261009100000_ordens_de_manutencao` | `maintenance_orders` (18 colunas, §11): a ordem de manutenção de uma unidade, com cômodo, bem e avaria opcionais, prioridade, estado, custo e o bloqueio de calendário em `stay_block_id` (`ON DELETE RESTRICT`: liberar é `cancelled`). O banco garante que o cômodo é da unidade (FK composta `maintenance_orders_room_id_fkey`), que a avaria traz cômodo e bem dela (`CHECK` + FK composta `maintenance_orders_issue_id_fkey`), no máximo uma ordem não encerrada por avaria (`maintenance_orders_avaria_aberta_idx`, o `409 MAINTENANCE_ORDER_ALREADY_OPEN`), um bloqueio por ordem (`maintenance_orders_bloqueio_idx`) e os estados impossíveis de `status`/`started_at`/`closed_at`/`closed_by`. Os alvos das FKs compostas são duas `UNIQUE` novas, `unit_rooms_id_unit_id_key` e `inventory_issues_id_room_id_item_id_key`. Bloco `DO` da régua. Sem gatilho de tempo real (o de `stay_blocks` já avisa o mapa). O recurso RBAC `maintenance` entra pelo seed, não pela migration. O `down` derruba a tabela e as duas `UNIQUE` sem deixar sobra e é **lossy**: as ordens somem, e as linhas de `stay_blocks` que elas criaram ficam como bloqueio operacional comum |
 
 ## 16. Seeds
 
-`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 25 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`) e, desde 03/10/2026, a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo).
+`cmd/seed` popula, numa **transação única**: propriedade, unidades, produtos e composição, tipos de data com precedência, feriados e períodos de 2026–2027, Tabela Comercial V1 (tarifas, estadia mínima geral e por produto, pacotes) — tudo isso do **catálogo** escolhido, abaixo —, política comercial e de cancelamento v1, **quatro contatos de demonstração**, o catálogo de 26 recursos, os 3 perfis com a matriz inteira, um usuário de cada perfil para desenvolvimento, desde `20261002180000` o **cadastro comercial do corretor de desenvolvimento** (contato + `brokers` + `users.broker_id`) e, desde 03/10/2026, a **conta de serviço da vitrine** (perfil `vitrine` + usuário `vitrine@site.whitehouse.invalid`, abaixo).
 
 **O corretor de desenvolvimento** (etapa `corretores_de_desenvolvimento`, `cmd/seed/corretores.go`). Sem ele, `corretor@wh.local` entra no painel com `broker_id` nulo, e a partir do F2-13 isso tem efeito: em escopo `own` o corretor só atribui venda ao próprio `users.broker_id`, e a API não tem como criar o vínculo (o CRUD de `/brokers` é do F2-17/Fase 3). São três escritas por conta de perfil `corretor` em `usuariosSeed`, na ordem que as FKs exigem: a ficha em `contacts` (chave natural: telefone; `+5585900000010`, base `contrato`, sem opt-in), o cadastro em `brokers` (chave natural: `UNIQUE (user_id)`) e o vínculo em `users.broker_id`. O `DO UPDATE` do cadastro corrige só `contact_id`; `goal_cents` e `active` são decisão da gestão e o seed não os reescreve — a mesma regra das contas, que não têm a senha reescrita. A etapa segue a trava das **contas** de desenvolvimento (`SEED_DEV_USERS`), não a dos contatos de demonstração: o cadastro é da conta. E termina com uma pós-condição conferida no banco — conta de corretor sem cadastro que aponte de volta para ela é erro, e o seed inteiro volta atrás —, porque os `JOIN`s da etapa descartariam em silêncio um e-mail digitado errado e a contagem diria "inalterada".
 
@@ -1208,7 +1416,7 @@ O de teste é **congelado**: é byte a byte o que o seed semeava até 03/10/2026
 
 **Um banco nunca fica com os dois catálogos vendendo.** Semear um catálogo **desativa** (`active = false`; nunca apaga — unidade tem histórico em `stay_blocks`) as unidades, os produtos, os feriados e os períodos **do outro catálogo** que não existem no escolhido; o que a gestão cadastrou pela tela não é de catálogo nenhum e não é tocado. E reativa os próprios, que o outro tinha desativado. Para os produtos do catálogo escolhido, a composição, as tarifas, os mínimos por produto e os pacotes ficam **exatamente** iguais à lista: o que falta entra e o que sobra é **removido** — sem isso a Completa real herdaria a `COB-01` e as diárias da Completa de teste. Antes de mexer, o seed confere venda viva (`hold`, `confirmed`, `checked_in`): se a troca mudasse a composição ou o `consumes` de um produto com reserva de pé, ele aborta com a mensagem nomeando produto, unidades e reservas (`o catálogo não pode ser trocado com venda viva: a composição mudaria — completa perderia AP-04, … (reservas: WH-2026-0001)`), e a transação inteira volta. Os gatilhos adiados do §5 reprovariam o mesmo no `COMMIT`, mas falando de invariante, não de seed.
 
-Contagens num banco recém-migrado. Catálogo `teste`: primeira execução `previstas 319, criadas 318, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 319`. Catálogo `real`: primeira `previstas 445, criadas 444, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 445`. A medição com banco limpo é de 03/10/2026 e deu 310 e 436; os números acima somam as **9 linhas** de `inventory.goods` (07/10/2026). Dessas somas, só `previstas 445` e o `nada mudou` da segunda execução foram reconferidos no banco em 07/10 — o recorte de `criadas` da primeira execução e os números do catálogo `teste` são **derivados**, não medidos de novo. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`; e 310 e 436 até `inventory.goods` (07/10/2026), que soma 9: o recurso e as quatro ações para `admin` e para `usuario`.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
+Contagens num banco recém-migrado, **medidas em 09/10/2026** em `20261009100000`, as duas num banco limpo. Catálogo `teste`: primeira execução `previstas 328, criadas 327, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 328`. Catálogo `real`: primeira `previstas 454, criadas 453, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 454`. Numa instalação já semeada antes de `maintenance`, a primeira execução nova dá `criadas 9, atualizadas 1`: o recurso, as quatro ações para `admin` e para `usuario`, e o `sort_order` de `channels`, que foi de 15 para 16. A segunda volta a `criadas 0, atualizadas 0`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`; 310 e 436 até `inventory.goods` (07/10/2026), que soma 9: o recurso e as quatro ações para `admin` e para `usuario`; e 319 e 445 até `maintenance` (09/10/2026), que soma os mesmos 9.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
 
 **A conta de serviço da vitrine** (etapas `perfil_da_vitrine` e `conta_da_vitrine`, `cmd/seed/vitrine.go`). `POST /public/holds` (B1 de `docs/unificacao-site-crm.md`) roda o **mesmo** serviço de reserva e de contato do painel, e esses serviços exigem um usuário autenticado no contexto — dele saem escopo, `owner_id`/`created_by` e auditoria. Em vez de abrir um atalho "sem usuário" no domínio, o handler público carrega esta conta com `CarregarSessao` e chama o serviço como qualquer ator; o que o site grava aparece como "Site (vitrine)" na trilha.
 

@@ -295,6 +295,35 @@ quote → hold ──► confirmed ──► checked_in ──► checked_out �
 - Ordens de manutenção que **geram bloqueio no calendário** e liberam ao concluir.
 - Custo por estadia (enxoval + consumo + limpeza) alimenta a margem no BI.
 
+### Ordens de manutenção
+
+Desenho de 09/10/2026. Contrato em `/maintenance-orders` (tag Manutenção da OpenAPI), schema em `maintenance_orders` (`db.md` §11), regras puras em `internal/domain/maintenance`.
+
+**A ordem.** Unidade obrigatória; cômodo, bem e a avaria que a originou opcionais. Título obrigatório, descrição opcional, prioridade `baixa | normal | alta | urgente` (padrão `normal`), custo em centavos opcional e maior que zero. O servidor grava `opened_at`/`opened_by`, `started_at` e `closed_at`/`closed_by`. Com avaria, cômodo e bem são os dela — o banco garante por FK composta, e uma avaria tem no máximo uma ordem não encerrada.
+
+**Estados.** `aberta → em_andamento → concluida | cancelada`, e `aberta` também conclui ou cancela direto. Encerrada **não reabre**: retrabalho é ordem nova. Estado só muda por ação nomeada (`/start`, `/complete`, e `DELETE` é cancelar). Concluída ainda aceita o custo, porque a nota do serviço chega depois; cancelada não aceita nada.
+
+**O bloqueio de calendário** é opcional e é uma linha de `stay_blocks` (`source = maintenance`) na unidade da ordem, criada na mesma transação. Sobreposição é recusada pela constraint `EXCLUDE` (`409 DATE_CONFLICT`), nunca por consulta prévia. A regra que organiza o resto: **noite que já passou não muda** — "hoje" é o dia D no fuso da propriedade.
+
+| Situação | Regra |
+|---|---|
+| Bloqueio novo | começa em D ou depois; até 365 noites; começo até D + 3 anos (os mesmos tetos de `POST /blocks`) |
+| Estender ou encurtar um bloqueio que não começou | livre, sem voltar para antes de D |
+| Estender ou encurtar um bloqueio em curso | o início não muda; o fim não volta para antes de D |
+| Encerrar a ordem (concluir ou cancelar) no dia D | o que não começou é liberado inteiro; o que está em curso termina em D (a noite de D volta à venda); o que já terminou fica |
+
+Liberar é `status = cancelled`, como `DELETE /blocks/{id}`: a data volta à venda e o registro fica. O bloqueio de uma ordem só se mexe pela ordem — `DELETE /blocks/{id}` sobre ele é recusado.
+
+**A avaria.** Concluir a ordem encerra a avaria de origem que ainda estiver aberta com `resolution = consertado`, na mesma transação. Cancelar não mexe na avaria.
+
+**Permissão.** Recurso `maintenance`, as quatro ações, sem escopo `own`; `admin` e `usuario` em `all`, corretor sem acesso. Quem pode criar ou editar a ordem bloqueia a unidade dela sem precisar de `calendar`.
+
+#### Critérios de aceite
+- Ordem com bloqueio sobre data reservada é recusada com `409 DATE_CONFLICT` e nada é criado; N ordens simultâneas sobre o mesmo período da mesma unidade: exatamente uma vence, nenhuma `500`.
+- Concluir hoje uma ordem cujo bloqueio vai de anteontem a depois de amanhã deixa o calendário bloqueado só em anteontem e ontem, e a noite de hoje vendável.
+- Concluir uma ordem ligada a avaria aberta deixa a avaria `consertado`; cancelar a deixa aberta.
+- Corretor recebe `403` em todas as rotas de `/maintenance-orders`.
+
 ---
 
 ## 13. Canais / OTA

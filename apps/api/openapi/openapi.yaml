@@ -145,6 +145,69 @@ tags:
       quantidade esperada é copiada na abertura, nunca lida por `JOIN`), **uma
       conferência aberta por unidade** é garantida por índice único parcial no
       banco, e **nenhuma rota é pública** — a foto mostra o interior da casa.
+  - name: Manutenção
+    description: |
+      Ordens de manutenção de uma unidade física (spec §12): "o ar-condicionado
+      do AP-03 parou", "pintar a GV-01 antes do Réveillon". A ordem **pode gerar
+      bloqueio no calendário e o libera ao encerrar**. Schema em
+      `maintenance_orders` (`docs/db.md` §11); regras puras em
+      `internal/domain/maintenance`.
+
+      **Recurso RBAC: `maintenance`** ("Ordens de manutenção", grupo Operação,
+      as quatro ações, `supports_own = false` — a ordem é da casa, não de quem a
+      abriu). Concedido em `all` a `admin` e `usuario`; **não** ao `corretor`
+      nem à conta de serviço `vitrine`, que recebem `403`.
+
+      Quatro regras atravessam a tag inteira:
+
+      1. **O bloqueio é consequência da ordem, e mora em `stay_blocks`.** Uma
+         linha `source = 'maintenance'`, status `confirmed`, na unidade da
+         ordem — a mesma tabela das reservas, então a manutenção impede a venda
+         pela mesma constraint `EXCLUDE` que impede duas vendas. Sobreposição
+         com reserva, pré-reserva ou outro bloqueio é `409 DATE_CONFLICT`
+         (`23P01` no INSERT/UPDATE, **nunca** um SELECT antes). Quem pode criar
+         ou editar a ordem pode bloquear a unidade **dela**, sem `calendar:*`:
+         conceder `maintenance` é conceder isso. E o bloqueio da ordem só se
+         mexe por aqui — `DELETE /blocks/{id}` sobre ele é `409`.
+      2. **Noite que já passou não muda.** "Hoje" é o dia D no fuso da
+         propriedade. Encerrar a ordem (concluir ou cancelar) **libera** o
+         bloqueio: o que não começou é liberado inteiro (`cancelled`, a linha
+         fica), o que está em curso tem o fim cortado para D — a noite de D
+         volta à venda — e o que já terminou fica como está. Estender ou
+         encurtar segue a mesma regra: o início de um bloqueio em curso não
+         muda e o fim não volta para antes de D; bloqueio novo começa em D ou
+         depois. Os tetos são os de `POST /blocks` (365 noites; início até D + 3
+         anos), da mesma constante — a ordem não é porta dos fundos do
+         `/blocks`.
+      3. **Estado só muda por ação nomeada.** `aberta → em_andamento →
+         concluida | cancelada`, e `aberta` também conclui direto (trocar uma
+         lâmpada não pede dois toques). **Encerrada não reabre: retrabalho é
+         ordem nova.** `allowed_actions` e `editable` vêm em toda resposta: o
+         painel desenha os botões a partir deles, sem uma segunda cópia da
+         máquina de estados. Concluída ainda aceita o **custo** (a nota do
+         encanador chega depois); cancelada não aceita nada.
+      4. **Concluir conserta a avaria de origem.** Ordem ligada a uma avaria
+         ainda aberta (`resolution IS NULL`) a encerra com `resolution:
+         consertado`, `resolved_at` e `resolved_by`, na mesma transação.
+         Avaria já resolvida de outro jeito não é tocada; cancelar não mexe na
+         avaria. Uma avaria tem **no máximo uma ordem não encerrada** (índice
+         único parcial): a segunda é `409 MAINTENANCE_ORDER_ALREADY_OPEN`.
+
+      **Dado pessoal na resposta** (regra do topo deste arquivo): nenhuma rota
+      desta tag devolve dado de contato, hóspede ou reserva. `opened_by_name` e
+      `closed_by_name` são nomes de **usuário** do sistema — não mascaram nem
+      gravam `pii_access_log`, como em `Conferencia`.
+
+      **Toda escrita vai para `audit_log`**, a da ordem e a do bloqueio (uma
+      linha por mudança de `stay_blocks`, como em `POST /blocks`), e toda
+      mudança de bloqueio publica `calendar` no barramento de tempo real pelo
+      gatilho que já existe em `stay_blocks`: o mapa atualiza sozinho.
+
+      **O formulário escolhe unidade, cômodo e bem pelas rotas de `Bens`**
+      (`GET /inventory/units`, `GET /rooms?unit_id=`,
+      `GET /units/{id}/inventory`), que pedem `inventory.goods:ver`. Os dois
+      perfis que recebem `maintenance` no seed também recebem esse; um perfil
+      futuro só de manutenção precisará dele para usar o formulário.
   - name: Tarifário
     description: Tarifas, calendário comercial e políticas — tudo dado versionado, e nada reescreve o passado.
   - name: Contatos
@@ -3970,8 +4033,12 @@ paths:
 
         **Não é permissão maior**: a permissão já é simétrica, e exigir `admin`
         só mudaria quem erra de dedo — o administrador digita `2050` tão fácil
-        quanto o corretor. Por isso o teto de duração mora no DTO e vale para
-        todos.
+        quanto o corretor. Por isso o teto vale para todos.
+
+        Os dois números moram em `internal/domain/calendar`
+        (`MaxBlockNights`, `BlockHorizonDays`) e valem também para o bloqueio
+        de uma ordem de manutenção (`PUT /maintenance-orders/{id}/block`): dois
+        tetos para a mesma ocupação fariam da ordem a porta dos fundos deste.
 
         `from` **no passado continua livre**: registrar manutenção que já
         aconteceu é legítimo. E quem precisa de mais tem dois caminhos, nenhum
@@ -4052,6 +4119,13 @@ paths:
         `/cancel`, `/check-out` ou o job de expiração. Apagar o bloco por fora
         deixaria a reserva `confirmed` sem calendário, e ninguém veria.
 
+        **Bloqueio de uma ordem de manutenção também**: `409
+        INVALID_STATE_TRANSITION` com `details.maintenance_order_id`. Quem o
+        solta é a própria ordem — `DELETE /maintenance-orders/{id}/block`, ou o
+        encerramento dela. Soltá-lo por aqui deixaria a ordem dizendo
+        "bloqueado até sexta" com a unidade à venda, e o conserto em curso
+        receberia hóspede.
+
         **Par simétrico de `POST /blocks`** — a matriz concede `calendar:criar` e
         `calendar:excluir` juntas ou nenhuma. O motivo está escrito na criação:
         quem pode tirar a data do estoque tem de poder devolvê-la.
@@ -4067,7 +4141,7 @@ paths:
           description: "`NOT_FOUND` — bloqueio inexistente nesta propriedade, ou de outro dono quando o escopo do ator é `own`."
           $ref: "#/components/responses/Erro"
         "409":
-          description: "`INVALID_STATE_TRANSITION` — bloqueio de reserva não se libera por aqui, e bloqueio já em estado terminal (`cancelled`, `expired`, `completed`) não se libera duas vezes."
+          description: "`INVALID_STATE_TRANSITION` — bloqueio de reserva ou de ordem de manutenção (`details.maintenance_order_id`) não se libera por aqui; bloqueio de manutenção (`source = maintenance`) cujo período **já terminou** também não, mesmo que nenhuma ordem o cite mais (o antigo de uma remarcação): é o histórico do conserto, e noite que já passou não muda; e bloqueio já em estado terminal (`cancelled`, `expired`, `completed`) não se libera duas vezes."
           $ref: "#/components/responses/Erro"
 
   /stream:
@@ -6118,8 +6192,10 @@ paths:
         "409":
           description: |
             `RESOURCE_IN_USE` — o ambiente tem histórico que o banco recusa
-            apagar. `details`: `count_lines` (linhas de conferência) e `issues`
-            (avarias). Desative em vez de apagar.
+            apagar. `details`: `count_lines` (linhas de conferência), `issues`
+            (avarias) e `maintenance_orders` (ordens de manutenção que citam o
+            cômodo — `maintenance_orders_room_id_fkey`). Desative em vez de
+            apagar.
           $ref: "#/components/responses/Erro"
 
   /inventory/items:
@@ -6307,7 +6383,8 @@ paths:
         "409":
           description: |
             `RESOURCE_IN_USE` — `details`: `placements` (ambientes onde o item
-            está colocado), `count_lines` e `issues`. Desative em vez de apagar.
+            está colocado), `count_lines`, `issues` e `maintenance_orders`
+            (ordens que citam o bem). Desative em vez de apagar.
           $ref: "#/components/responses/Erro"
 
   /inventory/items/{id}/photos:
@@ -7371,6 +7448,13 @@ paths:
         não procede se encerra com `resolution: descartado`, que deixa o rastro.
         Avaria sem conferência, ou de conferência aberta ou cancelada, continua
         apagável.
+
+        **Avaria citada por uma ordem de manutenção também não se apaga: `409
+        RESOURCE_IN_USE`**, com `details.maintenance_order_id`. A FK
+        `maintenance_orders → inventory_issues` é `ON DELETE RESTRICT`: a ordem
+        diz o que foi consertado, e apagar a avaria deixaria a ordem citando
+        nada. Avaria lançada por engano que já virou ordem se encerra com
+        `resolution: descartado`, e a ordem se cancela.
       x-rbac: { recurso: inventory.goods, acao: excluir }
       responses:
         "204": { description: Apagada }
@@ -7378,7 +7462,7 @@ paths:
         "403": { $ref: "#/components/responses/Erro" }
         "404": { $ref: "#/components/responses/Erro" }
         "409":
-          description: "`RESOURCE_IN_USE` — a avaria pertence a uma conferência fechada (`details.count_id`). Encerre-a com `resolution: descartado` em vez de apagar."
+          description: "`RESOURCE_IN_USE` — a avaria pertence a uma conferência fechada (`details.count_id`) ou é citada por uma ordem de manutenção (`details.maintenance_order_id`). Encerre-a com `resolution: descartado` em vez de apagar."
           $ref: "#/components/responses/Erro"
 
   /inventory/export:
@@ -7424,6 +7508,436 @@ paths:
         "403": { $ref: "#/components/responses/Erro" }
         "404": { $ref: "#/components/responses/Erro" }
 
+  /maintenance-orders:
+    get:
+      tags: [Manutenção]
+      summary: Lista as ordens de manutenção — a lista de trabalho da operação
+      description: |
+        **Ordem padrão (`sort=urgencia`): as abertas primeiro**, e entre elas a
+        mais urgente (`urgente → alta → normal → baixa`) e, na mesma prioridade,
+        a mais antiga (`opened_at` crescente) — quem abre a tela no celular vê
+        no topo o que está há mais tempo esperando. Depois vêm as encerradas,
+        da mais recente (`closed_at` decrescente). Empate final por `id`, para a
+        paginação não repetir nem perder linha.
+
+        "Aberta" aqui é `aberta` **ou** `em_andamento` — o filtro `open=true`.
+        A escada de prioridade sai de `maintenance.ByUrgency()`, passada ao SQL
+        como parâmetro, e não de um `CASE` com a lista copiada.
+      x-rbac: { recurso: maintenance, acao: ver }
+      parameters:
+        - { name: page,     in: query, schema: { type: integer, default: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, default: 25, maximum: 100 } }
+        - { name: status,   in: query, schema: { $ref: "#/components/schemas/StatusDaOrdem" } }
+        - { name: open,     in: query, schema: { type: boolean }, description: "`true` = `aberta` ou `em_andamento`; `false` = `concluida` ou `cancelada`. Combinado com `status`, os dois valem (E)." }
+        - { name: unit_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: room_id,  in: query, schema: { type: string, format: uuid } }
+        - { name: item_id,  in: query, schema: { type: string, format: uuid }, description: O bem que dá defeito toda temporada. }
+        - { name: issue_id, in: query, schema: { type: string, format: uuid }, description: "As ordens desta avaria — é como a tela da avaria descobre se já há uma aberta." }
+        - { name: priority, in: query, schema: { $ref: "#/components/schemas/PrioridadeDaOrdem" } }
+        - { name: q,        in: query, schema: { type: string, maxLength: 200 }, description: "Busca em `title` e `description`, sem diferenciar maiúscula. Acento conta: o banco não tem `unaccent`, como nas outras buscas do contrato." }
+        - name: sort
+          in: query
+          schema: { type: string, default: urgencia, enum: [urgencia, opened_at, -opened_at, -closed_at] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: "#/components/schemas/OrdemDeManutencao" }
+                  - $ref: "#/components/schemas/Paginacao"
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "422":
+          description: "`VALIDATION_ERROR` — filtro fora do vocabulário (`status`, `priority`, `sort`, e `open` que não seja `true` nem `false`) ou id mal formado. Filtro inválido nunca vira lista inteira fingindo que filtrou."
+          $ref: "#/components/responses/Erro"
+    post:
+      tags: [Manutenção]
+      summary: Abre uma ordem de manutenção — com ou sem bloqueio de calendário
+      description: |
+        A ordem é de **uma unidade** (obrigatória) e pode citar o **cômodo**, o
+        **bem** e a **avaria** que a originou. Nasce `aberta`, com `opened_at` e
+        `opened_by` do servidor.
+
+        ## Coerência entre unidade, cômodo, bem e avaria
+
+        - `room_id` tem de ser um cômodo **desta unidade** (`422` em
+          `room_id`). O banco também recusa: a FK é composta,
+          `(room_id, unit_id) → unit_rooms(id, unit_id)`.
+        - `item_id` é um bem do catálogo da propriedade. Não precisa estar
+          colocado no cômodo: o defeito pode ser do móvel que ninguém conta.
+        - Com `issue_id`, o cômodo e o bem **são os da avaria**: omitidos, vêm
+          dela; informados, têm de ser iguais (`422` em `room_id`/`item_id`).
+          A avaria tem de ser de um cômodo desta unidade (`422` em `issue_id`).
+          É o que a ação "Abrir ordem de manutenção" da tela de avarias faz —
+          preenche os quatro e o operador só escreve o título.
+        - Uma avaria tem no máximo **uma** ordem não encerrada: a segunda é
+          `409 MAINTENANCE_ORDER_ALREADY_OPEN`, com
+          `details.maintenance_order_id` da que já existe — decidido pelo
+          índice único parcial, não por SELECT antes do INSERT.
+
+        ## O bloqueio, se pedido, nasce na mesma transação
+
+        `block: {from, to}` cria a linha de `stay_blocks` (`source =
+        'maintenance'`, `confirmed`, na unidade da ordem, `owner_id` e
+        `created_by` = quem abriu, `note` = o título) **no mesmo commit** da
+        ordem. Ou nascem as duas, ou nenhuma: data ocupada é
+        `409 DATE_CONFLICT` (`details.unit_code` e `details.period` — o período **pedido**, não o ocupado, como em `reservas`) e a ordem
+        não é criada — quem quiser a ordem sem bloqueio manda de novo sem
+        `block`.
+
+        O período obedece a `internal/domain/maintenance.Replan`: half-open,
+        começa **hoje ou depois** (no fuso da propriedade), no máximo 365
+        noites e começo até hoje + 3 anos. Erro de período sai em
+        `details["block.from"]` ou `details["block.to"]`. Unidade inativa não é
+        vendida e não tem o que bloquear: `422` em `block`.
+
+        **Sem `Idempotency-Key`**, como `POST /inventory/counts`: não cria
+        reserva nem dinheiro, e os dois duplicados que importam já são
+        recusados pelo banco — o segundo bloqueio da mesma data (`EXCLUDE`) e a
+        segunda ordem da mesma avaria (índice parcial). Um título repetido sem
+        nenhum dos dois se cancela.
+      x-rbac: { recurso: maintenance, acao: criar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrdemDeManutencaoCriar" }
+      responses:
+        "201":
+          description: Aberta (e, se pedido, com a unidade bloqueada)
+          headers:
+            Location:
+              description: URI da ordem criada.
+              schema: { type: string, example: /api/v1/maintenance-orders/9f1c1e2a-0d3b-4f6a-9a1e-2b7c5d8e0f11 }
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `DATE_CONFLICT` — o período do bloqueio cruza reserva, pré-reserva ou
+            outro bloqueio da unidade (`details.unit_code`, `details.period`);
+            nada foi criado. `MAINTENANCE_ORDER_ALREADY_OPEN` — a avaria já tem
+            ordem aberta (`details.maintenance_order_id`).
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: |
+            `VALIDATION_ERROR` — `unit_id` inexistente ou de outra propriedade;
+            `room_id` fora da unidade; `item_id` inexistente; `issue_id` fora da
+            unidade ou divergente de `room_id`/`item_id`; `title` vazio;
+            `cost_cents` zero ou negativo; `block.from`/`block.to` fora das
+            regras do período; `block` numa unidade inativa.
+          $ref: "#/components/responses/Erro"
+
+  /maintenance-orders/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Manutenção]
+      summary: Detalhe da ordem, com o bloqueio e a avaria
+      x-rbac: { recurso: maintenance, acao: ver }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+    put:
+      tags: [Manutenção]
+      summary: Substitui os campos de cadastro da ordem
+      description: |
+        Substitui **título, descrição, prioridade, cômodo, bem e custo**. Não
+        passam por aqui, e mandá-los é `422` (campo desconhecido):
+
+        - `unit_id` e `issue_id` — são a identidade da ordem, e o bloqueio já
+          está na unidade dela;
+        - `status`, `started_at`, `closed_at` — só mudam por ação nomeada
+          (`/start`, `/complete`, `DELETE`);
+        - `block` — o período tem rota própria
+          (`PUT|DELETE /maintenance-orders/{id}/block`), para que um `PUT` que
+          esqueceu o campo não solte a unidade no meio do conserto.
+
+        Com avaria ligada, cômodo e bem são os dela: omitidos ficam como estão,
+        repetidos passam, diferentes (ou `null`) são `422`.
+
+        Ordem `concluida` não aceita `PUT` (o corpo inteiro é mais que o custo
+        — use `PATCH {cost_cents}`), e `cancelada` não aceita nada:
+        `409 MAINTENANCE_ORDER_CLOSED`.
+      x-rbac: { recurso: maintenance, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrdemDeManutencaoSubstituir" }
+      responses:
+        "200":
+          description: Substituída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`MAINTENANCE_ORDER_CLOSED` — ordem encerrada; `details.status`, `details.editable` e `details.closed_at`."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    patch:
+      tags: [Manutenção]
+      summary: Atualiza a ordem — e é por aqui que o custo chega depois
+      description: |
+        Campo ausente não muda nada; campo com `null` limpa (`Opt[T]`). Os
+        mesmos campos do `PUT`, com as mesmas recusas.
+
+        Na ordem `concluida`, **só `cost_cents`** é aceito: a nota do serviço
+        costuma chegar dias depois, e a margem da estadia (spec §12) precisa
+        dela. Qualquer outro campo no corpo — mesmo `null` — é
+        `409 MAINTENANCE_ORDER_CLOSED` com `details.editable: so_custo`. Na
+        `cancelada`, nenhum campo é aceito. Corpo vazio responde `200` sem
+        mudar nada, em qualquer estado.
+      x-rbac: { recurso: maintenance, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OrdemDeManutencaoAtualizar" }
+      responses:
+        "200":
+          description: Atualizada
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`MAINTENANCE_ORDER_CLOSED` — o estado não aceita o campo; `details.editable` diz o que ainda aceita."
+          $ref: "#/components/responses/Erro"
+        "422": { $ref: "#/components/responses/Erro" }
+    delete:
+      tags: [Manutenção]
+      summary: Cancela a ordem e libera o calendário
+      description: |
+        **Cancela, não apaga** — o "excluir" de um registro com histórico
+        (`docs/api.md` §2), como `DELETE /inventory/counts/{id}`. `status` vai
+        para `cancelada`, `closed_at` e `closed_by` são gravados, e o bloqueio é
+        liberado pela regra de `maintenance.ReleaseOn`, na mesma transação:
+
+        | O bloqueio, no dia D | Fica |
+        |---|---|
+        | ainda não começou (`from ≥ D`) | liberado inteiro (`cancelled`) |
+        | em curso (`from < D < to`) | `[from, D)` — a noite de D volta à venda |
+        | já terminou (`to ≤ D`) | como está |
+
+        **A avaria de origem não é tocada**: a ordem cancelada não consertou
+        nada, e a pendência continua aberta para outra ordem ou outro desfecho.
+
+        Responde `200` com a ordem como ficou — e não `204` — porque a tela
+        precisa mostrar o que aconteceu com o bloqueio (`block.phase`).
+        Ordem já encerrada é `409 MAINTENANCE_ORDER_CLOSED`: concluída não vira
+        cancelada, e cancelar duas vezes não é a mesma coisa que cancelar uma.
+      x-rbac: { recurso: maintenance, acao: excluir }
+      responses:
+        "200":
+          description: Cancelada, com o calendário liberado
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`MAINTENANCE_ORDER_CLOSED` — já encerrada; `details.status` e `details.closed_at`."
+          $ref: "#/components/responses/Erro"
+
+  /maintenance-orders/{id}/start:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Manutenção]
+      summary: Marca o início do serviço
+      description: |
+        `aberta → em_andamento`, gravando `started_at` (do servidor). Não mexe
+        no calendário: o bloqueio, se houver, já vale desde que foi pedido.
+
+        Segundo toque (`em_andamento`) é `409 INVALID_STATE_TRANSITION` com
+        `details.allowed: [complete, cancel]`; ordem encerrada é
+        `409 MAINTENANCE_ORDER_CLOSED`. Sem corpo.
+      x-rbac: { recurso: maintenance, acao: editar }
+      responses:
+        "200":
+          description: Em andamento
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`INVALID_STATE_TRANSITION` — já em andamento (`details.status`, `details.allowed`). `MAINTENANCE_ORDER_CLOSED` — já encerrada."
+          $ref: "#/components/responses/Erro"
+
+  /maintenance-orders/{id}/complete:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Manutenção]
+      summary: Conclui a ordem — libera o calendário e conserta a avaria
+      description: |
+        `aberta | em_andamento → concluida`, com `closed_at` e `closed_by`. Na
+        **mesma transação**:
+
+        1. **O bloqueio é liberado** pela mesma regra do cancelamento (tabela
+           em `DELETE /maintenance-orders/{id}`): o que não começou sai
+           inteiro, o que está em curso termina em D — a noite de hoje volta à
+           venda —, o que terminou fica. D é hoje no fuso da propriedade.
+        2. **A avaria de origem, se ainda aberta, é encerrada** com
+           `resolution: consertado`, `resolved_at` e `resolved_by` do servidor.
+           Avaria que alguém já resolveu (reposta, cobrada, descartada) não é
+           tocada — o desfecho escolhido por uma pessoa vence o inferido.
+        3. `cost_cents`, se vier no corpo, é gravado no mesmo UPDATE. Pode
+           também chegar depois, por `PATCH`.
+
+        O corpo é opcional; sem ele, conclui sem mexer no custo.
+      x-rbac: { recurso: maintenance, acao: editar }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ConclusaoDaOrdem" }
+      responses:
+        "200":
+          description: Concluída
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`MAINTENANCE_ORDER_CLOSED` — já encerrada; `details.status` e `details.closed_at`."
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — `cost_cents` zero ou negativo."
+          $ref: "#/components/responses/Erro"
+
+  /maintenance-orders/{id}/block:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    put:
+      tags: [Manutenção]
+      summary: Bloqueia a unidade da ordem, ou estende/encurta o bloqueio
+      description: |
+        Define o período do bloqueio da ordem. Quem decide o que acontece é
+        `internal/domain/maintenance.Replan`, com D = hoje no fuso da
+        propriedade:
+
+        | A ordem tem | O pedido | Acontece |
+        |---|---|---|
+        | nenhum bloqueio, ou liberado, ou já terminado (`to ≤ D`) | `from ≥ D` | **cria** uma linha nova e a ordem passa a apontar para ela; a antiga, se houver, fica no calendário como história |
+        | bloqueio que ainda não começou (`from ≥ D`) | `from ≥ D` | **altera** o período da mesma linha |
+        | bloqueio em curso (`from < D < to`) | mesmo `from`, `to ≥ D` | **altera** só o fim — estende ou encurta; `to = D` libera a noite de hoje |
+        | o mesmo período | — | nada; `200` (segundo toque) |
+
+        Qualquer outra combinação é `422 VALIDATION_ERROR` em `from` ou `to`:
+        noite que já passou não se vende, não se bloqueia e não se desbloqueia.
+        Os tetos são os de `POST /blocks` (365 noites; `from` até D + 3 anos).
+
+        Estender sobre reserva, pré-reserva ou outro bloqueio é
+        `409 DATE_CONFLICT` — a constraint `EXCLUDE` confere no próprio
+        `UPDATE`/`INSERT`, e o bloqueio continua como estava. **Criar**
+        bloqueio em unidade inativa é `422` em `block` (ela não é vendida, não
+        há o que bloquear); alterar o que já existe continua valendo. Ordem
+        encerrada é `409 MAINTENANCE_ORDER_CLOSED`.
+      x-rbac: { recurso: maintenance, acao: editar }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PeriodoDoBloqueio" }
+      responses:
+        "200":
+          description: A ordem, com o bloqueio como ficou
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: |
+            `DATE_CONFLICT` — o período cruza outra ocupação da unidade
+            (`details.unit_code`, `details.period`); nada mudou.
+            `MAINTENANCE_ORDER_CLOSED` — ordem encerrada.
+          $ref: "#/components/responses/Erro"
+        "422":
+          description: "`VALIDATION_ERROR` — `details.from` ou `details.to` com a regra violada; `details.block` quando a unidade está inativa."
+          $ref: "#/components/responses/Erro"
+    delete:
+      tags: [Manutenção]
+      summary: Solta o bloqueio sem encerrar a ordem
+      description: |
+        Para quando o conserto pode esperar e a unidade volta a ser vendida
+        antes de a ordem terminar. Mesma regra da liberação ao encerrar
+        (`maintenance.ReleaseOn`): não começou → `cancelled`; em curso → fim
+        cortado para D; terminado ou já liberado → nada, e responde `200`
+        igual (segundo toque não é erro).
+
+        A ordem continua apontando para a linha — é a história de "esteve
+        bloqueada de tal a tal". Bloquear de novo é `PUT` nesta mesma rota.
+        Ordem encerrada é `409 MAINTENANCE_ORDER_CLOSED`: o encerramento já
+        liberou o que havia para liberar.
+      x-rbac: { recurso: maintenance, acao: editar }
+      responses:
+        "200":
+          description: A ordem, com o bloqueio como ficou
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/OrdemDeManutencao" }
+        "401": { $ref: "#/components/responses/Erro" }
+        "403": { $ref: "#/components/responses/Erro" }
+        "404": { $ref: "#/components/responses/Erro" }
+        "409":
+          description: "`MAINTENANCE_ORDER_CLOSED` — ordem encerrada."
+          $ref: "#/components/responses/Erro"
+
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
@@ -7458,6 +7972,7 @@ components:
                            LEAD_ALREADY_CONVERTED,
                            CONTACT_DUPLICATE, CONTACT_ANONYMIZED, QUOTE_NOT_PENDING,
                            COUNT_ALREADY_OPEN, COUNT_CLOSED, COUNT_HAS_PENDING_LINES,
+                           MAINTENANCE_ORDER_CLOSED, MAINTENANCE_ORDER_ALREADY_OPEN,
                            INTERNAL]
                   message: { type: string }
                   details: { type: object, additionalProperties: true }
@@ -10913,7 +11428,7 @@ components:
 
     Avaria:
       type: object
-      required: [id, room_id, item_id, kind, qty, reported_at]
+      required: [id, room_id, item_id, unit_id, kind, qty, reported_at]
       properties:
         id:          { type: string, format: uuid }
         room_id:     { type: string, format: uuid }
@@ -10951,6 +11466,16 @@ components:
             dizer quem dormiu nela, então nada de hóspede, telefone ou valor da
             venda.
         count_id:    { type: [string, "null"], format: uuid, description: A conferência que achou. Anulável — a governanta também relata fora de conferência. }
+        open_maintenance_order_id:
+          type: [string, "null"]
+          format: uuid
+          description: |
+            A ordem de manutenção **não encerrada** desta avaria, se houver — no
+            máximo uma (`maintenance_orders_avaria_aberta_idx`). Existe para a
+            lista de avarias dizer "ordem em aberto" e levar até ela sem uma
+            chamada por linha. Vem preenchido para quem tem só
+            `inventory.goods:ver`: é um id, não o conteúdo da ordem, que continua
+            exigindo `maintenance:ver`.
         resolution:
           oneOf:
             - $ref: "#/components/schemas/DesfechoDeAvaria"
@@ -11018,6 +11543,195 @@ components:
           oneOf:
             - $ref: "#/components/schemas/DesfechoDeAvaria"
             - type: "null"
+
+    StatusDaOrdem:
+      type: string
+      enum: [aberta, em_andamento, concluida, cancelada]
+      description: |
+        Palavra por palavra o `CHECK` de `maintenance_orders.status`.
+        `concluida` e `cancelada` são encerradas e **não reabrem** — retrabalho
+        é ordem nova. `closed_at` é nulo se e somente se a ordem não está
+        encerrada (`CHECK maintenance_orders_fechamento`).
+
+    PrioridadeDaOrdem:
+      type: string
+      enum: [baixa, normal, alta, urgente]
+      default: normal
+      description: "A lista de trabalho ordena de `urgente` para `baixa` (`maintenance.ByUrgency`)."
+
+    AcaoDaOrdem:
+      type: string
+      enum: [start, complete, cancel]
+      description: |
+        Transições nomeadas: `start` é `POST /{id}/start`, `complete` é
+        `POST /{id}/complete` e `cancel` é `DELETE /{id}`.
+
+    FaseDoBloqueio:
+      type: string
+      enum: [agendado, em_curso, encerrado, liberado]
+      description: |
+        Como o bloqueio está **hoje** (dia D no fuso da propriedade), derivado
+        do período e nunca gravado — gravado, ficaria errado à meia-noite.
+        `agendado`: `from > D`. `em_curso`: `from ≤ D < to` (cobre a noite de
+        hoje). `encerrado`: `to ≤ D`, fica no mapa como história.
+        `liberado`: a linha foi solta (`cancelled`) e não ocupa nem aparece no
+        mapa.
+
+    PeriodoDoBloqueio:
+      type: object
+      additionalProperties: false
+      required: [from, to]
+      description: |
+        Half-open, como toda estadia: `[2026-11-10, 2026-11-15)` bloqueia as
+        noites de 10 a 14 e deixa o dia 15 livre para check-in.
+      properties:
+        from: { type: string, format: date, example: "2026-11-10" }
+        to:   { type: string, format: date, example: "2026-11-15", description: "Exclusivo." }
+
+    BloqueioDaOrdem:
+      type: object
+      required: [id, from, to, nights, status, phase]
+      description: |
+        A linha de `stay_blocks` da ordem (`source = 'maintenance'`), na
+        unidade dela. Depois de encerrada a ordem, mostra o que ficou no
+        calendário: o período cortado em D, ou `status: cancelled` se o
+        bloqueio foi solto antes de começar.
+      properties:
+        id:     { type: string, format: uuid, description: "`stay_blocks.id`." }
+        from:   { type: string, format: date }
+        to:     { type: string, format: date, description: "Exclusivo." }
+        nights: { type: integer, minimum: 1 }
+        status:
+          type: string
+          enum: [confirmed, cancelled]
+          description: "O `stay_blocks.status` da linha. Bloqueio de manutenção só conhece estes dois: ocupa (`confirmed`) ou foi solto (`cancelled`)."
+        phase: { $ref: "#/components/schemas/FaseDoBloqueio" }
+
+    AvariaDaOrdem:
+      type: object
+      required: [id, kind, qty]
+      description: "Resumo da avaria que originou a ordem. O registro inteiro é `GET /inventory/issues/{id}` (`inventory.goods:ver`)."
+      properties:
+        id:   { type: string, format: uuid }
+        kind: { $ref: "#/components/schemas/TipoDeAvaria" }
+        qty:  { type: integer, minimum: 1 }
+        note: { type: [string, "null"] }
+        resolution:
+          oneOf:
+            - $ref: "#/components/schemas/DesfechoDeAvaria"
+            - type: "null"
+          description: "`null` = ainda pendente. Concluir a ordem a leva a `consertado`, se ninguém a resolveu antes."
+        reported_at: { type: string, format: date-time }
+
+    OrdemDeManutencao:
+      type: object
+      required: [id, unit_id, unit_code, unit_name, title, priority, status, opened_at, allowed_actions, editable, updated_at]
+      properties:
+        id:        { type: string, format: uuid }
+        unit_id:   { type: string, format: uuid }
+        unit_code: { type: string, example: AP-03 }
+        unit_name: { type: string }
+        room_id:   { type: [string, "null"], format: uuid }
+        room_name: { type: [string, "null"], example: Cozinha }
+        item_id:   { type: [string, "null"], format: uuid }
+        item_name: { type: [string, "null"], example: Geladeira duplex }
+        issue_id:  { type: [string, "null"], format: uuid }
+        issue:
+          oneOf:
+            - $ref: "#/components/schemas/AvariaDaOrdem"
+            - type: "null"
+        title:       { type: string, example: Ar-condicionado da suíte não gela }
+        description: { type: [string, "null"] }
+        priority:    { $ref: "#/components/schemas/PrioridadeDaOrdem" }
+        status:      { $ref: "#/components/schemas/StatusDaOrdem" }
+        cost_cents:
+          type: [integer, "null"]
+          format: int64
+          minimum: 1
+          description: "O custo do serviço, em centavos. `null` = ainda não lançado; zero é recusado (`CHECK > 0`) para não virar um segundo jeito de escrever \"não sei\"."
+        block:
+          oneOf:
+            - $ref: "#/components/schemas/BloqueioDaOrdem"
+            - type: "null"
+          description: "`null` = a ordem nunca bloqueou o calendário."
+        opened_at:      { type: string, format: date-time }
+        opened_by:      { type: [string, "null"], format: uuid }
+        opened_by_name: { type: [string, "null"], description: "Nome do USUÁRIO — não é contato: não mascara nem grava `pii_access_log`." }
+        started_at:     { type: [string, "null"], format: date-time, description: "Preenchido por `/start`. Ordem concluída direto de `aberta` fica sem ele — e isso é verdade, não lacuna." }
+        closed_at:
+          type: [string, "null"]
+          format: date-time
+          description: "Nulo **se e somente se** a ordem não está encerrada. `cancelada` também tem instante: é quando se desistiu."
+        closed_by:      { type: [string, "null"], format: uuid }
+        closed_by_name: { type: [string, "null"] }
+        updated_at:     { type: string, format: date-time }
+        allowed_actions:
+          type: array
+          items: { $ref: "#/components/schemas/AcaoDaOrdem" }
+          description: |
+            As transições que a ordem aceita agora (`maintenance.AllowedActions`)
+            — `[]` quando encerrada. O painel desenha os botões a partir daqui:
+            uma segunda cópia da máquina de estados no front divergiria da
+            primeira no dia em que só uma mudasse.
+        editable:
+          type: string
+          enum: [tudo, so_custo, nada]
+          description: "O que `PUT`/`PATCH` e a rota do bloqueio aceitam no estado atual (`maintenance.EditableIn`): `tudo` aberta ou em andamento, `so_custo` concluída, `nada` cancelada."
+
+    OrdemDeManutencaoCriar:
+      type: object
+      additionalProperties: false
+      required: [unit_id, title]
+      properties:
+        unit_id:  { type: string, format: uuid }
+        room_id:  { type: [string, "null"], format: uuid, description: "Cômodo desta unidade. Com `issue_id`, omitido vem da avaria." }
+        item_id:  { type: [string, "null"], format: uuid, description: "Bem do catálogo. Com `issue_id`, omitido vem da avaria." }
+        issue_id: { type: [string, "null"], format: uuid, description: "A avaria que originou a ordem. Não muda depois de criada." }
+        title:       { type: string, minLength: 1, maxLength: 200, description: "Sem espaço nas pontas contando; só espaço é `422`." }
+        description: { type: [string, "null"], maxLength: 4000 }
+        priority:    { $ref: "#/components/schemas/PrioridadeDaOrdem" }
+        cost_cents:  { type: [integer, "null"], format: int64, minimum: 1 }
+        block:
+          oneOf:
+            - $ref: "#/components/schemas/PeriodoDoBloqueio"
+            - type: "null"
+          description: "Bloqueia a unidade no mesmo commit da ordem. Ausente ou `null` = sem bloqueio (dá para pedir depois, por `PUT /{id}/block`)."
+
+    OrdemDeManutencaoSubstituir:
+      type: object
+      additionalProperties: false
+      required: [title, priority]
+      description: |
+        Corpo do `PUT`: os campos de cadastro. Sem `unit_id`, `issue_id`,
+        `status`, `block` e instantes — ver a descrição da rota. Campo anulável
+        omitido vira `null`, como em todo `PUT`, **exceto** `room_id` e
+        `item_id` com avaria ligada, que ficam os da avaria.
+      properties:
+        room_id:     { type: [string, "null"], format: uuid }
+        item_id:     { type: [string, "null"], format: uuid }
+        title:       { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], maxLength: 4000 }
+        priority:    { $ref: "#/components/schemas/PrioridadeDaOrdem" }
+        cost_cents:  { type: [integer, "null"], format: int64, minimum: 1 }
+
+    OrdemDeManutencaoAtualizar:
+      type: object
+      additionalProperties: false
+      description: "Corpo do `PATCH` — campo ausente não muda nada; `null` limpa. `title` e `priority` não aceitam `null`."
+      properties:
+        room_id:     { type: [string, "null"], format: uuid }
+        item_id:     { type: [string, "null"], format: uuid }
+        title:       { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, "null"], maxLength: 4000 }
+        priority:    { $ref: "#/components/schemas/PrioridadeDaOrdem" }
+        cost_cents:  { type: [integer, "null"], format: int64, minimum: 1, description: "`null` apaga o custo — também em ordem concluída, que segue aceitando só este campo (a nota do serviço chega depois, e às vezes chega errada). Em ordem cancelada nada é editável." }
+
+    ConclusaoDaOrdem:
+      type: object
+      additionalProperties: false
+      description: "Corpo opcional de `POST /{id}/complete`."
+      properties:
+        cost_cents: { type: integer, format: int64, minimum: 1, description: "Grava o custo no mesmo UPDATE que conclui. Ausente não mexe no custo (que pode chegar depois, por `PATCH`)." }
 
 security:
   - bearerAuth: []

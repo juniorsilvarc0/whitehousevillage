@@ -10,6 +10,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/crm"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/inventario"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/manutencao"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/reservas"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/roles"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/site"
@@ -104,6 +105,10 @@ type Deps struct {
 	// recurso `inventory.goods`) — não confundir com Inventario, que é o
 	// cadastro comercial de propriedade, produtos e unidades.
 	Bens *bens.Handler
+
+	// Manutencao são as ordens de manutenção (rotas_manutencao.go, recurso
+	// `maintenance`): a ordem e o bloqueio de calendário que ela segura.
+	Manutencao *manutencao.Handler
 }
 
 // Rotas devolve a tabela completa da API v1, concatenando os grupos.
@@ -129,6 +134,7 @@ func Rotas(d Deps) []Rota {
 		rotasVitrine,
 		rotasSite,
 		rotasBens,
+		rotasManutencao,
 	} {
 		todas = append(todas, grupo(d)...)
 	}
