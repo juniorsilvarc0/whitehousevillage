@@ -470,10 +470,12 @@ func (f *qagFaxina) contato(t *testing.T, prop uuid.UUID) qagContato {
 	t.Helper()
 	s := qbSufixo()
 	c := qagContato{
-		Nome:      "Cliente da Agenda " + s,
-		Email:     "qa-agenda-" + s + "@exemplo.invalid",
-		Telefone:  qbTelefone(),
-		Documento: fmt.Sprintf("7%010d", int(uuid.New()[1])*1000003%1000000000),
+		Nome:     "Cliente da Agenda " + s,
+		Email:    "qa-agenda-" + s + "@exemplo.invalid",
+		Telefone: qbTelefone(),
+		// uuid.ID() (32 bits, ~4 bilhões de valores): um byte só dava 256
+		// documentos possíveis e o CI colidiu em contacts_doc_unico_idx.
+		Documento: fmt.Sprintf("7%010d", uuid.New().ID()),
 	}
 	if err := f.a.pool.QueryRow(f.a.ctx, `
 		INSERT INTO contacts (property_id, name, email, phone_e164, doc_type, doc_number)

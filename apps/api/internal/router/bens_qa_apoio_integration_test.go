@@ -633,10 +633,12 @@ func (f *qbFaxina) qbHospedeComEstadia(t *testing.T, propriedade uuid.UUID) qbHo
 	t.Helper()
 	s := qbSufixo()
 	h := qbHospede{
-		Nome:      "Hóspede Sigiloso " + s,
-		Email:     "sigiloso-" + s + "@exemplo.invalid",
-		Telefone:  qbTelefone(),
-		Documento: fmt.Sprintf("9%010d", int(uuid.New()[0])*1000003%1000000000),
+		Nome:     "Hóspede Sigiloso " + s,
+		Email:    "sigiloso-" + s + "@exemplo.invalid",
+		Telefone: qbTelefone(),
+		// uuid.ID() (32 bits): um byte só dava 256 documentos possíveis, e o
+		// CI colidiu em contacts_doc_unico_idx no apoio irmão da agenda.
+		Documento: fmt.Sprintf("9%010d", uuid.New().ID()),
 	}
 	var produto uuid.UUID
 	if err := f.a.pool.QueryRow(f.a.ctx, `
