@@ -208,6 +208,53 @@ quote → hold ──► confirmed ──► checked_in ──► checked_out �
 - Rooming list por reserva: hóspede titular + acompanhantes, com o mínimo de dado necessário.
 - LGPD: base legal por finalidade, `marketing_opt_in` separado, consentimento datado, exportação em JSON e **anonimização** que preserva os registros financeiros.
 
+### A rooming list
+
+Desenho de 13/10/2026 (F2-22). Contrato em `/reservations/{id}/guests` (tag Reservas da OpenAPI), regras puras em `internal/domain/guests`, schema em `reservation_guests` (`db.md` §5).
+
+**O que ela é.** Quem dorme na casa naquela reserva: o titular e os acompanhantes. A lista guarda o `contact_id` e nada mais da pessoa — nome, documento, telefone e e-mail são lidos da ficha a cada leitura, então corrigir a ficha corrige a lista, e a ficha anonimizada aparece sem documento nem canal. Ela sai com o mínimo que a recepção usa: nome, documento, telefone e e-mail; nascimento, cidade e anotação ficam na ficha.
+
+**O titular tem uma fonte só: `reservations.contact_id`.** A lista tem uma linha de titular (`is_lead_guest`), e essa linha é consequência, nunca causa. Até o F2-22 a troca de titular (`PATCH /reservations/{id}` com `contact_id`) mexia só na reserva, e a linha de titular ficava apontando para a pessoa de antes — o cartão "Cliente" do painel, que lê o titular da lista, mostrava nome e telefone de quem já não era o cliente (medido em 13/10/2026 pela API: depois do `PATCH`, o `/full` devolvia `contact_name` novo e, em `guests`, só o titular antigo com `is_lead_guest: true`). Com o F2-22 — as garantias do banco entram com a migration dele:
+
+| | Quem garante |
+|---|---|
+| no máximo um titular por reserva | o banco — índice único parcial `reservation_guests_titular_idx` |
+| a linha de titular é a do `contact_id` da reserva | o banco — FK adiada `reservation_guests_titular_fkey` sobre a coluna gerada `lead_contact_id`: trocar um sem o outro falha no COMMIT |
+| a mesma pessoa uma vez só na lista | o banco — chave primária `(reservation_id, contact_id)` |
+| ao menos um titular | a aplicação — a reserva nasce com a linha dele, a troca a substitui, e retirar o titular é recusado |
+
+**Trocar o titular** é editar a reserva, e a lista vem junto na mesma transação: o novo entra (ou é promovido, se já era acompanhante) e o anterior **sai** da lista — não vira acompanhante. Troca de titular é quase sempre correção (contato errado, homônimo, a agência no lugar do hóspede), e rebaixar a pessoa deixaria um estranho associado à estadia, lido com documento e telefone por quem abre a reserva. Se o anterior também vem, a recepção o acrescenta de volta.
+
+**Acrescentar** é por `contact_id` de uma ficha que já existe. A pessoa nova se cadastra antes, em `POST /contacts`: é ali que a deduplicação por documento (`contacts_doc_unico_idx`) e por telefone é traduzida em `409 CONTACT_DUPLICATE` com o `contact_id` de quem já existe; uma segunda porta de criação na lista teria de repetir validação, normalização e trilha, transformaria um CPF digitado num atalho para a ficha de um estranho e faria `reservations:editar` valer por `contacts:criar`.
+
+**Regras** (`guests.CheckAdd`, `CheckRemove`, `PlanEdit`, `Carry`):
+
+| Situação | Resposta |
+|---|---|
+| a lista só muda com a reserva de pé: `hold`, `confirmed`, `checked_in` | fora deles, `409 INVALID_STATE_TRANSITION`. Depois do check-out a lista é o registro de quem dormiu na casa; cancelada, vencida ou sem comparecimento, fica como estava |
+| a ficha não existe ou é de outra propriedade | `422 VALIDATION_ERROR` em `details.contact_id` — as duas são a mesma resposta |
+| a ficha foi anonimizada | `409 CONTACT_ANONYMIZED` — vale para acompanhante, titular novo e titular da reserva que nasce |
+| a pessoa já está na lista | `409 CODE_IN_USE` |
+| a lista já tem `guests_count` nomes | `422 GUEST_LIST_FULL`. O teto é o número **vendido**, não a capacidade: chegou mais gente, aumenta-se `guests_count` (validado contra a capacidade) e depois se acrescenta o nome |
+| reduzir `guests_count` abaixo dos nomes da lista | `422 VALIDATION_ERROR` em `details.guests_count` |
+| retirar o titular | `409 RESOURCE_IN_USE` — troca-se o titular pela reserva |
+| retirar quem não está na lista | `404 NOT_FOUND` |
+| remarcar | a reserva nova leva o titular e os acompanhantes; se não cabem no `guests_count` dela, `422 VALIDATION_ERROR` em `details.guests_count` antes de qualquer escrita |
+
+Os estados em que a lista se edita são exatamente os que impedem anonimizar quem está nela (`contatos.statusDeReservaViva`): ninguém anonimizado entra numa lista viva, e ninguém de uma lista viva é anonimizado. A escrita na lista lê a ficha em `FOR KEY SHARE` e a anonimização a trava em `FOR UPDATE`, então as duas não se cruzam; e toda escrita na lista trava a linha da reserva, a mesma da edição de `guests_count`, então dois acréscimos no último lugar não entram os dois.
+
+**Dado pessoal.** A lista é a leitura de UMA reserva e sai cheia — é a tela de trabalho da recepção no check-in. Por isso `GET /reservations/{id}/guests` e o `guests` do `/full` gravam uma linha de `pii_access_log` por hóspede exibido (`rooming_list`), com falha fechada; o `POST` grava uma, da pessoa acrescentada. `audit_log` registra que a lista mudou, por `contact_id`, nunca por nome ou documento; a linha do tempo ganha `guest_added`/`guest_removed` com `{contact_id}`. Nenhum evento de tempo real fala da lista nesta fase; se falar, carrega `reservation_id` e mais nada.
+
+**Permissão.** Recurso `reservations`: ler é `ver`, acrescentar e retirar é `editar`. Em `own`, `AND owner_id = <ator>` no SQL, e a lista de outra reserva é `404`, nunca `403`. O corretor semeado (`ver` e `criar`, `own`) lê a lista das reservas dele e não a edita — quem completa a lista é a recepção.
+
+#### Critérios de aceite
+- Acrescentar um acompanhante e ler a lista devolve o titular com `is_lead_guest: true` primeiro e o acompanhante depois; `select count(*) from pii_access_log` sobe uma linha por hóspede a cada leitura.
+- Gravar uma segunda linha de titular na mesma reserva, direto no banco, é recusado (`23505`); trocar `reservations.contact_id` direto no banco sem mexer na lista falha no COMMIT (`23503`).
+- Trocar o titular pelo `PATCH` deixa a lista com o titular novo marcado e sem o anterior, e o cartão "Cliente" do painel mostra o novo.
+- Com seis vendidos e seis nomes, o sétimo é `422 GUEST_LIST_FULL`; dois acréscimos simultâneos no último lugar: exatamente um entra.
+- Acrescentar à reserva `checked_out` é `409`; acrescentar ficha anonimizada é `409 CONTACT_ANONYMIZED`; ficha de outra propriedade é `422`.
+- O corretor lê a lista da reserva dele, recebe `404` (sem linha nova em `pii_access_log`) na de outro, e `403` ao tentar acrescentar.
+
 ---
 
 ## 7. CRM

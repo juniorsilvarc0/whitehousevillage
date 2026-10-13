@@ -72,8 +72,21 @@ semeada antes da agenda. Ainda em 13/10/2026, §9 e §16 foram conferidos com a 
 `agenda_das_reservas_confirmadas`, no mesmo tipo de Postgres descartável. Num banco novo, o seed
 `teste` e o `real` rodaram duas vezes cada, com as contagens de §16. Num banco semeado antes da
 agenda, seis reservas sem agenda passaram pela migration e pelo seed: três ganharam os eventos,
-três ficaram de fora, e a segunda execução criou zero. Para repetir a conferência de qualquer
-afirmação daqui:
+três ficaram de fora, e a segunda execução criou zero. Ainda em 13/10/2026, §5, §14, §15 e §16
+foram conferidos em `20261013180000` (a rooming list com um titular só, o da reserva), num PG
+17.11 descartável no host, só TCP (o Docker estava desligado). Coluna, constraints, índices e
+comentários foram lidos de `information_schema`/`pg_constraint`/`pg_indexes`. O reparo foi
+provado aplicando a migration pelo `cmd/migrate` sobre sete reservas plantadas num banco em
+`20261013120000`. O titular antigo saiu da lista, a reserva sem linha de titular ganhou a dela, o
+titular que estava como acompanhante foi promovido, a reserva já certa não mudou, e cada mudança
+deixou sua linha em `audit_log`. Os 12 casos do tech-lead passaram, 6 recusas (com o `SQLSTATE`
+e o nome da constraint conferidos) e 6 aceites, mais 5 variantes. Um `PATCH` da API antiga em voo
+durante a migration foi provado nas duas versões: sem a trava do início, a migration abortava com
+`23503`; com ela, esperou o `PATCH`, reparou a reserva e aplicou. O ciclo rodou `up` → `down 1` →
+`up` e `down -all` → `up`. O `pg_dump --schema-only` depois de `down 1` é idêntico ao de um banco
+que nunca viu a migration, e o de cada `up` é idêntico ao do primeiro. Os dois catálogos foram
+semeados duas vezes cada, num banco recém-migrado, com as contagens de §16. Para repetir a
+conferência de qualquer afirmação daqui:
 
 ```bash
 # quais tabelas existem
@@ -370,14 +383,18 @@ reservation_code_counters(year PK, last_number, updated_at)   -- numeração sem
 
 reservation_nights(reservation_id, night date, date_type, unit_type_id, price_cents)  -- PK(reservation_id, night)
 reservation_units(reservation_id, unit_id, stay_block_id, locked bool)                -- PK(reservation_id, unit_id)
-reservation_guests(reservation_id, contact_id, is_lead_guest)
+reservation_guests(reservation_id, contact_id, is_lead_guest, lead_contact_id)        -- PK(reservation_id, contact_id)
+             -- lead_contact_id: GERADA, contact_id na linha de titular e NULL na de acompanhante.
+             --   Desde 20261013180000, no máximo um titular, e ele é o contact_id da reserva
+             --   (subseção "A rooming list", abaixo). 4 colunas
 reservation_events(id, reservation_id, type, payload jsonb, actor_id, at)             -- append-only
 ```
 
 **`reservation_nights` é o que faz auditoria, financeiro e BI funcionarem.** Guarda a tarifa efetivamente aplicada em cada noite; mudar o tarifário amanhã não reescreve o passado, e ADR/RevPAR saem de um `GROUP BY`.
 
 Constraints **de `reservations`**: `UNIQUE(code)`, `CHECK (check_out > check_in)` e
-`CHECK (guests_count > 0)`. O teto do desconto — `CHECK (discount_pct BETWEEN 0 AND 100)`
+`CHECK (guests_count > 0)`, mais, desde `20261013180000`, `UNIQUE (id, contact_id)`, que só
+existe para ser alvo da FK do titular da lista ("A rooming list", abaixo). O teto do desconto — `CHECK (discount_pct BETWEEN 0 AND 100)`
 — mora em **`reservation_pricing`**, não aqui: `discount_pct` mudou de tabela em
 `20260826100000` junto com o resto do snapshot, e esta página seguiu atribuindo o
 `CHECK` a uma tabela que nem tem a coluna.
@@ -443,6 +460,106 @@ Desde `20260827140000` existe um **quinto** gatilho, e ele é de outra natureza:
 Violação sai como `23514` com `constraint = reservation_units_composicao_completa`, e a mensagem diz o código da reserva e quantas de quantas unidades ela ocupa.
 
 **Custo medido** (`pgbench`, inserção pura da Completa — reserva + 8 blocos + 8 unidades): 6,24 ms → 6,82 ms por venda, **+0,58 ms (+9,3%)**, ~72 µs por conferência. Sob os 50 pedidos simultâneos do critério de aceite da spec §5 a diferença some na medição (~22 tps nos dois casos): a venda já serializa na linha do ano de `reservation_code_counters` e na GiST da `EXCLUDE`, e 72 µs não aparecem ao lado disso.
+
+### A rooming list: um titular, e é o da reserva
+
+Entregue em `20261013180000` (F2-22). Contrato em `/reservations/{id}/guests` (tag Reservas da
+OpenAPI), regras puras em `internal/domain/guests`, desenho na spec §6 ("A rooming list").
+
+**O titular tem uma fonte só, `reservations.contact_id`.** A linha `is_lead_guest` de
+`reservation_guests` é a projeção dele. Ela existe para a lista sair inteira numa leitura, com o
+titular primeiro, e é dela que o cartão "Cliente" do painel lê nome e telefone. Até esta migration
+nada no banco ligava as duas colunas. A tabela aceitava qualquer número de titulares, de qualquer
+pessoa, e o `PATCH /reservations/{id}` que trocava o `contact_id` deixava a linha de titular na
+pessoa de antes. Medido pelo tech-lead em 13/10/2026: depois do `PATCH`, o `/full` devolvia o
+`contact_name` novo e, em `guests`, só o titular antigo com `is_lead_guest: true`.
+
+| Regra | Quem garante |
+|---|---|
+| no máximo um titular por reserva | o banco: `reservation_guests_titular_idx`, `UNIQUE (reservation_id) WHERE is_lead_guest`. Imediato: `23505` na instrução que erra |
+| a linha de titular é a do `contact_id` da reserva | o banco: `reservation_guests_titular_fkey`, FK composta `(reservation_id, lead_contact_id) → reservations (id, contact_id)`, `ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED`. `23503` no COMMIT |
+| a mesma pessoa uma vez só na lista | o banco: a chave primária `(reservation_id, contact_id)` |
+| ao menos um titular | a aplicação: a reserva nasce com a linha dele (`InserirTitular`), a troca a substitui, e `guests.CheckRemove` recusa retirá-la |
+
+**A coluna gerada é o que permite dizer isso com uma FK.** `lead_contact_id uuid GENERATED ALWAYS
+AS (CASE WHEN is_lead_guest THEN contact_id END) STORED` vale o `contact_id` na linha de titular e
+`NULL` na de acompanhante. Em `MATCH SIMPLE`, uma coluna nula basta para a FK não conferir a linha,
+então o acompanhante fica fora dela por construção. Ninguém escreve a coluna: `INSERT` ou `UPDATE`
+com valor nela sai `428C9`. O alvo é `reservations_id_contact_id_key`, `UNIQUE (id, contact_id)`.
+Ela não restringe nada, porque `id` já é a PK, e existe para ser alvo, como
+`brokers_id_user_id_key` (§2) e `unit_rooms_id_unit_id_key` (§11). Não pode ser adiável, porque o
+Postgres recusa FK para `UNIQUE` adiável (`cannot use a deferrable unique constraint for referenced
+table`). Pela régua de colunas, `reservation_guests` foi de 3 para 4, e `reservations` continua
+com 23. O bloco `DO` da migration confere as duas.
+
+**Adiada, porque a troca escreve em duas tabelas.** Entre a escrita na lista e a escrita na
+reserva as duas discordam, e esse estado intermediário é normal. O que não pode é comitar assim.
+Com a FK adiada, a ordem entre a lista e a reserva é livre dentro da transação. `ON DELETE
+CASCADE` acompanha a FK simples de `reservation_id`: apagar a reserva leva a lista. A cascata é
+imediata, porque ação referencial que não é `NO ACTION` não se adia. `ON UPDATE` é o `NO ACTION`
+padrão, que é a própria conferência adiada da troca. `CASCADE` ali reescreveria a lista sozinho,
+promovendo uma linha que a regra manda apagar, e o Postgres o recusa sobre coluna gerada (medido:
+`invalid ON UPDATE action for foreign key constraint containing generated column`).
+
+**A troca de titular, como a aplicação a escreve** (`guests.Plan`), na transação da edição:
+
+1. apaga a linha do titular anterior;
+2. grava a do novo: promove a de acompanhante, ou insere;
+3. atualiza `reservations.contact_id`.
+
+A ordem 1 → 2 é obrigatória, porque o índice é imediato: promover antes de apagar levanta `23505`
+em `reservation_guests_titular_idx`. O passo 3 pode vir antes ou depois dos outros dois, porque a
+FK só confere no COMMIT. Trocar só um dos lados, a reserva sem a lista ou a lista sem a reserva,
+falha no COMMIT com `23503` em `reservation_guests_titular_fkey`. `SET CONSTRAINTS
+reservation_guests_titular_fkey IMMEDIATE` no meio da troca antecipa o mesmo `23503`. O titular
+anterior **sai** da lista e não vira acompanhante (spec §6). Pela API, com a sincronização de
+`guests.PlanEdit` no service, nenhum dos dois erros aparece. Se aparecer, alguém escreveu fora do
+plano.
+
+**O que o banco aceita, de propósito.** Passam a reserva sem linha nenhuma (as fixtures que criam
+reserva por SQL), o acompanhante de qualquer pessoa e a retirada do titular. Para o banco garantir
+"ao menos um titular", seria preciso a FK inversa, de `reservations` para a linha de titular. Toda
+reserva teria de nascer com a lista na mesma transação, e as fixtures sem lista quebrariam. Quem
+recusa é `guests.CheckRemove` (`409 RESOURCE_IN_USE`).
+
+**Trocar o titular passou a ser atualização de chave.** Com `contact_id` numa `UNIQUE` que é alvo
+de FK, o `UPDATE` que o troca toma `FOR UPDATE` na linha da reserva, e não mais `FOR NO KEY
+UPDATE`. Por isso ele espera quem segura `FOR KEY SHARE` nela, que são as FKs filhas
+(`reservation_events`, `reservation_nights`, `stay_blocks`…) ao inserir. Medido com uma inserção
+em `reservation_events` aberta na mesma reserva: `UPDATE ... SET contact_id` sai `55P03` com
+`lock_timeout` de 500 ms, e sem a migration passava. `SET status` e `SET notes` continuam sem
+esperar. Na API isso não muda nada, porque a edição já trava a reserva com `FOR UPDATE OF r`
+(`TravarReserva`) antes de escrever. Vale para quem escrever uma troca de titular fora dela.
+
+**O índice da FK é o prefixo da chave primária.** Pelo lado da lista (ao apagar a reserva ou
+trocar o titular), a conferência é `reservation_id = $1 AND lead_contact_id = $2`. A PK
+`(reservation_id, contact_id)` a resolve pelo prefixo, filtrando a outra coluna entre os poucos
+nomes de uma lista. Medido com plano genérico e `enable_seqscan = off`: `Index Scan using
+reservation_guests_pkey … Index Cond: (reservation_id = $1) Filter: ($2 = lead_contact_id)`, na
+conferência e no `DELETE` da cascata. Pelo lado da reserva, o plano usa a `UNIQUE` nova (`Index
+Cond: ((id = $1) AND (contact_id = $2))`). A consulta de §14 conta a FK como sem índice, e é falso
+positivo.
+
+**O reparo da migration.** A FK valida as linhas que já existem, e todo banco que tinha visto uma
+troca de titular guardava a linha na pessoa de antes. Antes de criar as constraints, a migration
+mexeu em toda reserva, em qualquer estado:
+
+- **retirou** a linha de titular que não era o `contact_id` da reserva
+  (`reservation_guests.titular_antigo_retirado`);
+- **incluiu** a linha do titular onde ela faltava (`reservation_guests.titular_incluido`);
+- **promoveu** o titular que estava como acompanhante (`reservation_guests.titular_promovido`).
+
+Cada mudança é uma linha em `audit_log`: `entity = 'reservation_guests'`, `entity_id` = a reserva,
+`{code, contact_id, is_lead_guest}` em `before`/`after`, ator nulo e `request_id =
+'migration:20261013180000'`. O `cmd/migrate` mostra um `WARNING` com as contagens e até dez
+códigos por grupo. A migration começa com `LOCK TABLE reservations, reservation_guests IN ACCESS
+EXCLUSIVE MODE`. Num redeploy a API antiga continua no ar durante o `migrate`, e um `PATCH` que
+trocasse o titular entre o reparo e a validação da FK comitaria no schema velho. Medido com o
+`PATCH` em voo: sem a trava, a migration aborta com `23503` e o deploy para; com a trava, ela
+espera o `PATCH`, repara a reserva e aplica. As duas tabelas iriam para `ACCESS EXCLUSIVE` de
+qualquer jeito, pelo `ADD COLUMN` e pela `UNIQUE`. O `down` derruba a FK, a `UNIQUE`, a coluna e o
+índice, e **não** desfaz o reparo. O critério é o de `20261002180000`: os titulares retirados eram
+quem já não é o cliente, e recolocá-los reabriria o defeito. Eles ficam na trilha.
 
 ---
 
@@ -1496,6 +1613,8 @@ inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta d
 | `reservation_pricing` | `PRIMARY KEY (reservation_id)` **é** a FK — é isto que faz o 1:1 · `CHECK (discount_cents <= subtotal_cents)` · `CHECK (discount_pct BETWEEN 0 AND 100)` — teto de sanidade; a alçada comercial é política versionada, não constraint (§5) |
 | `reservation_units` | `(unit_id)` e parcial em `(stay_block_id)` — a PK começa por `reservation_id` e não serve a busca pela unidade |
 | `reservation_guests` | `(contact_id)` — mesma razão |
+| `reservation_guests` | `reservation_guests_titular_idx` `UNIQUE (reservation_id) WHERE is_lead_guest` — no máximo um titular por reserva, imediato (`23505`) · `reservation_guests_titular_fkey` `(reservation_id, lead_contact_id) → reservations(id, contact_id) ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED`, sobre a coluna gerada `lead_contact_id` — a linha de titular é a do `contact_id` da reserva (`23503` no COMMIT). "Ao menos um titular" é da aplicação (§5) |
+| `reservations` | `reservations_id_contact_id_key` `UNIQUE (id, contact_id)` — só alvo da FK do titular. Com ela, trocar o `contact_id` passa a ser atualização de chave (§5) |
 | `reservation_nights` | `(unit_type_id, night)` — ADR/RevPAR saem daqui |
 | `reservation_code_counters` | `PRIMARY KEY (year)` — é a linha em que a numeração serializa |
 | `idempotency_keys` | `(created_at)` — a varredura que expira chaves |
@@ -1543,10 +1662,11 @@ inteiro) e ao perfil de gestão `usuario`; **não** ao `corretor` nem à conta d
 | `agenda_blocks` | `agenda_blocks_periodo` (`ends_at > starts_at`) · `reason` não vazio e até 200 caracteres · gist `(property_id, tstzrange(starts_at, ends_at, '[)'))`, que cobre também a FK · `(created_by) WHERE created_by IS NOT NULL`. Sem `EXCLUDE`: bloqueio de horário sobreposto é aviso, não recusa |
 | quase todas | índice em toda FK — **não é "todas"**, e a diferença é medível |
 
-A linha anterior dizia `todas`. A consulta abaixo devolve hoje **17** chaves
-estrangeiras sem índice que comece por elas (reconferido em `20261013120000`: a mesma lista
-de antes. As nove FKs de `maintenance_orders`, as duas compostas inclusive, têm índice que
-começa pelas colunas delas, na ordem da FK, e as onze das três tabelas da agenda também):
+A linha anterior dizia `todas`. A consulta abaixo devolve hoje **18** chaves
+estrangeiras sem índice que comece por elas. Em `20261013120000` eram 17: as nove FKs de
+`maintenance_orders`, as duas compostas inclusive, têm índice que começa pelas colunas delas, na
+ordem da FK, e as onze das três tabelas da agenda também. A 18ª é
+`reservation_guests_titular_fkey` (`20261013180000`), e é falso positivo (abaixo):
 
 ```sql
 SELECT c.conrelid::regclass, c.conname
@@ -1584,7 +1704,13 @@ Nem toda uma delas é dívida. Quatro grupos, e só o terceiro custa alguma cois
   prática, único (a FK composta somada a `UNIQUE (brokers.user_id)` impede duas contas
   no mesmo cadastro). Medido com plano genérico e `enable_seqscan = off`:
   `Index Scan using users_broker_idx … Index Cond: (broker_id = $1) Filter: (id = $2)`.
-  Um índice `(broker_id, id)` ao lado seria um segundo índice para a mesma busca.
+  Um índice `(broker_id, id)` ao lado seria um segundo índice para a mesma busca. O mesmo vale
+  para `reservation_guests_titular_fkey` (`(reservation_id, lead_contact_id)`, desde
+  `20261013180000`). A chave primária `(reservation_id, contact_id)` resolve a conferência pelo
+  prefixo, e a lista de uma reserva tem poucos nomes. Medido do mesmo jeito: `Index Scan using
+  reservation_guests_pkey … Index Cond: (reservation_id = $1) Filter: ($2 = lead_contact_id)`, na
+  conferência e no `DELETE` da cascata (§5). Um índice `(reservation_id, lead_contact_id)` seria o
+  terceiro numa tabela de quatro colunas, para a mesma busca.
 
 O erro oposto também existe, e a consulta não o vê: ela não lê o **predicado** do índice.
 `inventory_issues.property_id` e `maintenance_orders.property_id` contam como cobertas, mas o
@@ -1607,7 +1733,7 @@ escrita comprado no escuro.
 - Toda `up` tem `down` correspondente; o CI roda `up` e depois `down` até zero num Postgres efêmero.
 - **Só o agente `db-migrations` cria migration.** Nome por timestamp evita a colisão clássica de dois agentes criando `000007_*`.
 
-Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261013120000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
+Entregues até aqui — a última é a versão que o binário exige em `/readyz` (`router.SchemaVersionEsperada`, hoje `20261013180000`), e por isso ela sobe **no mesmo commit** da migration; `TestSchemaVersionEsperadaAcompanhaAUltimaMigration` reprova se divergirem:
 
 | Migration | O que trouxe |
 |---|---|
@@ -1632,6 +1758,7 @@ Entregues até aqui — a última é a versão que o binário exige em `/readyz`
 | `20261007213000_codigo_do_comodo` | `unit_rooms.code` (`text NOT NULL`): a identidade estável do cômodo, que a API não deixa editar e que a importação do levantamento fotográfico e a cópia de inventário entre unidades usam como chave (§11). `unit_rooms_code_formato` (`CHECK` do `pattern` do contrato), `unit_rooms_code_tamanho` (`CHECK (length(code) <= 60)`) e `unit_rooms_code_unico` (`UNIQUE (unit_id, code)`). Backfill das linhas existentes, antes do `SET NOT NULL`, pela regra de derivação que a API repete (escrita na migration e em §11): sem acento por tabela explícita (`translate`, sem extensão nova e sem `lower()`), hífen no lugar de cada sequência fora de `[a-z0-9]`, corte em 60, `comodo` para nome que vira vazio e `-2`, `-3`… em colisão na unidade, em ordem de `(created_at, id)`. A tabela vai de 9 para 10 colunas, conferida pelo bloco `DO` da régua. O `down` derruba as três constraints e a coluna sem deixar sobra e é **lossy**: o `up` seguinte re-deriva os códigos do `name` atual |
 | `20261009100000_ordens_de_manutencao` | `maintenance_orders` (18 colunas, §11): a ordem de manutenção de uma unidade, com cômodo, bem e avaria opcionais, prioridade, estado, custo e o bloqueio de calendário em `stay_block_id` (`ON DELETE RESTRICT`: liberar é `cancelled`). O banco garante que o cômodo é da unidade (FK composta `maintenance_orders_room_id_fkey`), que a avaria traz cômodo e bem dela (`CHECK` + FK composta `maintenance_orders_issue_id_fkey`), no máximo uma ordem não encerrada por avaria (`maintenance_orders_avaria_aberta_idx`, o `409 MAINTENANCE_ORDER_ALREADY_OPEN`), um bloqueio por ordem (`maintenance_orders_bloqueio_idx`) e os estados impossíveis de `status`/`started_at`/`closed_at`/`closed_by`. Os alvos das FKs compostas são duas `UNIQUE` novas, `unit_rooms_id_unit_id_key` e `inventory_issues_id_room_id_item_id_key`. Bloco `DO` da régua. Sem gatilho de tempo real (o de `stay_blocks` já avisa o mapa). O recurso RBAC `maintenance` entra pelo seed, não pela migration. O `down` derruba a tabela e as duas `UNIQUE` sem deixar sobra e é **lossy**: as ordens somem, e as linhas de `stay_blocks` que elas criaram ficam como bloqueio operacional comum |
 | `20261013120000_agenda_operacional` | a agenda operacional (§9, F2-19), três tabelas. `agenda_settings` (10 colunas) guarda os horários da casa, uma linha por propriedade, com os valores **provisórios** da decisão 12 nos DEFAULTs; a migration cria a linha de toda propriedade existente. `agenda_events` (20 colunas) tem duas origens: `reservation` (sem unidade, titular nem título) e `manual`. O banco garante no máximo um check-in, um check-out e uma limpeza automáticos por reserva (`agenda_events_da_reserva_idx`), nenhum par de manuais agendados na mesma unidade ao mesmo tempo (`EXCLUDE agenda_events_unidade_sem_sobreposicao`), a forma de cada origem e os estados impossíveis. `agenda_blocks` (9 colunas) é o bloqueio de horário da operação, sem `EXCLUDE`. `manutencao` e `bloqueio` de unidade não são gravados: são lidos de `stay_blocks`. Bloco `DO` da régua, sem gatilho. O recurso RBAC `agenda` já existia; as quatro ações do corretor em `own` vêm pelo seed. O `down` derruba as três sem deixar sobra e é **lossy**: eventos, bloqueios e os horários confirmados pelo dono somem, e o `up` seguinte volta aos provisórios |
+| `20261013180000_lista_de_hospedes_um_titular` | a rooming list com um titular só, e ele é o da reserva (§5, F2-22). `reservation_guests_titular_idx` (`UNIQUE (reservation_id) WHERE is_lead_guest`, imediato) e `reservation_guests_titular_fkey`, FK composta **adiada** de `(reservation_id, lead_contact_id)` para `reservations (id, contact_id)`, `ON DELETE CASCADE`. `lead_contact_id` é coluna gerada (`contact_id` na linha de titular, `NULL` na de acompanhante), e o alvo é a `UNIQUE` nova `reservations_id_contact_id_key`. `reservation_guests` vai de 3 para 4 colunas, `reservations` fica com 23, e o bloco `DO` da régua confere as duas. Começa com `LOCK TABLE` nas duas tabelas, porque a API antiga continua no ar durante o `migrate`. Repara, com linha em `audit_log` e `RAISE WARNING`, o titular antigo que ficou na lista (retirado), o que faltava (incluído) e o que estava como acompanhante (promovido). "Ao menos um titular" fica com a aplicação. O `down` derruba a FK, a `UNIQUE`, a coluna e o índice sem deixar sobra, e não desfaz o reparo, que fica na trilha |
 
 ## 16. Seeds
 
@@ -1665,7 +1792,7 @@ O de teste é **congelado**: é byte a byte o que o seed semeava até 03/10/2026
 
 **Um banco nunca fica com os dois catálogos vendendo.** Semear um catálogo **desativa** (`active = false`; nunca apaga — unidade tem histórico em `stay_blocks`) as unidades, os produtos, os feriados e os períodos **do outro catálogo** que não existem no escolhido; o que a gestão cadastrou pela tela não é de catálogo nenhum e não é tocado. E reativa os próprios, que o outro tinha desativado. Para os produtos do catálogo escolhido, a composição, as tarifas, os mínimos por produto e os pacotes ficam **exatamente** iguais à lista: o que falta entra e o que sobra é **removido** — sem isso a Completa real herdaria a `COB-01` e as diárias da Completa de teste. Antes de mexer, o seed confere venda viva (`hold`, `confirmed`, `checked_in`): se a troca mudasse a composição ou o `consumes` de um produto com reserva de pé, ele aborta com a mensagem nomeando produto, unidades e reservas (`o catálogo não pode ser trocado com venda viva: a composição mudaria — completa perderia AP-04, … (reservas: WH-2026-0001)`), e a transação inteira volta. Os gatilhos adiados do §5 reprovariam o mesmo no `COMMIT`, mas falando de invariante, não de seed.
 
-Contagens num banco recém-migrado, **medidas em 13/10/2026** em `20261013120000`, as duas num banco limpo. Catálogo `teste`: primeira execução `previstas 331, criadas 330, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 331`. Catálogo `real`: primeira `previstas 457, criadas 456, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 457`. Numa instalação já semeada antes da agenda (banco em `20261009100000` semeado pelo seed anterior, depois migrado), a primeira execução nova dá `criadas 2`: `agenda:editar` e `agenda:excluir` do corretor. A linha de `agenda_settings` já foi criada pela migration e conta como inalterada. A segunda volta a `criadas 0, atualizadas 0`. Se essa instalação tiver reservas confirmadas com saída de hoje em diante, a primeira execução soma três eventos por reserva, em `previstas` e em `criadas`: medido com três reservas assim, `previstas 466, criadas 11` (os 9 eventos e as 2 células); a segunda volta a `previstas 457, criadas 0`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`; 310 e 436 até `inventory.goods` (07/10/2026), que soma 9: o recurso e as quatro ações para `admin` e para `usuario`; 319 e 445 até `maintenance` (09/10/2026), que soma os mesmos 9; e 328 e 454 até a agenda (13/10/2026), que soma 3: as duas células do corretor e a linha de configuração.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
+Contagens num banco recém-migrado, **medidas em 13/10/2026** em `20261013120000`, as duas num banco limpo, e reconferidas, iguais, em `20261013180000` (a rooming list não mexe no seed: o seed não cria reserva). Catálogo `teste`: primeira execução `previstas 331, criadas 330, atualizadas 1` (o vínculo do corretor é `UPDATE` numa conta que a etapa anterior criou); segunda `criadas 0, atualizadas 0, inalteradas 331`. Catálogo `real`: primeira `previstas 457, criadas 456, atualizadas 1`; segunda `criadas 0, atualizadas 0, inalteradas 457`. Numa instalação já semeada antes da agenda (banco em `20261009100000` semeado pelo seed anterior, depois migrado), a primeira execução nova dá `criadas 2`: `agenda:editar` e `agenda:excluir` do corretor. A linha de `agenda_settings` já foi criada pela migration e conta como inalterada. A segunda volta a `criadas 0, atualizadas 0`. Se essa instalação tiver reservas confirmadas com saída de hoje em diante, a primeira execução soma três eventos por reserva, em `previstas` e em `criadas`: medido com três reservas assim, `previstas 466, criadas 11` (os 9 eventos e as 2 células); a segunda volta a `previstas 457, criadas 0`. (Eram 301 e 427 até a conta da vitrine, que soma 4: o perfil, as duas células e o usuário; 305 e 431 até o recurso `site`, que soma 5: o recurso e `ver`/`editar` para `admin` e `usuario`; 310 e 436 até `inventory.goods` (07/10/2026), que soma 9: o recurso e as quatro ações para `admin` e para `usuario`; 319 e 445 até `maintenance` (09/10/2026), que soma os mesmos 9; e 328 e 454 até a agenda (13/10/2026), que soma 3: as duas células do corretor e a linha de configuração.) Alternar no mesmo banco (`real` → `teste` → `real`) passa sem erro; o log de cada etapa traz também `desativadas` e `removidas`, que voltam a zero na execução seguinte.
 
 **A conta de serviço da vitrine** (etapas `perfil_da_vitrine` e `conta_da_vitrine`, `cmd/seed/vitrine.go`). `POST /public/holds` (B1 de `docs/unificacao-site-crm.md`) roda o **mesmo** serviço de reserva e de contato do painel, e esses serviços exigem um usuário autenticado no contexto — dele saem escopo, `owner_id`/`created_by` e auditoria. Em vez de abrir um atalho "sem usuário" no domínio, o handler público carrega esta conta com `CarregarSessao` e chama o serviço como qualquer ator; o que o site grava aparece como "Site (vitrine)" na trilha.
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/commission"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/guests"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/agenda"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/modules/disponibilidade"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
@@ -160,6 +161,7 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (ReservaCompleta, 
 	if completa.Hospedes, err = s.repo.HospedesDe(ctx, id); err != nil {
 		return completa, err
 	}
+	completa.HospedesEditaveis = listaEditavel(reserva.Status)
 	if completa.Timeline, err = s.repo.TimelineDe(ctx, id); err != nil {
 		return completa, err
 	}
@@ -173,21 +175,17 @@ func (s *Servico) Completa(ctx context.Context, id uuid.UUID) (ReservaCompleta, 
 		}
 	}
 
-	// A rooming list sai com nome e telefone CHEIOS (é de onde a recepção liga
-	// para quem vai chegar), e por isso grava `pii_access_log`: UMA linha por
-	// hóspede exibido, `reason: rooming_list`, numa instrução só. A pergunta
-	// da LGPD — "quem viu o meu número?" — é por pessoa: abrir a reserva de um
-	// evento da Completa grava até 24 linhas, e é o custo certo.
+	// A rooming list sai com nome, documento e telefone CHEIOS (é de onde a
+	// recepção liga para quem vai chegar e confere quem entra), e por isso
+	// grava `pii_access_log`: UMA linha por hóspede exibido, `reason:
+	// rooming_list`, numa instrução só — a mesma gravação de GET
+	// /reservations/{id}/guests (service_hospedes.go).
 	//
 	// Por último, depois de toda leitura que pode falhar, e com falha FECHADA:
 	// se o registro não entra, a tela não sai. Reserva fora do escopo já
 	// respondeu 404 lá em cima, sem gravar nada; reserva sem hóspede não
 	// exibiu ninguém e não grava.
-	exibidos := make([]uuid.UUID, 0, len(completa.Hospedes))
-	for _, h := range completa.Hospedes {
-		exibidos = append(exibidos, h.ContactID)
-	}
-	if err := pii.RegistrarVarios(ctx, s.repo.pool, "contacts", exibidos, pii.MotivoListaDeHospedes); err != nil {
+	if err := s.registrarHospedesExibidos(ctx, completa.Hospedes); err != nil {
 		return ReservaCompleta{}, err
 	}
 	return completa, nil
@@ -248,7 +246,7 @@ func (s *Servico) Criar(ctx context.Context, chave string, corpo ReservaCriar) (
 		saida = Resultado{Status: http.StatusCreated, Corpo: env, Local: localDaReserva(reserva.ID)}
 		return nil
 	})
-	return saida, err
+	return saida, defeitoDaLista(err)
 }
 
 // emitir é o miolo compartilhado por POST /reservations e POST /reschedule:
@@ -268,8 +266,21 @@ func (s *Servico) emitir(ctx context.Context, u *auth.Usuario, corpo ReservaCria
 	if err != nil {
 		return Reserva{}, 0, err
 	}
-	if err := s.repo.ConferirContato(ctx, u.PropertyID, corpo.ContactID); err != nil {
+	// O titular é o primeiro hóspede da lista — a reserva nasce com a linha
+	// dele, mais abaixo —, e por isso a regra de entrada da lista vale aqui
+	// (`guests.Admit`, F2-22): ficha anonimizada não vira titular, 409
+	// CONTACT_ANONYMIZED, inclusive pelo `/win` do CRM e pela remarcação, que
+	// passam por aqui. Até o F2-22 a criação respondia 201. Ficha inexistente
+	// ou de outra casa continua 404, como sempre foi nesta rota.
+	titular, err := s.repo.FichaDoContato(ctx, u.PropertyID, corpo.ContactID)
+	if err != nil {
 		return Reserva{}, 0, err
+	}
+	if !titular.Found {
+		return Reserva{}, 0, apperr.NotFound("Contato")
+	}
+	if err := guests.Admit(titular); err != nil {
+		return Reserva{}, 0, traduzirRegraDaLista(err)
 	}
 
 	// O orçamento vem do motor, pelo módulo de disponibilidade. Nenhum centavo
@@ -530,22 +541,39 @@ func (s *Servico) atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtua
 
 	var out Reserva
 	err = s.tx.Do(ctx, func(ctx context.Context) error {
+		// A trava da reserva é também a trava da lista de hóspedes: toda
+		// escrita na lista e em `guests_count` passa por esta mesma linha.
 		e, err := s.repo.TravarReserva(ctx, u.PropertyID, id, somenteMinhas(ctx, auth.AcaoEditar), u.ID)
 		if err != nil {
 			return err
 		}
 
+		// O titular pedido. Reenviar o de sempre não é troca (o formulário que
+		// manda a reserva inteira carrega o titular de sempre) e nem lê a
+		// ficha: o titular gravado existe e é desta casa. A TROCA lê a ficha
+		// nova em `FOR KEY SHARE`, com a flag de anonimizado; inexistente ou
+		// de outra casa continua o 404 de sempre desta rota.
 		contato := e.ContactID
+		var titular *guests.Contact[uuid.UUID]
 		if v, ok := corpo.ContactID.Definido(); ok {
 			contato = v
-			if err := s.repo.ConferirContato(ctx, u.PropertyID, v); err != nil {
-				return err
+			pedido := guests.Contact[uuid.UUID]{ID: v, Found: true}
+			if v != e.ContactID {
+				if pedido, err = s.repo.FichaDoContato(ctx, u.PropertyID, v); err != nil {
+					return err
+				}
+				if !pedido.Found {
+					return apperr.NotFound("Contato")
+				}
 			}
+			titular = &pedido
 		}
 
 		hospedes := e.Hospedes
+		var hospedesPedidos *int
 		if v, ok := corpo.Hospedes.Definido(); ok {
 			hospedes = v
+			hospedesPedidos = &v
 		}
 		// A capacidade é do PRODUTO e é declarada, nunca somada da composição.
 		// Sem esta checagem, um PATCH colocaria 40 pessoas na Completa (que
@@ -554,6 +582,22 @@ func (s *Servico) atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtua
 			return apperr.CapacityExceeded.WithDetails(map[string]any{
 				"capacity": e.Capacidade, "requested": hospedes,
 			})
+		}
+
+		// O que a edição faz com a lista de hóspedes (F2-22) é decisão de
+		// `guests.PlanEdit`: a troca de titular só com a reserva de pé e nunca
+		// para ficha anonimizada; o número de hóspedes nunca abaixo dos nomes
+		// da lista. `GuestsCount` só vai quando veio no corpo — reenviar o
+		// número de sempre não é mudança.
+		lista, err := s.repo.ListaDaReserva(ctx, id)
+		if err != nil {
+			return err
+		}
+		plano, err := guests.PlanEdit(reservaDaLista(e, lista), guests.Edit[uuid.UUID]{
+			Lead: titular, GuestsCount: hospedesPedidos,
+		})
+		if err != nil {
+			return traduzirRegraDaLista(err)
 		}
 
 		corretor, err := s.resolverCorretor(ctx, u, auth.AcaoEditar, verbo, corpo.BrokerID, e.BrokerID, e.Status)
@@ -572,6 +616,23 @@ func (s *Servico) atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtua
 		origem := e.Origem
 		if v, ok := corpo.Origem.Definido(); ok {
 			origem = v
+		}
+
+		// A lista acompanha a troca de titular NA MESMA TRANSAÇÃO, na ordem
+		// que o plano exige: sai a linha do titular anterior (ele não vira
+		// acompanhante), entra — ou é promovida — a do novo, e só então o
+		// `contact_id` da reserva muda. A FK adiada
+		// `reservation_guests_titular_fkey` confere no COMMIT que as duas
+		// pontas batem; trocar uma sem a outra falha inteiro.
+		if plano.LeadChanged {
+			if plano.Remove != nil {
+				if err := s.repo.RetirarTitularAnterior(ctx, id, *plano.Remove); err != nil {
+					return err
+				}
+			}
+			if err := s.repo.InserirTitular(ctx, id, contato); err != nil {
+				return err
+			}
 		}
 
 		if err := s.repo.AtualizarCadastro(ctx, id, contato, corretor, hospedes, isEvento, tipoEvento, origem, notas); err != nil {
@@ -597,7 +658,10 @@ func (s *Servico) atualizar(ctx context.Context, id uuid.UUID, corpo ReservaAtua
 		out, err = s.repo.Buscar(ctx, u.PropertyID, id, false, u.ID)
 		return err
 	})
-	return out, err
+	if err != nil {
+		return Reserva{}, defeitoDaLista(err)
+	}
+	return out, nil
 }
 
 // Descartar apaga a reserva que nunca existiu comercialmente.

@@ -59,6 +59,19 @@ export type CodigoDeErro =
   // jogaria em `INTERNAL`, e a edição de um evento já concluído diria "erro no
   // servidor" em vez de "agora só a anotação muda", perdendo `details.editable`.
   | "AGENDA_EVENT_CLOSED"
+  // Cadastro de contatos (spec §6). Os dois são 409 e viviam num dicionário à
+  // parte (`lib/contatos/codigos.ts`) enquanto este espelho não os conhecia.
+  // Entraram com a rooming list (F2-22), que é a segunda tela a precisar deles:
+  // o "Cadastrar pessoa" do balcão segue com o `details.contact_id` do
+  // `CONTACT_DUPLICATE`, e acrescentar ficha anonimizada é `CONTACT_ANONYMIZED`.
+  // Sem eles aqui, os dois chegariam à tela da reserva como `INTERNAL`.
+  | "CONTACT_DUPLICATE"
+  | "CONTACT_ANONYMIZED"
+  // Rooming list (F2-22). É 422, e não 409, como `CAPACITY_EXCEEDED`: a lista
+  // já nomeia `guests_count` pessoas. Sem ele aqui viraria `VALIDATION_ERROR`, e
+  // a tela perderia o que `details` traz (`guests_count`, `listed`, `capacity`)
+  // para oferecer o aumento do número de hóspedes.
+  | "GUEST_LIST_FULL"
   | "INTERNAL"
   // Fora do contrato: a API não respondeu (caiu, DNS, timeout). É do BFF, não
   // do servidor, e por isso não pode se disfarçar de INTERNAL — a tela precisa
@@ -76,6 +89,8 @@ const CONHECIDOS: readonly string[] = [
   "COUNT_ALREADY_OPEN", "COUNT_CLOSED", "COUNT_HAS_PENDING_LINES",
   "MAINTENANCE_ORDER_CLOSED", "MAINTENANCE_ORDER_ALREADY_OPEN",
   "AGENDA_EVENT_CLOSED",
+  "CONTACT_DUPLICATE", "CONTACT_ANONYMIZED",
+  "GUEST_LIST_FULL",
   "INTERNAL",
 ];
 

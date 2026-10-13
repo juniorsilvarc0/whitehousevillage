@@ -46,6 +46,16 @@ func rotasReservas(d Deps) []Rota {
 
 		{Metodo: http.MethodGet, Path: "/reservations/{id}/full", Acesso: AcessoPermissao, Recurso: rec, Acao: auth.AcaoVer, Handler: d.Reservas.Completa},
 
+		// ───────── Rooming list (F2-22) ─────────
+		// Sub-recurso de vínculo, como `/unit-types/{id}/members`: o item é o par
+		// (reserva, pessoa), sem atributo próprio para PUT/PATCH — a pessoa se
+		// edita em /contacts e o titular se troca pelo PATCH da reserva. Ler é
+		// `ver`; acrescentar e retirar é `editar`, e nunca `criar`: mexer na
+		// lista é editar uma reserva que já existe.
+		{Metodo: http.MethodGet, Path: "/reservations/{id}/guests", Acesso: AcessoPermissao, Recurso: rec, Acao: auth.AcaoVer, Handler: d.Reservas.ListarHospedes},
+		{Metodo: http.MethodPost, Path: "/reservations/{id}/guests", Acesso: AcessoPermissao, Recurso: rec, Acao: auth.AcaoEditar, Handler: d.Reservas.AcrescentarHospede},
+		{Metodo: http.MethodDelete, Path: "/reservations/{id}/guests/{contactId}", Acesso: AcessoPermissao, Recurso: rec, Acao: auth.AcaoEditar, Handler: d.Reservas.RetirarHospede},
+
 		// ───────── Ações do ciclo de vida ─────────
 		// Todas são `editar`, e nenhuma é `criar`: mudar o estado de uma reserva
 		// que já existe é edição. `/reschedule` cria uma reserva nova, mas é

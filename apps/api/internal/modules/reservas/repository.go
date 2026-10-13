@@ -14,6 +14,7 @@ import (
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/booking"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/commission"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/guests"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/money"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/db"
@@ -211,20 +212,34 @@ func (r *Repository) Produto(ctx context.Context, propriedade, id uuid.UUID) (Pr
 	return p, db.MapError(err)
 }
 
-// ConferirContato recusa contato de outra propriedade antes do INSERT.
+// FichaDoContato lê a ficha que vai entrar numa lista de hóspedes — como
+// titular da reserva que nasce, titular novo de uma edição ou acompanhante —
+// e diz se ela é DESTA casa e se foi anonimizada. Quem decide o que fazer com
+// isso é `guests.Admit`; ficha inexistente não é erro aqui (`Found` falso),
+// porque cada porta responde a ela de um jeito (404 na reserva, 422 na lista).
 //
-// Poderia ficar por conta da foreign key, mas a FK não sabe de propriedade: um
-// contact_id da casa vizinha passaria pela FK e viraria uma reserva com hóspede
-// que a gestão não enxerga na própria lista.
-func (r *Repository) ConferirContato(ctx context.Context, propriedade, id uuid.UUID) error {
-	const q = `SELECT 1 FROM contacts WHERE id = $1 AND property_id = $2`
+// A propriedade vai no WHERE, e não fica por conta da foreign key: a FK não
+// sabe de propriedade, e um contact_id da casa vizinha passaria por ela e
+// viraria uma reserva com hóspede que a gestão não enxerga na própria lista.
+//
+// `FOR KEY SHARE` é o que impede a ficha de ser anonimizada entre esta leitura
+// e a escrita: a anonimização trava a ficha em `FOR UPDATE` antes de esvaziá-la,
+// então esta leitura enxerga o resultado dela ou a faz esperar a escrita na
+// lista terminar — e aí a anonimização encontra a pessoa numa lista viva e
+// recusa. É a mesma trava que o INSERT pegaria pela FK, só que antes da decisão.
+func (r *Repository) FichaDoContato(ctx context.Context, propriedade, id uuid.UUID) (guests.Contact[uuid.UUID], error) {
+	const q = `SELECT anonymized_at IS NOT NULL FROM contacts WHERE id = $1 AND property_id = $2 FOR KEY SHARE`
 
-	var existe int
-	err := r.exec(ctx).QueryRow(ctx, q, id, propriedade).Scan(&existe)
+	ficha := guests.Contact[uuid.UUID]{ID: id}
+	err := r.exec(ctx).QueryRow(ctx, q, id, propriedade).Scan(&ficha.Anonymized)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return apperr.NotFound("Contato")
+		return ficha, nil
 	}
-	return db.MapError(err)
+	if err != nil {
+		return ficha, db.MapError(err)
+	}
+	ficha.Found = true
+	return ficha, nil
 }
 
 // ─────────────────────────── Alocação ───────────────────────────────
@@ -411,7 +426,14 @@ func (r *Repository) InserirNoites(ctx context.Context, reserva, produto uuid.UU
 	return db.MapError(err)
 }
 
-// InserirTitular grava a rooming list mínima: o contato da reserva é o titular.
+// InserirTitular grava a linha de titular da lista: o contato da reserva é o
+// titular. Serve à reserva que nasce e à troca de titular (`PUT`/`PATCH`), que
+// promove o acompanhante que já estava na lista — o `ON CONFLICT` — ou insere
+// quem não estava.
+//
+// Na troca, a linha do titular anterior precisa ter saído ANTES (o índice
+// único parcial de titular não é adiável); `reservations.contact_id` pode mudar
+// antes ou depois, porque a FK que amarra os dois é adiada e confere no COMMIT.
 func (r *Repository) InserirTitular(ctx context.Context, reserva, contato uuid.UUID) error {
 	const q = `
 		INSERT INTO reservation_guests (reservation_id, contact_id, is_lead_guest)
@@ -419,7 +441,7 @@ func (r *Repository) InserirTitular(ctx context.Context, reserva, contato uuid.U
 		ON CONFLICT (reservation_id, contact_id) DO UPDATE SET is_lead_guest = true`
 
 	_, err := r.exec(ctx).Exec(ctx, q, reserva, contato)
-	return db.MapError(err)
+	return traduzirEscritaDaLista(err, contato)
 }
 
 // InserirEvento grava uma linha na timeline append-only.
@@ -921,32 +943,6 @@ func (r *Repository) NoitesDe(ctx context.Context, reserva uuid.UUID) ([]NoiteDa
 		}
 		n.Tipo = calendar.DateType(tipo)
 		out = append(out, n)
-	}
-	return out, db.MapError(linhas.Err())
-}
-
-// HospedesDe devolve a rooming list, titular primeiro.
-func (r *Repository) HospedesDe(ctx context.Context, reserva uuid.UUID) ([]HospedeDaReserva, error) {
-	const q = `
-		SELECT c.id, c.name, c.phone_e164, c.email, g.is_lead_guest
-		  FROM reservation_guests g
-		  JOIN contacts c ON c.id = g.contact_id
-		 WHERE g.reservation_id = $1
-		 ORDER BY g.is_lead_guest DESC, c.name`
-
-	linhas, err := r.exec(ctx).Query(ctx, q, reserva)
-	if err != nil {
-		return nil, db.MapError(err)
-	}
-	defer linhas.Close()
-
-	var out []HospedeDaReserva
-	for linhas.Next() {
-		var h HospedeDaReserva
-		if err := linhas.Scan(&h.ContactID, &h.Nome, &h.Telefone, &h.Email, &h.Titular); err != nil {
-			return nil, db.MapError(err)
-		}
-		out = append(out, h)
 	}
 	return out, db.MapError(linhas.Err())
 }

@@ -7,10 +7,11 @@ import { mensagemDoErro } from "@/lib/acoes/resultado";
  *
  * ## O diagnóstico (o mesmo do CRM, por outra porta)
  *
- * `lib/api/codigos.ts` guarda o vocabulário fechado do painel e ainda **não**
- * conhece `CONTACT_DUPLICATE` nem `CONTACT_ANONYMIZED` (o contrato já os
- * declara; o espelho do painel e o `internal/platform/apperr` ainda não).
- * `normalizarCodigo()` descarta o que não está na lista e cai no status:
+ * `lib/api/codigos.ts` guarda o vocabulário fechado do painel e, até
+ * 13/10/2026, **não** conhecia `CONTACT_DUPLICATE` nem `CONTACT_ANONYMIZED` (o
+ * contrato já os declarava; o espelho do painel e o `internal/platform/apperr`
+ * ainda não). `normalizarCodigo()` descarta o que não está na lista e cai no
+ * status — e era isto que acontecia:
  *
  * ```
  * normalizarCodigo("CONTACT_DUPLICATE",  409) === "INTERNAL"   ← aqui
@@ -23,11 +24,20 @@ import { mensagemDoErro } from "@/lib/acoes/resultado";
  * carrega `details.contact_id`; perdê-lo transforma o desfecho útil ("é a Ana,
  * quer abrir?") num chamado de suporte.
  *
- * ## O que se faz enquanto isso
+ * ## O que se fez enquanto isso
  *
  * `lib/contatos/api.ts` recupera o código **cru** do corpo da resposta e o
- * entrega aqui — mesma técnica do `lib/crm/api.ts`, pelo mesmo motivo, e os dois
- * encolhem juntos no dia em que o espelho geral crescer.
+ * entrega aqui — mesma técnica do `lib/crm/api.ts`, pelo mesmo motivo.
+ *
+ * ## Desde 13/10/2026 o espelho geral os conhece
+ *
+ * A rooming list (F2-22) foi a segunda tela a precisar dos dois, e eles
+ * entraram em `lib/api/codigos.ts`. O diagnóstico acima virou história:
+ * `normalizarCodigo` preserva os dois, e o resgate do código cru e
+ * `normalizarCodigoDeContato` passaram a devolver o que o espelho geral já
+ * devolve — redundância inofensiva, que sai numa limpeza própria (o contorno do
+ * CRM continua necessário). O que é só do cadastro fica: as frases e o título
+ * do aviso (`mensagemDeContato`, `tituloDeContato`).
  */
 export const CODIGOS_DE_CONTATOS = ["CONTACT_DUPLICATE", "CONTACT_ANONYMIZED"] as const;
 

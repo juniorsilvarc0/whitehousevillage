@@ -10,6 +10,7 @@ import (
 
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/auth"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/calendar"
+	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/guests"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/domain/money"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/apperr"
 	"github.com/juniorsilvarc0/whitehousevillage/apps/api/internal/platform/idempotencia"
@@ -412,6 +413,26 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 			return transicaoInvalida(e.Status, []string{EstadoHold, EstadoConfirmada})
 		}
 
+		// A lista de hóspedes vai junto (F2-22): a nova nasce com o mesmo
+		// titular e com os acompanhantes da original que `guests.Carry` deixa
+		// entrar (ficha anonimizada não é carregada). Decidido AQUI, antes de
+		// qualquer escrita: se o titular e os acompanhantes não cabem no número
+		// de hóspedes da nova — o pedido, ou o da original —, a remarcação é
+		// recusada com 422 em `guests_count` e nada muda. Ninguém é escolhido
+		// para ficar de fora. A original fica com a lista dela, como estava.
+		hospedesDaNova := e.Hospedes
+		if corpo.Hospedes != nil {
+			hospedesDaNova = *corpo.Hospedes
+		}
+		lista, err := s.repo.ListaDaReserva(ctx, id)
+		if err != nil {
+			return err
+		}
+		carregados, err := guests.Carry(e.ContactID, fichasDaLista(lista), hospedesDaNova)
+		if err != nil {
+			return traduzirRegraDaLista(err)
+		}
+
 		// O dinheiro do hóspede acompanha a reserva nova quando ela nasce
 		// confirmada — senão o hóspede que pagou 50% viraria um hóspede que
 		// nunca pagou nada.
@@ -489,6 +510,11 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 		if err != nil {
 			return err
 		}
+		// `emitir` já gravou o titular; os acompanhantes carregados entram
+		// agora, um `audit_log` por pessoa e sem `guest_added`.
+		if err := s.carregarAcompanhantes(ctx, nova.ID, carregados); err != nil {
+			return err
+		}
 		// A nova que nasce confirmada ganha os três eventos dela, nas datas
 		// novas e pelos horários vigentes. O ajustado à mão na original
 		// (responsável, horário, anotação) não é copiado: valia para outra data.
@@ -543,7 +569,7 @@ func (s *Servico) Remarcar(ctx context.Context, id uuid.UUID, chave string, corp
 		saida = Resultado{Status: http.StatusCreated, Corpo: env, Local: localDaReserva(nova.ID)}
 		return nil
 	})
-	return saida, err
+	return saida, defeitoDaLista(err)
 }
 
 // ─────────────────────────── Check-in / check-out ───────────────────

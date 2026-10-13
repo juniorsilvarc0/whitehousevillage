@@ -12,10 +12,13 @@ import type { ContatoNaLista } from "@/lib/contatos/tipos";
  *
  * `tentar()` devolve o `code` que o `ApiError` carrega, e o `ApiError` já nasceu
  * com o código **normalizado** — `apiRequest` chama `normalizarCodigo()` antes
- * de lançar e descarta o código cru do corpo. Como o espelho de códigos do
- * painel ainda não conhece `CONTACT_DUPLICATE` (ver `lib/contatos/codigos.ts`),
- * a colisão de telefone chegaria à tela como `INTERNAL`: "erro no servidor" em
- * cima da recusa mais comum e mais fácil de resolver do cadastro.
+ * de lançar e descarta o código cru do corpo. Enquanto o espelho de códigos do
+ * painel não conhecia `CONTACT_DUPLICATE` (ver `lib/contatos/codigos.ts`), a
+ * colisão de telefone chegava à tela como `INTERNAL`: "erro no servidor" em
+ * cima da recusa mais comum e mais fácil de resolver do cadastro. Desde
+ * 13/10/2026 (rooming list, F2-22) o espelho conhece os dois códigos, e o
+ * resgate abaixo devolve o mesmo que `tentar()` devolveria — fica até a limpeza
+ * que o apaga junto com os outros contornos.
  *
  * `ApiFetchInit.onResponse` entrega a `Response` **antes** do parse; uma cópia
  * (`clone()`) lida em paralelo devolve o `error.code` original, e o corpo

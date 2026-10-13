@@ -5,7 +5,7 @@ import { Loader2 } from "lucide-react";
 
 import { ModalShell } from "@/components/layout/modal-shell";
 import { Button } from "@/components/ui/button";
-import { mensagemDoErro, type Resultado } from "@/lib/acoes/resultado";
+import { mensagemDoErro, type Falha, type Resultado } from "@/lib/acoes/resultado";
 
 /**
  * Confirmação de ação irreversível-o-bastante.
@@ -23,6 +23,7 @@ export function ModalDeConfirmacao({
   rotuloConfirmar = "Confirmar",
   destrutivo = false,
   aoConfirmar,
+  mensagemDaFalha = (falha) => mensagemDoErro(falha.code),
 }: {
   aberto: boolean;
   aoMudar: (aberto: boolean) => void;
@@ -31,6 +32,10 @@ export function ModalDeConfirmacao({
   rotuloConfirmar?: string;
   destrutivo?: boolean;
   aoConfirmar: () => Promise<Resultado<unknown>>;
+  /** A frase da recusa, **pelo código**. O padrão é o dicionário geral; quem
+   *  tem `details` a ler (a lista de hóspedes diz quem já é o titular) passa a
+   *  própria. Nunca o `message` da API. */
+  mensagemDaFalha?: (falha: Falha) => string;
 }) {
   const [enviando, setEnviando] = React.useState(false);
   const [erro, setErro] = React.useState<string | null>(null);
@@ -63,7 +68,7 @@ export function ModalDeConfirmacao({
     try {
       const resultado = await aoConfirmar();
       if (!resultado.ok) {
-        setErro(mensagemDoErro(resultado.code));
+        setErro(mensagemDaFalha(resultado));
         return;
       }
       aoMudar(false);

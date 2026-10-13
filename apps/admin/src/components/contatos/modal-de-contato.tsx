@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useForm, useWatch } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { ArrowRight, Loader2, RotateCcw, UserRoundCheck } from "lucide-react";
 
@@ -11,27 +11,16 @@ import type { ControleDeModal } from "@/components/layout/controle-de-modal";
 import { ModalShell } from "@/components/layout/modal-shell";
 import { Nota } from "@/components/layout/tela";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { Campo } from "@/components/ui/campo";
-import { CheckboxCampo } from "@/components/ui/checkbox";
-import { Input } from "@/components/ui/input";
-import { Select } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import type { FalhaDeContato } from "@/lib/contatos/api";
 import { aplicarFalhaDeContato } from "@/lib/contatos/formulario";
 import { ContatoFormulario } from "@/lib/contatos/esquemas";
 import { formatarTelefone, limparTelefone } from "@/lib/contatos/telefone";
-import {
-  BASES_LEGAIS,
-  EXPLICACAO_DA_BASE,
-  ROTULO_DA_BASE,
-  ROTULO_DO_DOCUMENTO,
-  TIPOS_DE_DOCUMENTO,
-  type Contato,
-} from "@/lib/contatos/tipos";
+import type { Contato } from "@/lib/contatos/tipos";
 import { cn } from "@/lib/utils";
 
 import { lerFichaDoContato, salvarContato, type Duplicata } from "@/app/(app)/app/contatos/acoes";
 import { AvisoDeErro, notificarSucesso } from "@/components/contatos/avisos";
+import { CamposDoContato, valoresDoContato } from "@/components/contatos/campos-do-contato";
 
 const ID_DO_FORM = "form-contato";
 
@@ -71,27 +60,6 @@ const FALHA_DEFINITIVA: readonly FalhaDeContato["code"][] = ["NOT_FOUND", "FORBI
 
 function falhaLocal(code: FalhaDeContato["code"]): FalhaDeContato {
   return { ok: false, code, message: "", details: {} };
-}
-
-function valoresDoContato(contato: Contato | null): ContatoFormulario {
-  return {
-    name: contato?.name ?? "",
-    email: contato?.email ?? "",
-    phone_e164: contato?.phone_e164 ?? "",
-    doc_type: contato?.doc_type ?? "",
-    doc_number: contato?.doc_number ?? "",
-    birth_date: contato?.birth_date ?? "",
-    city: contato?.city ?? "",
-    state: contato?.state ?? "",
-    notes: contato?.notes ?? "",
-    lgpd_basis: contato?.lgpd_basis ?? "",
-    marketing_opt_in: contato?.marketing_opt_in ?? false,
-    // `consent_at` é `timestamptz` e o campo é `<input type="date">`: entra só a
-    // parte da data. A hora não é informação que alguém digite — ela vem do
-    // instante em que o aceite foi registrado, e reapresentá-la para edição
-    // convidaria a inventar um horário.
-    consent_at: contato?.consent_at ? contato.consent_at.slice(0, 10) : "",
-  };
 }
 
 /**
@@ -293,12 +261,7 @@ export function ModalDeContato({
     setAberto(valor);
   }
 
-  const { errors, isSubmitting } = form.formState;
-  // `useWatch` e não `form.watch()`: a assinatura pontual não força o modal
-  // inteiro a re-renderizar a cada tecla de qualquer campo.
-  const optIn = useWatch({ control: form.control, name: "marketing_opt_in" });
-  const tipoDeDocumento = useWatch({ control: form.control, name: "doc_type" });
-  const base = useWatch({ control: form.control, name: "lgpd_basis" });
+  const { isSubmitting } = form.formState;
 
   const comFormulario = estado.fase === "novo" || estado.fase === "editando";
 
@@ -404,135 +367,7 @@ export function ModalDeContato({
         </p>
       ) : null}
 
-      {comFormulario ? (
-        <form id={ID_DO_FORM} onSubmit={form.handleSubmit(enviar)} className="flex flex-col gap-4">
-          <Campo id="contato-name" label="Nome" obrigatorio erro={errors.name?.message}>
-            {(p) => <Input {...p} {...form.register("name")} autoComplete="name" />}
-          </Campo>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Campo
-              id="contato-phone"
-              label="Telefone"
-              erro={errors.phone_e164?.message}
-              hint="Com o código do país (DDI): +5585999990000. Sem ele, a mesma pessoa pode acabar com dois cadastros."
-            >
-              {(p) => (
-                <Input
-                  {...p}
-                  {...form.register("phone_e164")}
-                  inputMode="tel"
-                  placeholder="+5585999990000"
-                  className="font-mono"
-                />
-              )}
-            </Campo>
-
-            <Campo id="contato-email" label="E-mail" erro={errors.email?.message}>
-              {(p) => <Input {...p} {...form.register("email")} type="email" autoComplete="email" />}
-            </Campo>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-[10rem_1fr]">
-            <Campo id="contato-doc-type" label="Documento" erro={errors.doc_type?.message}>
-              {(p) => (
-                <Select {...p} {...form.register("doc_type")}>
-                  <option value="">—</option>
-                  {TIPOS_DE_DOCUMENTO.map((tipo) => (
-                    <option key={tipo} value={tipo}>
-                      {ROTULO_DO_DOCUMENTO[tipo]}
-                    </option>
-                  ))}
-                </Select>
-              )}
-            </Campo>
-
-            <Campo
-              id="contato-doc-number"
-              label="Número"
-              erro={errors.doc_number?.message}
-              hint={
-                tipoDeDocumento === "passaporte"
-                  ? "Passaporte é aceito como digitado, porque cada país tem o seu formato."
-                  : "CPF e CNPJ são conferidos automaticamente e guardados só com os números."
-              }
-            >
-              {(p) => <Input {...p} {...form.register("doc_number")} inputMode="numeric" className="font-mono" />}
-            </Campo>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Campo id="contato-birth" label="Nascimento" erro={errors.birth_date?.message}>
-              {(p) => <Input {...p} {...form.register("birth_date")} type="date" />}
-            </Campo>
-            <Campo id="contato-city" label="Cidade" erro={errors.city?.message}>
-              {(p) => <Input {...p} {...form.register("city")} />}
-            </Campo>
-            <Campo id="contato-state" label="UF" erro={errors.state?.message}>
-              {(p) => <Input {...p} {...form.register("state")} maxLength={2} className="uppercase" />}
-            </Campo>
-          </div>
-
-          <Campo id="contato-notes" label="Observações" erro={errors.notes?.message}>
-            {(p) => <Textarea {...p} {...form.register("notes")} rows={3} />}
-          </Campo>
-
-          {/* ── LGPD ─────────────────────────────────────────────────────────
-              Dois eixos que a tela mantém separados porque a lei os separa:
-              `lgpd_basis` sustenta GUARDAR a ficha; `marketing_opt_in` autoriza
-              MANDAR oferta. Executar a reserva de quem nunca aceitou propaganda é
-              legítimo; mandar promoção para essa mesma pessoa não é. */}
-          <fieldset className="rounded-xl border border-border/60 bg-muted/20 p-4">
-            <legend className="px-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Base legal e consentimento
-            </legend>
-
-            <div className="flex flex-col gap-4">
-              <Campo
-                id="contato-lgpd"
-                label="Por que podemos guardar esta ficha"
-                erro={errors.lgpd_basis?.message}
-                hint={base && base !== "" ? EXPLICACAO_DA_BASE[base as keyof typeof EXPLICACAO_DA_BASE] : undefined}
-              >
-                {(p) => (
-                  <Select {...p} {...form.register("lgpd_basis")}>
-                    <option value="">—</option>
-                    {BASES_LEGAIS.map((valor) => (
-                      <option key={valor} value={valor}>
-                        {ROTULO_DA_BASE[valor]}
-                      </option>
-                    ))}
-                  </Select>
-                )}
-              </Campo>
-
-              <CheckboxCampo
-                id="contato-optin"
-                label="Aceita receber ofertas e novidades"
-                hint="É diferente da base legal: guardar o cadastro de quem se hospedou é permitido; mandar promoção exige este aceite."
-                {...form.register("marketing_opt_in")}
-              />
-
-              {optIn ? (
-                <Campo
-                  id="contato-consent"
-                  label="Data do aceite"
-                  obrigatorio
-                  erro={errors.consent_at?.message}
-                  hint="Informe quando a pessoa aceitou. Sem a data, o aceite não é registrado."
-                >
-                  {(p) => <Input {...p} {...form.register("consent_at")} type="date" />}
-                </Campo>
-              ) : (
-                <Nota>
-                  Desmarcar o aceite <strong>apaga a data</strong> junto, para nenhum relatório dizer que a
-                  pessoa ainda aceita receber ofertas.
-                </Nota>
-              )}
-            </div>
-          </fieldset>
-        </form>
-      ) : null}
+      {comFormulario ? <CamposDoContato form={form} idDoForm={ID_DO_FORM} aoEnviar={enviar} /> : null}
     </ModalShell>
   );
 }

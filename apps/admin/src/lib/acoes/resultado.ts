@@ -83,6 +83,14 @@ export function mensagemDoErro(code: CodigoDeErro, padrao = "Não foi possível 
       return "Esta avaria já tem uma ordem de manutenção em aberto. Continue por ela em vez de abrir outra.";
     case "AGENDA_EVENT_CLOSED":
       return "Este evento da agenda já foi concluído ou desmarcado e não aceita essa mudança. Recarregue a página para ver como ele ficou — o que volta a acontecer é um evento novo.";
+    // As duas frases são as de `lib/contatos/codigos.ts`, que continua dono das
+    // variações do cadastro: aqui é o texto de quem não tem contexto melhor.
+    case "CONTACT_DUPLICATE":
+      return "Esta pessoa já está cadastrada.";
+    case "CONTACT_ANONYMIZED":
+      return "Os dados desta ficha foram apagados a pedido da pessoa e não podem voltar. Cadastre um contato novo.";
+    case "GUEST_LIST_FULL":
+      return "A lista de hóspedes já tem o número de pessoas da reserva. Para acrescentar mais alguém, aumente antes o número de hóspedes.";
     case "IDEMPOTENCY_MISMATCH":
       return "Esta ação já foi enviada antes com outros dados. Recarregue a página e confira.";
     case "INTERNAL":

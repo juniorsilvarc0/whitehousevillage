@@ -1,19 +1,20 @@
 import * as React from "react";
 import Link from "next/link";
-import { BedDouble, Globe, Lock, Mail, MessageCircle, PartyPopper, Undo2, UserRound, Users } from "lucide-react";
+import { BedDouble, Globe, Lock, Mail, PartyPopper, Undo2, UserRound } from "lucide-react";
 
 import { TelefoneClicavel } from "@/components/contatos/botao-whatsapp";
-import { EstadoVazio } from "@/components/layout/estados";
 import { Nota } from "@/components/layout/tela";
 import { AcoesDaReserva } from "@/components/reservas/acoes-da-reserva";
 import { EtiquetaDeEstado } from "@/components/reservas/etiqueta-de-estado";
+import { SecaoDeHospedes } from "@/components/reservas/hospedes";
 import { LinhaDoTempo } from "@/components/reservas/linha-do-tempo";
+import { LinkDoWhatsApp } from "@/components/reservas/link-do-whatsapp";
 import { FaixaDePrazo } from "@/components/reservas/prazo-do-hold";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import type { Produto, UnidadeDaComposicao } from "@/lib/api/comercial";
 import { classeDoTipo, rotuloDoTipo } from "@/lib/comercial/tipos-de-data";
-import { linkDoWhatsApp, mensagemDaReserva } from "@/lib/contatos/whatsapp";
+import { mensagemDaReserva } from "@/lib/contatos/whatsapp";
 import { formatarData, formatarDataCurta, formatarInstante } from "@/lib/datas";
 import { formatarBRL, formatarPct } from "@/lib/dinheiro";
 import { rotuloDaOrigem } from "@/lib/origem";
@@ -37,11 +38,23 @@ export function DetalheDaReserva({
   composicao,
 }: {
   completo: ReservaCompleta;
-  permissoes: { editar: boolean; excluir: boolean };
+  permissoes: {
+    editar: boolean;
+    excluir: boolean;
+    /** `contacts:ver` e `contacts:criar` — a busca e o cadastro do balcão, na
+     *  lista de hóspedes. */
+    procurarPessoas: boolean;
+    cadastrarPessoas: boolean;
+  };
   produtos: Produto[];
   composicao: UnidadeDaComposicao[];
 }) {
   const r = completo.reservation;
+  // A capacidade declarada do produto vem do catálogo que a página já carrega
+  // (para remarcar): é o que diz à lista se ainda dá para aumentar o número de
+  // hóspedes. Sem o catálogo (perfil sem `inventory:ver`), `null` — e quem
+  // responde é o servidor.
+  const capacidade = produtos.find((p) => p.id === r.unit_type_id)?.capacity ?? null;
 
   return (
     <>
@@ -72,7 +85,7 @@ export function DetalheDaReserva({
           <p className="font-mono text-2xl tabular-nums">{formatarBRL(r.total_cents)}</p>
           <AcoesDaReserva
             reserva={r}
-            permissoes={permissoes}
+            permissoes={{ editar: permissoes.editar, excluir: permissoes.excluir }}
             previaDeCancelamento={completo.cancellation_preview}
             produtos={produtos}
             composicao={composicao}
@@ -115,7 +128,17 @@ export function DetalheDaReserva({
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex flex-col gap-6">
           <Noites completo={completo} />
-          <Hospedes completo={completo} />
+          <SecaoDeHospedes
+            reserva={r}
+            hospedes={completo.guests}
+            editavel={completo.guests_editable === true}
+            permissoes={{
+              editar: permissoes.editar,
+              procurarPessoas: permissoes.procurarPessoas,
+              cadastrarPessoas: permissoes.cadastrarPessoas,
+            }}
+            capacidade={capacidade}
+          />
           <LinhaDoTempo eventos={completo.timeline} />
         </div>
 
@@ -375,66 +398,6 @@ function Unidades({ completo }: { completo: ReservaCompleta }) {
   );
 }
 
-function Hospedes({ completo }: { completo: ReservaCompleta }) {
-  return (
-    <section aria-label="Hóspedes" className="rounded-xl border border-border/60 bg-muted/20 p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <h2 className="font-display text-base">Hóspedes</h2>
-        <span className="text-xs text-muted-foreground">
-          <span className="tabular-nums">{completo.guests.length}</span> nome
-          {completo.guests.length === 1 ? "" : "s"} de{" "}
-          <span className="tabular-nums">{completo.reservation.guests_count}</span> vendido
-          {completo.reservation.guests_count === 1 ? "" : "s"}
-        </span>
-      </div>
-      <p className="mt-1 text-xs text-muted-foreground">
-        É normal ter menos nomes que hóspedes: a venda é para{" "}
-        {completo.reservation.guests_count}, e nem todo mundo enviou os dados ainda.
-      </p>
-
-      {completo.guests.length === 0 ? (
-        <EstadoVazio
-          className="mt-3"
-          icone={Users}
-          titulo="Nenhum nome informado"
-          descricao="A lista de hóspedes é o que a portaria usa no dia da chegada para conferir quem entra."
-        />
-      ) : (
-        <ul className="mt-3 flex flex-col gap-2">
-          {completo.guests.map((hospede) => (
-            <li
-              key={hospede.contact_id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-card px-3 py-2 text-sm"
-            >
-              <span className="min-w-0">
-                {hospede.name}
-                {hospede.is_lead_guest ? (
-                  <Badge variant="outline" className="ml-2">
-                    Titular
-                  </Badge>
-                ) : null}
-              </span>
-              {hospede.phone_e164 ? (
-                <span className="flex items-center gap-3">
-                  <TelefoneClicavel
-                    telefone={hospede.phone_e164}
-                    className="text-xs text-muted-foreground"
-                  />
-                  <LinkDoWhatsApp
-                    telefone={hospede.phone_e164}
-                    texto={mensagemDaReserva(hospede.name, completo.reservation.code)}
-                    compacto
-                  />
-                </span>
-              ) : null}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
-
 /**
  * Quem reservou — no topo, porque é a primeira coisa que a gestão faz com uma
  * pré-reserva: falar com o cliente para receber o sinal.
@@ -492,40 +455,6 @@ function Cliente({ completo }: { completo: ReservaCompleta }) {
         </Link>
       </div>
     </section>
-  );
-}
-
-/**
- * Abre a conversa do WhatsApp com o número do hóspede e uma primeira mensagem
- * citando o código da reserva. Número fora de E.164 não ganha botão.
- */
-function LinkDoWhatsApp({ telefone, texto, compacto }: { telefone: string; texto: string; compacto?: boolean }) {
-  const href = linkDoWhatsApp(telefone, texto);
-  if (!href) return null;
-  if (compacto) {
-    return (
-      <a
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="flex items-center gap-1 text-xs font-medium text-[#1f8f4e] hover:underline"
-        aria-label="Abrir conversa no WhatsApp"
-      >
-        <MessageCircle className="size-3.5" aria-hidden="true" />
-        WhatsApp
-      </a>
-    );
-  }
-  return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={cn(buttonVariants({ size: "md" }), "bg-none bg-[#1f8f4e] text-white hover:brightness-110")}
-    >
-      <MessageCircle aria-hidden="true" />
-      Chamar no WhatsApp
-    </a>
   );
 }
 

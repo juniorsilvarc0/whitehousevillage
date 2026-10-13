@@ -35,6 +35,10 @@ import (
 const (
 	entidadeReserva = "reservations"
 	entidadeBloco   = "stay_blocks"
+	// entidadeHospedes é a rooming list. A linha de trilha tem `entity_id` = a
+	// RESERVA, e não a pessoa: a pergunta que ela responde é "quem mexeu na
+	// lista desta estadia", e a reserva é o que a tela de auditoria abre.
+	entidadeHospedes = "reservation_guests"
 )
 
 // Os verbos. Os genéricos vêm de `audit.Verbo*` para a tela de auditoria poder
@@ -118,6 +122,17 @@ type cadastroAuditado struct {
 	Observacoes *string    `json:"notes"`
 }
 
+// vinculoAuditado é o que a trilha de `reservation_guests` guarda: o par
+// (reserva, pessoa) POR ID. Nome, documento e telefone NUNCA entram — o
+// contrato promete que `audit_log` registra que a lista mudou, não de quem
+// para quem, e anonimizar a ficha depois não alcançaria uma cópia do nome
+// deixada aqui. Struct tipada, e não a resposta da lista, justamente para não
+// haver como a pessoa inteira vazar por um campo a mais.
+type vinculoAuditado struct {
+	ContactID uuid.UUID `json:"contact_id"`
+	Titular   bool      `json:"is_lead_guest"`
+}
+
 // ─────────────────────────── Atalhos ────────────────────────────────
 
 // auditarReserva grava a alteração de uma reserva na transação em curso.
@@ -131,4 +146,14 @@ func (s *Servico) auditarBloco(ctx context.Context, verbo string, b Bloqueio, ex
 		return audit.Exclusao(ctx, s.repo.pool, entidadeBloco, verbo, b.ID, b)
 	}
 	return audit.Criacao(ctx, s.repo.pool, entidadeBloco, verbo, b.ID, b)
+}
+
+// auditarAcompanhante grava a entrada ou a saída de um acompanhante da lista
+// da reserva, por `contact_id`.
+func (s *Servico) auditarAcompanhante(ctx context.Context, reserva, contato uuid.UUID, saiu bool) error {
+	vinculo := vinculoAuditado{ContactID: contato, Titular: false}
+	if saiu {
+		return audit.Exclusao(ctx, s.repo.pool, entidadeHospedes, audit.VerboExcluido, reserva, vinculo)
+	}
+	return audit.Criacao(ctx, s.repo.pool, entidadeHospedes, audit.VerboCriado, reserva, vinculo)
 }
